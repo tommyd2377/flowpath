@@ -20,6 +20,12 @@
 # production
 /build
 
+# local database
+/data/
+*.db
+*.db-shm
+*.db-wal
+
 # misc
 .DS_Store
 *.pem
