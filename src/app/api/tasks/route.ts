@@ -1,4 +1,5 @@
 import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
+import { requireUser } from "@/lib/auth";
 import { createTask, listTasks } from "@/lib/repository";
 import { taskInputSchema } from "@/lib/schemas";
 
@@ -7,7 +8,8 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    return dataResponse(await listTasks());
+    const user = await requireUser();
+    return dataResponse(await listTasks(user.id));
   } catch (error) {
     return errorResponse(error, "Could not load tasks.");
   }
@@ -15,8 +17,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const user = await requireUser();
     const input = taskInputSchema.parse(await readJson(request));
-    return dataResponse(await createTask(input), 201);
+    return dataResponse(await createTask(user.id, input), 201);
   } catch (error) {
     return errorResponse(error, "Could not create task.");
   }

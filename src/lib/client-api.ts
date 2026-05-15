@@ -1,5 +1,7 @@
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
+    cache: init?.cache ?? "no-store",
+    credentials: init?.credentials ?? "same-origin",
     ...init,
     headers: {
       "Content-Type": "application/json",

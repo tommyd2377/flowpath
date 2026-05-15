@@ -1,5 +1,5 @@
-import { dataResponse } from "@/lib/api-response";
-import { getDatabaseUrl } from "@/lib/env";
+import { dataResponse, errorResponse } from "@/lib/api-response";
+import { requireUser } from "@/lib/auth";
 import {
   DEFAULT_OPENAI_MODEL,
   getOpenAIWebSearchContextSize,
@@ -10,13 +10,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return dataResponse({
-    hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
-    model: process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
-    webSearchEnabled: isOpenAIWebSearchEnabled(),
-    webSearchContextSize: getOpenAIWebSearchContextSize(),
-    databaseUrl: getDatabaseUrl().startsWith("file:")
-      ? getDatabaseUrl()
-      : "remote libSQL database",
-  });
+  try {
+    await requireUser();
+    return dataResponse({
+      hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
+      model: process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
+      webSearchEnabled: isOpenAIWebSearchEnabled(),
+      webSearchContextSize: getOpenAIWebSearchContextSize(),
+    });
+  } catch (error) {
+    return errorResponse(error, "Could not load app config.");
+  }
 }

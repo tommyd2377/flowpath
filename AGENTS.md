@@ -30,7 +30,8 @@ minimal diffs. Prefer existing patterns in this repo over broad rewrites.
 - Never initiate, authorize, submit, confirm, schedule, or help complete any
   real-world financial transaction, including purchases, sales, trades,
   transfers, bill pay, donations, subscriptions, paid ads, domain purchases,
-  paid API usage, cloud spend changes, or marketplace/app-store transactions.
+  unapproved paid API usage, cloud spend changes, or marketplace/app-store
+  transactions.
 - Never use stored payment methods, enter payment details, complete identity
   verification, submit tax forms, accept financial/legal terms, or pass 2FA for
   financial or payment-related accounts.
@@ -48,12 +49,43 @@ minimal diffs. Prefer existing patterns in this repo over broad rewrites.
   email, messaging, identity, or transaction-confirmation page, stop and ask
   the user to take over.
 
+## Software Development Testing With Live APIs
+
+- Codex must not trigger live paid API calls by default.
+- For software-development testing only, Codex may trigger bounded live API
+  calls, including OpenAI/LLM calls, only when explicitly approved to test the
+  specific host/app, task, and call budget in the current conversation.
+- This approval is temporary and does not carry over to future conversations,
+  other hosts, other apps, other routes, other browsers, or unrelated test flows.
+- If no budget is provided, Codex may make at most 3 live API-triggering
+  actions, then must stop and report results.
+- Stop immediately if retries loop, unexpected calls appear, cost looks higher
+  than expected, a permission prompt appears, or the flow reaches billing,
+  subscription, payment, account-admin, production-deployment, or real-world
+  transaction controls.
+- This exception does not allow purchases, subscriptions, billing changes, cloud
+  resource changes, paid ads, marketplace/app-store actions, financial
+  transactions, real payment methods, identity verification, legal/financial
+  term acceptance, or account-admin changes.
+- Use already-configured local/dev environment variables only. Do not read,
+  print, copy, modify, or create secrets, API keys, tokens, billing settings,
+  auth providers, production env vars, or deployment configs.
+- Prefer test or mocked flows when they verify the behavior adequately. Use live
+  APIs only when the behavior being tested specifically depends on live
+  model/API behavior or live verification is explicitly requested.
+
 ## Browser And Signed-In Account Guardrails
 
 - Prefer the Codex in-app browser for localhost, public docs, and software
   verification that does not require signed-in browser state.
 - Use Brave/Chrome or signed-in browser state only when explicitly requested in
   the current conversation for a specific host and task.
+- Brave/Chrome and Codex Computer Use remain off-limits for active testing
+  unless that browser/app, host, and task are explicitly approved in the current
+  conversation.
+- Approval to test a local app does not grant permission to inspect browser
+  history, other tabs, cookies, autofill, saved payment methods, passwords,
+  personal accounts, or unrelated signed-in websites.
 - Treat Brave/Chrome profiles as sensitive. Do not inspect browser history,
   bookmarks, downloads, cookies, autofill, password manager data, saved payment
   methods, tab groups, internal URLs, or synced-device activity unless
@@ -84,6 +116,14 @@ minimal diffs. Prefer existing patterns in this repo over broad rewrites.
 
 - Tech stack: Next.js App Router, TypeScript, Tailwind CSS, `@libsql/client`,
   OpenAI Node SDK, and Zod.
+- For FlowPath local development, Codex may run the dev server and test
+  `localhost` routes.
+- With explicit approval in the current conversation, Codex may click FlowPath
+  UI controls that trigger OpenAI calls, including daily plan generation, intake
+  interview turns, and next-move plan generation, subject to the live API call
+  budget above.
+- Default to the Codex in-app browser for localhost. Use Brave/Chrome only when
+  explicitly requested for the current host and task.
 - Local development database defaults to `file:./data/flowpath.db`.
 - Production persistence should use Turso/libSQL with:
   - `DATABASE_URL=libsql://...`

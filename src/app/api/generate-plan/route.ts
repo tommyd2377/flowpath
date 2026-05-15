@@ -1,4 +1,5 @@
 import { ApiRequestError, dataResponse, errorResponse } from "@/lib/api-response";
+import { requireUser } from "@/lib/auth";
 import { generateFlowPathPlan } from "@/lib/flowpath-ai";
 import {
   createPlan,
@@ -18,9 +19,10 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
+    const user = await requireUser();
     const { searchParams } = new URL(request.url);
     const limit = Number(searchParams.get("limit") || 20);
-    return dataResponse(await listPlans(Number.isFinite(limit) ? limit : 20));
+    return dataResponse(await listPlans(user.id, Number.isFinite(limit) ? limit : 20));
   } catch (error) {
     return errorResponse(error, "Could not load plans.");
   }
@@ -28,6 +30,7 @@ export async function GET(request: Request) {
 
 export async function POST() {
   try {
+    const user = await requireUser();
     if (!process.env.OPENAI_API_KEY) {
       throw new ApiRequestError(
         "OPENAI_API_KEY is missing. Add it to .env.local, then restart the dev server.",
@@ -47,15 +50,15 @@ export async function POST() {
       recentNextMovePlans,
       todayCheckIn,
     ] = await Promise.all([
-      getProfile(),
-      listLifeAreas(),
-      listProjects(),
-      listTasks(),
-      listCheckIns(7),
-      listPlans(5),
-      listSituations("active"),
-      listNextMovePlans(5),
-      getLatestCheckInForDate(),
+      getProfile(user.id),
+      listLifeAreas(user.id),
+      listProjects(user.id),
+      listTasks(user.id),
+      listCheckIns(user.id, 7),
+      listPlans(user.id, 5),
+      listSituations(user.id, "active"),
+      listNextMovePlans(user.id, 5),
+      getLatestCheckInForDate(user.id),
     ]);
 
     const { plan, model } = await generateFlowPathPlan({
@@ -70,7 +73,10 @@ export async function POST() {
       todayCheckIn,
     });
 
-    return dataResponse(await createPlan(plan, model, todayCheckIn?.id ?? null), 201);
+    return dataResponse(
+      await createPlan(user.id, plan, model, todayCheckIn?.id ?? null),
+      201,
+    );
   } catch (error) {
     return errorResponse(error, "Could not generate today's FlowPath.");
   }

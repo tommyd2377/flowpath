@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, CheckCircle2, MessageSquare, Plus, Sparkles } from "lucide-react";
+import { ArrowRight, CheckCircle2, CheckSquare, MessageSquare, Plus, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import type {
@@ -384,8 +384,11 @@ export function NextMoveFlow() {
                 )}
               </Card>
 
+              <RelatedTasksCard tasks={detail.tasks} />
+
               <NextMovePlanCard
                 plan={detail.latestPlan}
+                fallbackTask={detail.tasks[0] ?? null}
                 onConvert={detail.latestPlan ? convertPlan : undefined}
                 converting={converting}
               />
@@ -396,6 +399,37 @@ export function NextMoveFlow() {
         </div>
       </div>
     </div>
+  );
+}
+
+function RelatedTasksCard({ tasks }: { tasks: Task[] }) {
+  if (tasks.length === 0) return null;
+
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <CheckSquare className="h-4 w-4 text-[var(--azure-light)]" />
+        <h2 className="text-xl font-semibold">Related tasks</h2>
+      </div>
+      <div className="grid gap-2">
+        {tasks.slice(0, 6).map((task) => (
+          <div key={task.id} className="rounded-md border border-slate-800 bg-slate-900 p-3 text-sm">
+            <div className="font-medium text-white">{task.title}</div>
+            <div className="text-slate-400">
+              {task.status} · importance {task.importance}/5 · effort {task.effort}/5
+            </div>
+          </div>
+        ))}
+      </div>
+      {tasks.length > 6 ? (
+        <Link
+          href={`/situations/${tasks[0].situation_id ?? ""}`}
+          className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)]"
+        >
+          View all related tasks
+        </Link>
+      ) : null}
+    </Card>
   );
 }
 

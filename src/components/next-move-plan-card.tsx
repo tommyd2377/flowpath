@@ -3,7 +3,7 @@
 import { CheckSquare, Clock, ShieldAlert, Target } from "lucide-react";
 import type { ReactNode } from "react";
 
-import type { StoredNextMovePlan } from "@/lib/types";
+import type { StoredNextMovePlan, Task } from "@/lib/types";
 import { Button, Card, EmptyState } from "./ui";
 
 export function modeLabel(mode: string) {
@@ -12,14 +12,43 @@ export function modeLabel(mode: string) {
 
 export function NextMovePlanCard({
   plan,
+  fallbackTask,
   onConvert,
   converting,
 }: {
   plan: StoredNextMovePlan | null;
+  fallbackTask?: Task | null;
   onConvert?: () => void;
   converting?: boolean;
 }) {
   if (!plan) {
+    if (fallbackTask) {
+      return (
+        <Card className="grid gap-4">
+          <div>
+            <div className="text-sm font-medium uppercase text-[var(--azure-light)]">
+              Current move
+            </div>
+            <h2 className="mt-1 text-2xl font-semibold text-white">
+              {fallbackTask.title}
+            </h2>
+            {fallbackTask.notes ? (
+              <p className="mt-2 text-slate-300">{fallbackTask.notes}</p>
+            ) : null}
+          </div>
+          <div className="grid gap-2 text-sm text-slate-300 sm:grid-cols-3">
+            <Brief title="Status" value={fallbackTask.status} />
+            <Brief title="Importance" value={`${fallbackTask.importance}/5`} />
+            <Brief title="Effort" value={`${fallbackTask.effort}/5`} />
+          </div>
+          <p className="text-sm text-slate-400">
+            This is the top related task for this situation. Generate a next move
+            plan when you want the fuller reasoning and step breakdown.
+          </p>
+        </Card>
+      );
+    }
+
     return (
       <Card>
         <EmptyState>

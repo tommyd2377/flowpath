@@ -293,6 +293,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
 
         <NextMovePlanCard
           plan={detail.latestPlan}
+          fallbackTask={detail.tasks[0] ?? null}
           onConvert={detail.latestPlan ? convertPlan : undefined}
           converting={converting}
         />

@@ -93,6 +93,7 @@ export function TasksManager() {
     () => tasks.filter((task) => task.status === "open"),
     [tasks],
   );
+  const isInitialLoading = loading && tasks.length === 0;
 
   async function load() {
     setLoading(true);
@@ -185,24 +186,32 @@ export function TasksManager() {
 
       <div className="mb-5 grid gap-3 sm:grid-cols-4">
         <Card>
-          <div className="text-2xl font-semibold">{openTasks.length}</div>
+          <div className="text-2xl font-semibold">
+            {isInitialLoading ? "..." : openTasks.length}
+          </div>
           <div className="text-sm text-slate-400">open tasks</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold">
-            {openTasks.filter((task) => task.importance >= 4).length}
+            {isInitialLoading
+              ? "..."
+              : openTasks.filter((task) => task.importance >= 4).length}
           </div>
           <div className="text-sm text-slate-400">high importance</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold">
-            {openTasks.filter((task) => task.effort <= 2).length}
+            {isInitialLoading
+              ? "..."
+              : openTasks.filter((task) => task.effort <= 2).length}
           </div>
           <div className="text-sm text-slate-400">low effort</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold">
-            {openTasks.filter((task) => (task.friction_type ?? "none") !== "none").length}
+            {isInitialLoading
+              ? "..."
+              : openTasks.filter((task) => (task.friction_type ?? "none") !== "none").length}
           </div>
           <div className="text-sm text-slate-400">friction signals</div>
         </Card>

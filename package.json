@@ -12,6 +12,7 @@
     "db:setup": "npm run db:init && npm run db:seed"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.3.4",
     "@libsql/client": "^0.17.3",
     "lucide-react": "^1.14.0",
     "next": "16.2.6",

@@ -1,5 +1,6 @@
 "use client";
 
+import { UserButton, useAuth } from "@clerk/nextjs";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -24,6 +25,7 @@ const links = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { isSignedIn } = useAuth();
 
   return (
     <div className="min-h-screen">
@@ -49,6 +51,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
               </div>
             </Link>
+            {isSignedIn ? <UserButton /> : null}
           </div>
           <nav className="flex gap-2 overflow-x-auto pb-1">
             {links.map((link) => {

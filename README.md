@@ -36,9 +36,14 @@ npm install
 cp .env.example .env.local
 ```
 
-3. Add your OpenAI API key to `.env.local`:
+3. Add your Clerk and OpenAI settings to `.env.local`:
 
 ```bash
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+CLERK_SECRET_KEY=your_clerk_secret_key
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+FLOWPATH_OWNER_EMAIL=you@example.com
 OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-5.5
 OPENAI_WEB_SEARCH_ENABLED=true
@@ -98,12 +103,22 @@ Required for AI generation:
 OPENAI_API_KEY=
 ```
 
+Required for web auth:
+
+```bash
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=
+FLOWPATH_OWNER_EMAIL=
+```
+
 Optional:
 
 ```bash
 OPENAI_MODEL=gpt-5.5
 OPENAI_WEB_SEARCH_ENABLED=true
 OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 DATABASE_URL=file:./data/flowpath.db
 TURSO_AUTH_TOKEN=
 APP_TIMEZONE=America/New_York
@@ -150,10 +165,13 @@ local resources. Set `OPENAI_WEB_SEARCH_ENABLED=false` to disable it. Set
 `OPENAI_WEB_SEARCH_CONTEXT_SIZE` to `low`, `medium`, or `high` to tune how much
 search context the model may use.
 
-FlowPath stores situations, intake sessions, transcript messages, generated plans,
-and generated task links in SQLite/libSQL. This MVP remains single-user with no
-auth, but the schema is intentionally isolated around situations so user scoping
-can be added later.
+FlowPath stores profile data, life areas, projects, tasks, check-ins, situations,
+intake sessions, transcript messages, generated plans, and generated task links
+in SQLite/libSQL. Web access uses Clerk authentication, while app data is scoped
+by FlowPath's local `users.id`. Existing single-user data is migrated to local
+owner user `1`; set `FLOWPATH_OWNER_EMAIL` so the first matching Clerk login can
+claim that owner account. Invite-only beta access is managed in the Clerk
+Dashboard.
 
 FlowPath is not a substitute for legal, medical, financial, or emergency help. For
 high-stakes situations, the AI should stay practical and encourage appropriate

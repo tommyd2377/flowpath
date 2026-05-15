@@ -42,7 +42,7 @@ export type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
 export type SafetyRiskLevel = (typeof SAFETY_RISK_LEVELS)[number];
 
 export type Profile = {
-  id: 1;
+  id: number;
   personal_profile: string;
   current_season: string;
   core_priorities: string;
@@ -268,5 +268,4 @@ export type AppConfig = {
   model: string;
   webSearchEnabled: boolean;
   webSearchContextSize: "low" | "medium" | "high";
-  databaseUrl: string;
 };

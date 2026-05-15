@@ -6,7 +6,7 @@ import Link from "next/link";
 import { AlertCircle, ArrowRight, CheckCircle2, Send, Target } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
-import type { AppConfig, CheckIn, Situation, StoredPlan } from "@/lib/types";
+import type { AppConfig, CheckIn, Situation, StoredPlan, Task } from "@/lib/types";
 import {
   dailyGenerationStages,
   GenerationStatus,
@@ -57,6 +57,7 @@ export function TodayDashboard() {
   const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
   const [latestPlan, setLatestPlan] = useState<StoredPlan | null>(null);
   const [activeSituations, setActiveSituations] = useState<Situation[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -70,16 +71,18 @@ export function TodayDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [configData, checkInData, planData, situationData] = await Promise.all([
+      const [configData, checkInData, planData, situationData, taskData] = await Promise.all([
         apiFetch<AppConfig>("/api/config"),
         apiFetch<CheckIn[]>("/api/checkins?limit=10"),
         apiFetch<StoredPlan[]>("/api/generate-plan?limit=1"),
         apiFetch<Situation[]>("/api/situations?status=active"),
+        apiFetch<Task[]>("/api/tasks"),
       ]);
       setConfig(configData);
       setCheckIns(checkInData);
       setLatestPlan(planData[0] ?? null);
       setActiveSituations(situationData);
+      setTasks(taskData);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load FlowPath.");
     } finally {
@@ -134,6 +137,15 @@ export function TodayDashboard() {
   }
 
   const topSituation = activeSituations.find((situation) => situation.latest_plan_move);
+  const openTasks = tasks.filter((task) => task.status === "open");
+  const topTask = openTasks[0] ?? null;
+  const isInitialLoading =
+    loading &&
+    !config &&
+    checkIns.length === 0 &&
+    !latestPlan &&
+    activeSituations.length === 0 &&
+    tasks.length === 0;
 
   return (
     <div>
@@ -170,6 +182,16 @@ export function TodayDashboard() {
                 From {topSituation.title}.
               </p>
             </div>
+          ) : topTask ? (
+            <div>
+              <h2 className="text-2xl font-semibold">{topTask.title}</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                From your open tasks. Importance {topTask.importance}/5 · effort{" "}
+                {topTask.effort}/5.
+              </p>
+            </div>
+          ) : isInitialLoading ? (
+            <EmptyState>Loading recommendation...</EmptyState>
           ) : (
             <EmptyState>
               No next move plan yet. Start with a Situation to get a higher-leverage
@@ -189,7 +211,9 @@ export function TodayDashboard() {
           <div className="mb-2 text-sm font-medium uppercase text-[var(--azure-light)]">
             Active situations
           </div>
-          {activeSituations.length === 0 ? (
+          {isInitialLoading ? (
+            <EmptyState>Loading situations...</EmptyState>
+          ) : activeSituations.length === 0 ? (
             <EmptyState>No active situations yet.</EmptyState>
           ) : (
             <div className="grid gap-2">
@@ -212,6 +236,7 @@ export function TodayDashboard() {
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <div className="grid gap-5">
+          <PriorityTasksCard tasks={openTasks} loading={loading} />
           {!loading && config && !config.hasOpenAiKey ? (
             <Notice tone="warning">
               <div className="flex gap-2">
@@ -351,6 +376,48 @@ export function TodayDashboard() {
         <PlanCard plan={latestPlan} loading={loading || generating} />
       </div>
     </div>
+  );
+}
+
+function PriorityTasksCard({
+  tasks,
+  loading,
+}: {
+  tasks: Task[];
+  loading: boolean;
+}) {
+  if (loading && tasks.length === 0) {
+    return (
+      <Card>
+        <div className="text-sm text-slate-400">Loading priority tasks...</div>
+      </Card>
+    );
+  }
+
+  if (tasks.length === 0) {
+    return null;
+  }
+
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-xl font-semibold">Priority Tasks</h2>
+        <Link href="/tasks" className="text-sm font-medium text-[var(--azure-light)]">
+          View all
+        </Link>
+      </div>
+      <div className="grid gap-2">
+        {tasks.slice(0, 5).map((task) => (
+          <div key={task.id} className="rounded-md border border-slate-800 bg-slate-900 p-3 text-sm">
+            <div className="font-medium text-white">{task.title}</div>
+            <div className="text-slate-400">
+              importance {task.importance}/5 · effort {task.effort}/5
+              {task.situation_title ? ` · ${task.situation_title}` : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

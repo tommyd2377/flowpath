@@ -5,6 +5,7 @@ import process from "node:process";
 
 const databaseUrl = process.env.DATABASE_URL || "file:./data/flowpath.db";
 const authToken = process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN || undefined;
+const OWNER_USER_ID = 1;
 
 function ensureLocalDirectory(url) {
   if (!url.startsWith("file:")) return;
@@ -60,20 +61,28 @@ const client = createClient({ url: databaseUrl, authToken });
 
 async function getLifeAreaId(name) {
   const result = await client.execute({
-    sql: "SELECT id FROM life_areas WHERE name = ?",
-    args: [name],
+    sql: "SELECT id FROM life_areas WHERE user_id = ? AND name = ? COLLATE NOCASE",
+    args: [OWNER_USER_ID, name],
   });
   return result.rows[0]?.id;
 }
 
 try {
   await client.execute({
-    sql: `INSERT INTO profile (
-      id, personal_profile, current_season, core_priorities, constraints,
-      operating_principles, remember, challenge_on, created_at, updated_at
-    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    sql: `INSERT INTO users (id, role, created_at, updated_at)
+    VALUES (?, 'owner', ?, ?)
     ON CONFLICT(id) DO NOTHING`,
+    args: [OWNER_USER_ID, now, now],
+  });
+
+  await client.execute({
+    sql: `INSERT INTO profile (
+      user_id, personal_profile, current_season, core_priorities, constraints,
+      operating_principles, remember, challenge_on, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO NOTHING`,
     args: [
+      OWNER_USER_ID,
       profile.personal_profile,
       profile.current_season,
       profile.core_priorities,
@@ -89,10 +98,10 @@ try {
   for (const area of lifeAreas) {
     await client.execute({
       sql: `INSERT INTO life_areas (
-        name, description, priority_level, desired_outcome, current_bottleneck, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(name) DO NOTHING`,
-      args: [...area, now, now],
+        user_id, name, description, priority_level, desired_outcome, current_bottleneck, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT DO NOTHING`,
+      args: [OWNER_USER_ID, ...area, now, now],
     });
   }
 
@@ -101,12 +110,15 @@ try {
     const lifeAreaId = await getLifeAreaId(areaName);
     await client.execute({
       sql: `INSERT INTO projects (
-        name, life_area_id, status, description, next_milestone,
+        user_id, name, life_area_id, status, description, next_milestone,
         current_bottleneck, why_it_matters, created_at, updated_at
       )
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
-      WHERE NOT EXISTS (SELECT 1 FROM projects WHERE name = ?)`,
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM projects WHERE user_id = ? AND name = ? COLLATE NOCASE
+      )`,
       args: [
+        OWNER_USER_ID,
         name,
         lifeAreaId ?? null,
         status,
@@ -116,6 +128,7 @@ try {
         why,
         now,
         now,
+        OWNER_USER_ID,
         name,
       ],
     });
