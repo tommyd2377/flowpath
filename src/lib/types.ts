@@ -137,6 +137,12 @@ export type RestraintGuidance = {
   scope_boundary: string;
 };
 
+export type OperatorInsight = {
+  naive_path: string;
+  operator_path: string;
+  wasted_motion_to_avoid: string;
+};
+
 export type LocalScoutFinding = {
   title: string;
   why_it_matters: string;
@@ -164,6 +170,7 @@ export type DailyPlan = {
   top_3_actions: DailyPlanAction[];
   recommendation_basis: RecommendationBasis[];
   restraint_guidance: RestraintGuidance;
+  operator_insight: OperatorInsight;
   friction_pattern: string;
   local_reality_scout: LocalRealityScout;
   human_help_boundary: string;
@@ -244,6 +251,7 @@ export type NextMovePlan = {
   likely_trap: string;
   recommendation_basis: RecommendationBasis[];
   restraint_guidance: RestraintGuidance;
+  operator_insight: OperatorInsight;
   friction_pattern: string;
   local_reality_scout: LocalRealityScout;
   resources_to_seek: NextMoveResource[];

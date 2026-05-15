@@ -457,6 +457,21 @@ function PlanCard({
         <p className="mt-3 text-slate-300">{plan.honest_read}</p>
       </div>
 
+      <div className="mb-5">
+        <div className="text-sm font-semibold text-white">Operator insight</div>
+        <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+          <BriefingNote title="Naive path" value={plan.operator_insight.naive_path} />
+          <BriefingNote
+            title="Higher-leverage path"
+            value={plan.operator_insight.operator_path}
+          />
+          <BriefingNote
+            title="Wasted motion to avoid"
+            value={plan.operator_insight.wasted_motion_to_avoid}
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4">
         {plan.top_3_actions.map((action, index) => (
           <div key={`${action.title}-${index}`} className="rounded-lg border border-slate-800 bg-slate-900/55 p-4">

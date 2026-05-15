@@ -94,6 +94,21 @@ export function NextMovePlanCard({
         <Brief title="Friction pattern" value={plan.friction_pattern} />
       </div>
 
+      <div>
+        <h3 className="mb-2 text-sm font-semibold">Operator insight</h3>
+        <div className="grid gap-3 text-sm sm:grid-cols-3">
+          <Brief title="Naive path" value={plan.operator_insight.naive_path} />
+          <Brief
+            title="Higher-leverage path"
+            value={plan.operator_insight.operator_path}
+          />
+          <Brief
+            title="Wasted motion to avoid"
+            value={plan.operator_insight.wasted_motion_to_avoid}
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4">
         <StepGroup
           icon={<Clock className="h-4 w-4" />}

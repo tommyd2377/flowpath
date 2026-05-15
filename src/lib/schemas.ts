@@ -97,6 +97,12 @@ export const restraintGuidanceSchema = z.object({
   scope_boundary: z.string().trim().min(1).max(900),
 });
 
+export const operatorInsightSchema = z.object({
+  naive_path: z.string().trim().min(1).max(1000),
+  operator_path: z.string().trim().min(1).max(1200),
+  wasted_motion_to_avoid: z.string().trim().min(1).max(1000),
+});
+
 export const localScoutFindingSchema = z.object({
   title: z.string().trim().min(1).max(180),
   why_it_matters: z.string().trim().min(1).max(1000),
@@ -124,6 +130,7 @@ export const dailyPlanSchema = z.object({
   top_3_actions: z.array(dailyPlanActionSchema).min(1).max(3),
   recommendation_basis: z.array(recommendationBasisSchema).min(1).max(6),
   restraint_guidance: restraintGuidanceSchema,
+  operator_insight: operatorInsightSchema,
   friction_pattern: z.string().trim().min(1).max(1400),
   local_reality_scout: localRealityScoutSchema,
   human_help_boundary: z.string().trim().min(1).max(1600),
@@ -190,6 +197,7 @@ export const nextMovePlanSchema = z.object({
   likely_trap: z.string().trim().min(1).max(1200),
   recommendation_basis: z.array(recommendationBasisSchema).min(1).max(6),
   restraint_guidance: restraintGuidanceSchema,
+  operator_insight: operatorInsightSchema,
   friction_pattern: z.string().trim().min(1).max(1400),
   local_reality_scout: localRealityScoutSchema,
   resources_to_seek: z.array(nextMoveResourceSchema).max(8),

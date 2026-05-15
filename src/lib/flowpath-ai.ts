@@ -29,11 +29,13 @@ const selectiveWebSearchInstruction = `When web search is available, use it only
 
 const phaseOneInstruction = `For every plan, explain the basis for your recommendations from concrete FlowPath signals such as profile facts, tasks, projects, check-ins, situations, message history, or verified web-search findings. Decide whether today should be a push day or a restraint day. Notice friction patterns without shaming the user. Include local reality only when it is useful and verified or when the missing location should be requested. Keep legal, medical, financial, housing, addiction, mental health, crisis, and safety boundaries conservative. FlowPath supports planning; it is not a substitute for professional, emergency, legal, medical, or financial help.`;
 
-const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction}`;
+const operatorLeverageInstruction = `For operator insight, think like an experienced practitioner who wants to save the user from wasted motion. Identify the plausible naive path that feels productive but is low-yield, the higher-leverage operator path that someone closer to the field would try, and the wasted motion to avoid. Ground this in the user's actual context and verified facts. Do not pretend to have secret access, credentials, or certainty; when stakes require domain experts, say so.`;
+
+const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction}`;
 
 const interviewerSystemPrompt = `You are FlowPath's intake interviewer. Your job is to understand the user's current situation well enough to help identify their next best move. Ask one clear question at a time. Focus on goals, constraints, resources, urgency, what has been tried, what is being avoided, and what would create real-world progress. Before asking, review the full situation, profile, and message history so you do not ask for facts the user already provided. If the next move will depend on local, regional, or current real-world information and the user's location is missing, collect city plus region/state/province/county plus country exactly once. For substance-use situations, ask about the substance and immediate safety or withdrawal risk exactly once when it affects triage. Never repeat location or substance questions once answered; move to constraints, resources, safety, or readiness. Do not overwhelm the user. Do not give the full plan yet unless the user asks. If the situation appears high-stakes, gather enough information to triage safely and recommend appropriate human help. When there is enough context for a useful plan, set current_stage to ready_to_generate and is_complete to true. In that complete state, do not ask whether the user wants a plan; put a short transition in question, such as "I have enough context to generate a plan." Your tone is calm, direct, practical, and humane.`;
 
-const strategistSystemPrompt = `You are FlowPath, a practical AI mentor for people without a mentor. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a generic productivity coach. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${selectiveWebSearchInstruction} ${phaseOneInstruction} Your output should help the user act in the real world today.`;
+const strategistSystemPrompt = `You are FlowPath, a practical AI mentor for people without a mentor. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a generic productivity coach. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} Your output should help the user act in the real world today.`;
 
 export function isOpenAIWebSearchEnabled() {
   const value = process.env.OPENAI_WEB_SEARCH_ENABLED?.trim().toLowerCase();
@@ -102,6 +104,19 @@ function restraintGuidanceJsonSchema() {
   };
 }
 
+function operatorInsightJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["naive_path", "operator_path", "wasted_motion_to_avoid"],
+    properties: {
+      naive_path: { type: "string" },
+      operator_path: { type: "string" },
+      wasted_motion_to_avoid: { type: "string" },
+    },
+  };
+}
+
 function localRealityScoutJsonSchema() {
   return {
     type: "object",
@@ -166,6 +181,7 @@ const dailyPlanJsonSchema = {
     "top_3_actions",
     "recommendation_basis",
     "restraint_guidance",
+    "operator_insight",
     "friction_pattern",
     "local_reality_scout",
     "human_help_boundary",
@@ -209,6 +225,7 @@ const dailyPlanJsonSchema = {
       items: recommendationBasisJsonSchema(),
     },
     restraint_guidance: restraintGuidanceJsonSchema(),
+    operator_insight: operatorInsightJsonSchema(),
     friction_pattern: { type: "string" },
     local_reality_scout: localRealityScoutJsonSchema(),
     human_help_boundary: { type: "string" },
@@ -336,6 +353,15 @@ function trimRestraintGuidance(value: unknown) {
   });
 }
 
+function trimOperatorInsight(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return trimGeneratedRecordStrings(value, {
+    naive_path: 1000,
+    operator_path: 1200,
+    wasted_motion_to_avoid: 1000,
+  });
+}
+
 function trimLocalRealityScout(value: unknown) {
   if (!isJsonRecord(value)) return value;
   return {
@@ -394,6 +420,7 @@ function trimDailyPlanOutput(value: unknown) {
       : value.top_3_actions,
     recommendation_basis: trimRecommendationBasis(value.recommendation_basis),
     restraint_guidance: trimRestraintGuidance(value.restraint_guidance),
+    operator_insight: trimOperatorInsight(value.operator_insight),
     local_reality_scout: trimLocalRealityScout(value.local_reality_scout),
   };
 }
@@ -453,6 +480,7 @@ function trimNextMovePlanOutput(value: unknown) {
     what_not_to_do: trimGeneratedStringArray(value.what_not_to_do, 500),
     recommendation_basis: trimRecommendationBasis(value.recommendation_basis),
     restraint_guidance: trimRestraintGuidance(value.restraint_guidance),
+    operator_insight: trimOperatorInsight(value.operator_insight),
     local_reality_scout: trimLocalRealityScout(value.local_reality_scout),
     resources_to_seek: trimNextMoveResources(value.resources_to_seek),
     safety_boundary: trimSafetyBoundary(value.safety_boundary),
@@ -492,6 +520,7 @@ export async function generateFlowPathPlan(context: FlowPathContext): Promise<{
                 "If web search is available, use it selectively when today's best actions depend on current or local facts that are not already in FlowPath context.",
                 "Use at most two web searches. If web search is not needed, do not use it.",
                 "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow today.",
+                "Fill operator_insight with the naive path, the higher-leverage operator path, and the wasted motion to avoid.",
                 "Use friction_pattern to name the likely source of resistance in plain language without blame.",
                 "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
                 "Fill human_help_boundary with the human, professional, or emergency boundary relevant to this plan.",
@@ -585,6 +614,7 @@ const nextMovePlanJsonSchema = {
     "likely_trap",
     "recommendation_basis",
     "restraint_guidance",
+    "operator_insight",
     "friction_pattern",
     "local_reality_scout",
     "resources_to_seek",
@@ -645,6 +675,7 @@ const nextMovePlanJsonSchema = {
       items: recommendationBasisJsonSchema(),
     },
     restraint_guidance: restraintGuidanceJsonSchema(),
+    operator_insight: operatorInsightJsonSchema(),
     friction_pattern: { type: "string" },
     local_reality_scout: localRealityScoutJsonSchema(),
     resources_to_seek: {
@@ -798,6 +829,7 @@ export async function generateNextMovePlan(context: StrategistContext): Promise<
           "If web search is available, use it selectively for current or local facts the model may not know. For local resources, opportunities, programs, rules, or logistics, search with the user's city, region/state/province/county, country, and timezone when available.",
           "Use at most three web searches. If web search is not needed, do not use it.",
           "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
+          "Fill operator_insight with the naive path, the higher-leverage operator path, and the wasted motion to avoid.",
           "Use friction_pattern to name the likely source of resistance in plain language without blame.",
           "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
           "Fill safety_boundary with the practical limits of AI help, the professional-help signal, and urgent support guidance.",

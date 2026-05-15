@@ -7,6 +7,7 @@ import type {
   IntakeSession,
   LifeArea,
   LocalRealityScout,
+  OperatorInsight,
   Profile,
   Project,
   RecommendationBasis,
@@ -75,6 +76,12 @@ const defaultLocalRealityScout: LocalRealityScout = {
   location_basis: "",
   findings: [],
   missing_location_question: "",
+};
+
+const defaultOperatorInsight: OperatorInsight = {
+  naive_path: "No operator insight was stored for this older plan.",
+  operator_path: "Use the clearest next move from the rest of this plan.",
+  wasted_motion_to_avoid: "Avoid expanding the plan before taking the next concrete step.",
 };
 
 const defaultSafetyBoundary: SafetyBoundary = {
@@ -556,11 +563,13 @@ type StoredPlanRow = Omit<
   | "top_3_actions"
   | "recommendation_basis"
   | "restraint_guidance"
+  | "operator_insight"
   | "local_reality_scout"
 > & {
   top_3_actions_json: string;
   recommendation_basis_json?: string | null;
   restraint_guidance_json?: string | null;
+  operator_insight_json?: string | null;
   local_reality_scout_json?: string | null;
 };
 
@@ -585,6 +594,7 @@ function rowToStoredPlan(row: StoredPlanRow): StoredPlan {
       row.restraint_guidance_json,
       defaultDailyRestraintGuidance,
     ),
+    operator_insight: parseJson(row.operator_insight_json, defaultOperatorInsight),
     friction_pattern:
       row.friction_pattern || "No friction pattern was stored for this older plan.",
     local_reality_scout: parseJson(
@@ -615,10 +625,10 @@ export async function createPlan(
     `INSERT INTO plans (
       user_id, plan_date, checkin_id, model, today_theme, honest_read, top_3_actions_json,
       recommendation_basis_json, restraint_guidance_json, friction_pattern,
-      local_reality_scout_json, human_help_boundary, avoid_today,
+      operator_insight_json, local_reality_scout_json, human_help_boundary, avoid_today,
       optional_if_energy_is_high, minimum_viable_day, evening_review_prompt,
       raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       todayIsoDate(),
@@ -630,6 +640,7 @@ export async function createPlan(
       JSON.stringify(plan.recommendation_basis),
       JSON.stringify(plan.restraint_guidance),
       plan.friction_pattern,
+      JSON.stringify(plan.operator_insight),
       JSON.stringify(plan.local_reality_scout),
       plan.human_help_boundary,
       plan.avoid_today,
@@ -940,6 +951,7 @@ type NextMovePlanRow = Omit<
   | "what_not_to_do"
   | "recommendation_basis"
   | "restraint_guidance"
+  | "operator_insight"
   | "local_reality_scout"
   | "resources_to_seek"
   | "safety_boundary"
@@ -953,6 +965,7 @@ type NextMovePlanRow = Omit<
   what_not_to_do_json: string;
   recommendation_basis_json?: string | null;
   restraint_guidance_json?: string | null;
+  operator_insight_json?: string | null;
   local_reality_scout_json?: string | null;
   resources_to_seek_json: string;
   safety_boundary_json?: string | null;
@@ -991,6 +1004,7 @@ function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
       row.restraint_guidance_json,
       defaultNextMoveRestraintGuidance,
     ),
+    operator_insight: parseJson(row.operator_insight_json, defaultOperatorInsight),
     friction_pattern:
       row.friction_pattern || "No friction pattern was stored for this older plan.",
     local_reality_scout: parseJson(
@@ -1023,10 +1037,10 @@ export async function createNextMovePlan(
       highest_leverage_move_json, why_this_move, first_30_minutes_json,
       next_24_hours_json, next_7_days_json, what_not_to_do_json, likely_trap,
       recommendation_basis_json, restraint_guidance_json, friction_pattern,
-      local_reality_scout_json, resources_to_seek_json, when_to_get_human_help,
+      operator_insight_json, local_reality_scout_json, resources_to_seek_json, when_to_get_human_help,
       safety_boundary_json, confidence_level, assumptions_json,
       follow_up_questions_json, raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       situationId,
@@ -1045,6 +1059,7 @@ export async function createNextMovePlan(
       JSON.stringify(plan.recommendation_basis),
       JSON.stringify(plan.restraint_guidance),
       plan.friction_pattern,
+      JSON.stringify(plan.operator_insight),
       JSON.stringify(plan.local_reality_scout),
       JSON.stringify(plan.resources_to_seek),
       plan.when_to_get_human_help,
