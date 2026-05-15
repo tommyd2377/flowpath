@@ -6,8 +6,10 @@ import {
   NEXT_MOVE_MODES,
   PRIORITY_LEVELS,
   PROJECT_STATUSES,
+  SAFETY_RISK_LEVELS,
   SITUATION_STATUSES,
   SITUATION_URGENCIES,
+  TASK_FRICTION_TYPES,
   TASK_STATUSES,
 } from "./types";
 
@@ -56,6 +58,8 @@ export const taskInputSchema = z.object({
   status: z.enum(TASK_STATUSES).default("open"),
   importance: z.number().int().min(1).max(5).default(3),
   effort: z.number().int().min(1).max(5).default(3),
+  friction_type: z.enum(TASK_FRICTION_TYPES).default("none"),
+  friction_note: text(1200),
   due_date: optionalDate,
   notes: text(5000),
 });
@@ -79,10 +83,50 @@ export const dailyPlanActionSchema = z.object({
   first_step: z.string().min(1).max(1000),
 });
 
+export const recommendationBasisSchema = z.object({
+  signal: z.string().trim().min(1).max(500),
+  source: z.string().trim().min(1).max(120),
+  implication: z.string().trim().min(1).max(800),
+});
+
+export const restraintGuidanceSchema = z.object({
+  should_push: z.boolean(),
+  reason: z.string().trim().min(1).max(900),
+  minimum_viable_move: z.string().trim().min(1).max(900),
+  recovery_move: z.string().trim().min(1).max(900),
+  scope_boundary: z.string().trim().min(1).max(900),
+});
+
+export const localScoutFindingSchema = z.object({
+  title: z.string().trim().min(1).max(180),
+  why_it_matters: z.string().trim().min(1).max(1000),
+  source: z.string().trim().min(1).max(240),
+  url_or_next_search: z.string().trim().max(500).default(""),
+});
+
+export const localRealityScoutSchema = z.object({
+  used_web_search: z.boolean(),
+  location_basis: z.string().trim().max(240).default(""),
+  findings: z.array(localScoutFindingSchema).max(4),
+  missing_location_question: z.string().trim().max(500).default(""),
+});
+
+export const safetyBoundarySchema = z.object({
+  risk_level: z.enum(SAFETY_RISK_LEVELS),
+  professional_help_signal: z.string().trim().min(1).max(1200),
+  do_not_rely_on_ai_for: z.string().trim().min(1).max(1200),
+  urgent_support_guidance: z.string().trim().min(1).max(1200),
+});
+
 export const dailyPlanSchema = z.object({
   today_theme: z.string().min(1).max(220),
   honest_read: z.string().min(1).max(1800),
   top_3_actions: z.array(dailyPlanActionSchema).min(1).max(3),
+  recommendation_basis: z.array(recommendationBasisSchema).min(1).max(6),
+  restraint_guidance: restraintGuidanceSchema,
+  friction_pattern: z.string().trim().min(1).max(1400),
+  local_reality_scout: localRealityScoutSchema,
+  human_help_boundary: z.string().trim().min(1).max(1600),
   avoid_today: z.string().min(1).max(1200),
   optional_if_energy_is_high: z.string().min(1).max(1200),
   minimum_viable_day: z.string().min(1).max(1200),
@@ -123,6 +167,7 @@ export const nextMoveStepSchema = z.object({
 export const nextMoveResourceSchema = z.object({
   name: z.string().trim().min(1).max(180),
   why: z.string().trim().min(1).max(1200),
+  contact_or_url: z.string().trim().max(500).default(""),
 });
 
 export const highestLeverageMoveSchema = z.object({
@@ -143,8 +188,13 @@ export const nextMovePlanSchema = z.object({
   next_7_days: z.array(nextMoveStepSchema).min(1).max(10),
   what_not_to_do: z.array(z.string().trim().min(1).max(500)).min(1).max(8),
   likely_trap: z.string().trim().min(1).max(1200),
+  recommendation_basis: z.array(recommendationBasisSchema).min(1).max(6),
+  restraint_guidance: restraintGuidanceSchema,
+  friction_pattern: z.string().trim().min(1).max(1400),
+  local_reality_scout: localRealityScoutSchema,
   resources_to_seek: z.array(nextMoveResourceSchema).max(8),
   when_to_get_human_help: z.string().trim().min(1).max(1800),
+  safety_boundary: safetyBoundarySchema,
   confidence_level: z.enum(CONFIDENCE_LEVELS),
   assumptions: z.array(z.string().trim().min(1).max(500)).max(8),
   follow_up_questions_if_any: z.array(z.string().trim().min(1).max(500)).max(8),

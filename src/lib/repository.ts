@@ -2,11 +2,16 @@ import { all, first, insert, run } from "./db";
 import type {
   CheckIn,
   DailyPlan,
+  HighestLeverageMove,
   IntakeMessage,
   IntakeSession,
   LifeArea,
+  LocalRealityScout,
   Profile,
   Project,
+  RecommendationBasis,
+  RestraintGuidance,
+  SafetyBoundary,
   Situation,
   StoredPlan,
   StoredNextMovePlan,
@@ -28,7 +33,7 @@ import { nowIso, todayIsoDate } from "./time";
 const defaultProfile: Profile = {
   id: 1,
   personal_profile:
-    "Paste durable context about yourself, your work, your health, your creative projects, your acting pipeline, your goals, and your constraints here.",
+    "Paste durable context about yourself, where you live or the places you need local advice for, your work, your health, your creative projects, your acting pipeline, your goals, and your constraints here.",
   current_season:
     "Describe the season you are in: building, recovering, distributing, training, exploring, simplifying, or something else.",
   core_priorities:
@@ -38,11 +43,46 @@ const defaultProfile: Profile = {
   operating_principles:
     "Add principles like: choose leverage over volume, ship small, protect health, do not hide inside planning.",
   remember:
-    "Add details Needle should keep in mind. The app cannot see ChatGPT memories unless you paste context here.",
+    "Add details FlowPath should keep in mind. The app cannot see ChatGPT memories unless you paste context here.",
   challenge_on:
-    "Add patterns you want Needle to challenge, like avoidance, over-planning, or over-scoping.",
+    "Add patterns you want FlowPath to challenge, like avoidance, over-planning, or over-scoping.",
   created_at: nowIso(),
   updated_at: nowIso(),
+};
+
+const defaultRecommendationBasis: RecommendationBasis[] = [];
+
+const defaultDailyRestraintGuidance: RestraintGuidance = {
+  should_push: true,
+  reason: "This plan was created before restraint guidance was stored.",
+  minimum_viable_move: "Do the smallest useful version of the top action.",
+  recovery_move: "Protect basic recovery before adding more work.",
+  scope_boundary: "Do not expand the plan beyond today.",
+};
+
+const defaultNextMoveRestraintGuidance: RestraintGuidance = {
+  should_push: true,
+  reason: "This plan was created before restraint guidance was stored.",
+  minimum_viable_move: "Do the smallest useful version of the highest-leverage move.",
+  recovery_move: "Protect basic recovery before adding more work.",
+  scope_boundary: "Do not expand the plan beyond the current situation.",
+};
+
+const defaultLocalRealityScout: LocalRealityScout = {
+  used_web_search: false,
+  location_basis: "",
+  findings: [],
+  missing_location_question: "",
+};
+
+const defaultSafetyBoundary: SafetyBoundary = {
+  risk_level: "low",
+  professional_help_signal:
+    "Use appropriate human or professional help when the situation exceeds planning support.",
+  do_not_rely_on_ai_for:
+    "Do not rely on FlowPath for legal, medical, financial, emergency, or crisis decisions.",
+  urgent_support_guidance:
+    "If there is immediate danger, contact local emergency services or a trusted person nearby now.",
 };
 
 export async function getProfile(): Promise<Profile> {
@@ -271,8 +311,9 @@ export async function createTask(input: TaskInput): Promise<Task> {
   const now = nowIso();
   const id = await insert(
     `INSERT INTO tasks (
-      title, life_area_id, project_id, status, importance, effort, due_date, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      title, life_area_id, project_id, status, importance, effort,
+      friction_type, friction_note, due_date, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.title,
       input.life_area_id,
@@ -280,6 +321,8 @@ export async function createTask(input: TaskInput): Promise<Task> {
       input.status,
       input.importance,
       input.effort,
+      input.friction_type,
+      input.friction_note,
       input.due_date || null,
       input.notes,
       now,
@@ -300,6 +343,8 @@ export async function updateTask(id: number, input: TaskInput): Promise<Task | n
       status = ?,
       importance = ?,
       effort = ?,
+      friction_type = ?,
+      friction_note = ?,
       due_date = ?,
       notes = ?,
       updated_at = ?
@@ -311,6 +356,8 @@ export async function updateTask(id: number, input: TaskInput): Promise<Task | n
       input.status,
       input.importance,
       input.effort,
+      input.friction_type,
+      input.friction_note,
       input.due_date || null,
       input.notes,
       nowIso(),
@@ -367,15 +414,24 @@ export async function getLatestCheckInForDate(date = todayIsoDate()) {
   );
 }
 
-function parseActions(value: string) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return [];
-  }
+type StoredPlanRow = Omit<
+  StoredPlan,
+  | "top_3_actions"
+  | "recommendation_basis"
+  | "restraint_guidance"
+  | "local_reality_scout"
+> & {
+  top_3_actions_json: string;
+  recommendation_basis_json?: string | null;
+  restraint_guidance_json?: string | null;
+  local_reality_scout_json?: string | null;
+};
+
+function parseActions(value: string | null | undefined) {
+  return parseJson(value, []);
 }
 
-function rowToStoredPlan(row: Omit<StoredPlan, "top_3_actions"> & { top_3_actions_json: string }) {
+function rowToStoredPlan(row: StoredPlanRow): StoredPlan {
   return {
     id: row.id,
     plan_date: row.plan_date,
@@ -384,6 +440,23 @@ function rowToStoredPlan(row: Omit<StoredPlan, "top_3_actions"> & { top_3_action
     today_theme: row.today_theme,
     honest_read: row.honest_read,
     top_3_actions: parseActions(row.top_3_actions_json),
+    recommendation_basis: parseJson(
+      row.recommendation_basis_json,
+      defaultRecommendationBasis,
+    ),
+    restraint_guidance: parseJson(
+      row.restraint_guidance_json,
+      defaultDailyRestraintGuidance,
+    ),
+    friction_pattern:
+      row.friction_pattern || "No friction pattern was stored for this older plan.",
+    local_reality_scout: parseJson(
+      row.local_reality_scout_json,
+      defaultLocalRealityScout,
+    ),
+    human_help_boundary:
+      row.human_help_boundary ||
+      "Use appropriate human, professional, or emergency help when the situation exceeds planning support.",
     avoid_today: row.avoid_today,
     optional_if_energy_is_high: row.optional_if_energy_is_high,
     minimum_viable_day: row.minimum_viable_day,
@@ -402,9 +475,11 @@ export async function createPlan(
   const id = await insert(
     `INSERT INTO plans (
       plan_date, checkin_id, model, today_theme, honest_read, top_3_actions_json,
-      avoid_today, optional_if_energy_is_high, minimum_viable_day,
-      evening_review_prompt, raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      recommendation_basis_json, restraint_guidance_json, friction_pattern,
+      local_reality_scout_json, human_help_boundary, avoid_today,
+      optional_if_energy_is_high, minimum_viable_day, evening_review_prompt,
+      raw_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       todayIsoDate(),
       checkinId,
@@ -412,6 +487,11 @@ export async function createPlan(
       plan.today_theme,
       plan.honest_read,
       JSON.stringify(plan.top_3_actions),
+      JSON.stringify(plan.recommendation_basis),
+      JSON.stringify(plan.restraint_guidance),
+      plan.friction_pattern,
+      JSON.stringify(plan.local_reality_scout),
+      plan.human_help_boundary,
       plan.avoid_today,
       plan.optional_if_energy_is_high,
       plan.minimum_viable_day,
@@ -426,16 +506,12 @@ export async function createPlan(
 }
 
 export async function getPlan(id: number): Promise<StoredPlan | null> {
-  const row = await first<
-    Omit<StoredPlan, "top_3_actions"> & { top_3_actions_json: string }
-  >("SELECT * FROM plans WHERE id = ?", [id]);
+  const row = await first<StoredPlanRow>("SELECT * FROM plans WHERE id = ?", [id]);
   return row ? rowToStoredPlan(row) : null;
 }
 
 export async function listPlans(limit = 20): Promise<StoredPlan[]> {
-  const rows = await all<
-    Omit<StoredPlan, "top_3_actions"> & { top_3_actions_json: string }
-  >(
+  const rows = await all<StoredPlanRow>(
     `SELECT * FROM plans
     ORDER BY plan_date DESC, created_at DESC
     LIMIT ?`,
@@ -444,7 +520,8 @@ export async function listPlans(limit = 20): Promise<StoredPlan[]> {
   return rows.map(rowToStoredPlan);
 }
 
-function parseJson<T>(value: string, fallback: T): T {
+function parseJson<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback;
   try {
     return JSON.parse(value) as T;
   } catch {
@@ -650,28 +727,43 @@ export async function addIntakeMessage(
   return message;
 }
 
-function rowToNextMovePlan(
-  row: Omit<
-    StoredNextMovePlan,
-    | "highest_leverage_move_today"
-    | "first_30_minutes"
-    | "next_24_hours"
-    | "next_7_days"
-    | "what_not_to_do"
-    | "resources_to_seek"
-    | "assumptions"
-    | "follow_up_questions_if_any"
-  > & {
-    highest_leverage_move_json: string;
-    first_30_minutes_json: string;
-    next_24_hours_json: string;
-    next_7_days_json: string;
-    what_not_to_do_json: string;
-    resources_to_seek_json: string;
-    assumptions_json: string;
-    follow_up_questions_json: string;
-  },
-): StoredNextMovePlan {
+type NextMovePlanRow = Omit<
+  StoredNextMovePlan,
+  | "highest_leverage_move_today"
+  | "first_30_minutes"
+  | "next_24_hours"
+  | "next_7_days"
+  | "what_not_to_do"
+  | "recommendation_basis"
+  | "restraint_guidance"
+  | "local_reality_scout"
+  | "resources_to_seek"
+  | "safety_boundary"
+  | "assumptions"
+  | "follow_up_questions_if_any"
+> & {
+  highest_leverage_move_json: string;
+  first_30_minutes_json: string;
+  next_24_hours_json: string;
+  next_7_days_json: string;
+  what_not_to_do_json: string;
+  recommendation_basis_json?: string | null;
+  restraint_guidance_json?: string | null;
+  local_reality_scout_json?: string | null;
+  resources_to_seek_json: string;
+  safety_boundary_json?: string | null;
+  assumptions_json: string;
+  follow_up_questions_json: string;
+};
+
+function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
+  const defaultMove: HighestLeverageMove = {
+    title: "",
+    description: "",
+    estimated_minutes: 30,
+    success_condition: "",
+  };
+
   return {
     id: row.id,
     situation_id: row.situation_id,
@@ -680,18 +772,30 @@ function rowToNextMovePlan(
     mode: row.mode,
     situation_summary: row.situation_summary,
     core_bottleneck: row.core_bottleneck,
-    highest_leverage_move_today: parseJson(
-      row.highest_leverage_move_json,
-      { title: "", description: "", estimated_minutes: 30, success_condition: "" },
-    ),
+    highest_leverage_move_today: parseJson(row.highest_leverage_move_json, defaultMove),
     why_this_move: row.why_this_move,
     first_30_minutes: parseJson(row.first_30_minutes_json, []),
     next_24_hours: parseJson(row.next_24_hours_json, []),
     next_7_days: parseJson(row.next_7_days_json, []),
     what_not_to_do: parseJson(row.what_not_to_do_json, []),
     likely_trap: row.likely_trap,
+    recommendation_basis: parseJson(
+      row.recommendation_basis_json,
+      defaultRecommendationBasis,
+    ),
+    restraint_guidance: parseJson(
+      row.restraint_guidance_json,
+      defaultNextMoveRestraintGuidance,
+    ),
+    friction_pattern:
+      row.friction_pattern || "No friction pattern was stored for this older plan.",
+    local_reality_scout: parseJson(
+      row.local_reality_scout_json,
+      defaultLocalRealityScout,
+    ),
     resources_to_seek: parseJson(row.resources_to_seek_json, []),
     when_to_get_human_help: row.when_to_get_human_help,
+    safety_boundary: parseJson(row.safety_boundary_json, defaultSafetyBoundary),
     confidence_level: row.confidence_level,
     assumptions: parseJson(row.assumptions_json, []),
     follow_up_questions_if_any: parseJson(row.follow_up_questions_json, []),
@@ -711,9 +815,11 @@ export async function createNextMovePlan(
       situation_id, intake_session_id, model, mode, situation_summary, core_bottleneck,
       highest_leverage_move_json, why_this_move, first_30_minutes_json,
       next_24_hours_json, next_7_days_json, what_not_to_do_json, likely_trap,
-      resources_to_seek_json, when_to_get_human_help, confidence_level,
-      assumptions_json, follow_up_questions_json, raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      recommendation_basis_json, restraint_guidance_json, friction_pattern,
+      local_reality_scout_json, resources_to_seek_json, when_to_get_human_help,
+      safety_boundary_json, confidence_level, assumptions_json,
+      follow_up_questions_json, raw_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       situationId,
       sessionId,
@@ -728,8 +834,13 @@ export async function createNextMovePlan(
       JSON.stringify(plan.next_7_days),
       JSON.stringify(plan.what_not_to_do),
       plan.likely_trap,
+      JSON.stringify(plan.recommendation_basis),
+      JSON.stringify(plan.restraint_guidance),
+      plan.friction_pattern,
+      JSON.stringify(plan.local_reality_scout),
       JSON.stringify(plan.resources_to_seek),
       plan.when_to_get_human_help,
+      JSON.stringify(plan.safety_boundary),
       plan.confidence_level,
       JSON.stringify(plan.assumptions),
       JSON.stringify(plan.follow_up_questions_if_any),

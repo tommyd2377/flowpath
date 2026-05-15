@@ -144,7 +144,7 @@ export function ProjectsManager() {
     <div>
       <PageHeader eyebrow="Projects" title="Active Bets">
         <p>
-          Track the projects Needle should consider when choosing today&apos;s highest
+          Track the projects FlowPath should consider when choosing today&apos;s highest
           leverage actions. Active projects are weighted most heavily.
         </p>
       </PageHeader>

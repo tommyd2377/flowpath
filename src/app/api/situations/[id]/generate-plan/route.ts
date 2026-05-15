@@ -4,7 +4,7 @@ import {
   errorResponse,
   parseId,
 } from "@/lib/api-response";
-import { generateNextMovePlan } from "@/lib/needle-ai";
+import { generateNextMovePlan } from "@/lib/flowpath-ai";
 import {
   createNextMovePlan,
   getLatestIntakeSession,

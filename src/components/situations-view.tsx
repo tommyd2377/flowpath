@@ -60,7 +60,7 @@ export function SituationsView() {
     <div>
       <PageHeader eyebrow="Situations" title="Current Reality">
         <p>
-          Situations are the context Needle uses to separate highest-leverage moves from
+          Situations are the context FlowPath uses to separate highest-leverage moves from
           noise.
         </p>
       </PageHeader>

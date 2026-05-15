@@ -13,6 +13,10 @@ import type {
   StoredNextMovePlan,
   Task,
 } from "@/lib/types";
+import {
+  GenerationStatus,
+  nextMoveGenerationStages,
+} from "./generation-status";
 import { NextMovePlanCard, modeLabel } from "./next-move-plan-card";
 import { Button, Card, EmptyState, Notice, PageHeader } from "./ui";
 
@@ -177,7 +181,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       <div className="mb-5 flex flex-wrap gap-2">
         <Button type="button" onClick={generatePlan} disabled={generating || deleting}>
           <Sparkles className="h-4 w-4" />
-          {generating ? "Generating..." : "Generate updated plan"}
+          {generating ? "Generating plan..." : "Generate updated plan"}
         </Button>
         {detail.latestPlan ? (
           <Button
@@ -225,6 +229,11 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           {deleting ? "Deleting..." : "Delete permanently"}
         </Button>
       </div>
+      {generating ? (
+        <div className="mb-5">
+          <GenerationStatus stages={nextMoveGenerationStages} />
+        </div>
+      ) : null}
 
       <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="grid gap-5">
@@ -244,7 +253,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
                     }`}
                   >
                     <div className="mb-1 text-xs font-medium uppercase text-slate-400">
-                      {item.role === "assistant" ? "Needle" : "You"}
+                      {item.role === "assistant" ? "FlowPath" : "You"}
                     </div>
                     {item.content}
                   </div>
@@ -265,8 +274,16 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
                     <div className="text-slate-400">
                       {task.status} · importance {task.importance}/5 · effort{" "}
                       {task.effort}/5
+                      {(task.friction_type ?? "none") !== "none"
+                        ? ` · friction ${task.friction_type.replace("_", " ")}`
+                        : ""}
                     </div>
                     {task.notes ? <p className="mt-1 text-slate-300">{task.notes}</p> : null}
+                    {task.friction_note ? (
+                      <p className="mt-1 text-amber-100/90">
+                        Friction: {task.friction_note}
+                      </p>
+                    ) : null}
                   </div>
                 ))}
               </div>

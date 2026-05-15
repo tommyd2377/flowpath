@@ -1,4 +1,4 @@
-export const DEFAULT_DATABASE_URL = "file:./data/needle.db";
+export const DEFAULT_DATABASE_URL = "file:./data/flowpath.db";
 export const DEFAULT_APP_TIMEZONE = "America/New_York";
 
 export function getDatabaseUrl() {

@@ -1,6 +1,17 @@
 export const PRIORITY_LEVELS = ["low", "medium", "high"] as const;
 export const PROJECT_STATUSES = ["active", "paused", "someday", "done"] as const;
 export const TASK_STATUSES = ["open", "done", "ignored"] as const;
+export const TASK_FRICTION_TYPES = [
+  "none",
+  "unclear",
+  "too_large",
+  "scary",
+  "blocked",
+  "low_energy",
+  "needs_person",
+  "not_important",
+  "admin_drag",
+] as const;
 export const SITUATION_STATUSES = ["active", "resolved", "archived"] as const;
 export const SITUATION_URGENCIES = ["low", "medium", "high", "crisis"] as const;
 export const INTAKE_STAGES = [
@@ -17,15 +28,18 @@ export const NEXT_MOVE_MODES = [
   "maintenance",
 ] as const;
 export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
+export const SAFETY_RISK_LEVELS = ["low", "medium", "high", "crisis"] as const;
 
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+export type TaskFrictionType = (typeof TASK_FRICTION_TYPES)[number];
 export type SituationStatus = (typeof SITUATION_STATUSES)[number];
 export type SituationUrgency = (typeof SITUATION_URGENCIES)[number];
 export type IntakeStage = (typeof INTAKE_STAGES)[number];
 export type NextMoveMode = (typeof NEXT_MOVE_MODES)[number];
 export type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
+export type SafetyRiskLevel = (typeof SAFETY_RISK_LEVELS)[number];
 
 export type Profile = {
   id: 1;
@@ -79,6 +93,8 @@ export type Task = {
   status: TaskStatus;
   importance: number;
   effort: number;
+  friction_type: TaskFrictionType;
+  friction_note: string;
   due_date: string | null;
   notes: string;
   created_at: string;
@@ -107,10 +123,50 @@ export type DailyPlanAction = {
   first_step: string;
 };
 
+export type RecommendationBasis = {
+  signal: string;
+  source: string;
+  implication: string;
+};
+
+export type RestraintGuidance = {
+  should_push: boolean;
+  reason: string;
+  minimum_viable_move: string;
+  recovery_move: string;
+  scope_boundary: string;
+};
+
+export type LocalScoutFinding = {
+  title: string;
+  why_it_matters: string;
+  source: string;
+  url_or_next_search: string;
+};
+
+export type LocalRealityScout = {
+  used_web_search: boolean;
+  location_basis: string;
+  findings: LocalScoutFinding[];
+  missing_location_question: string;
+};
+
+export type SafetyBoundary = {
+  risk_level: SafetyRiskLevel;
+  professional_help_signal: string;
+  do_not_rely_on_ai_for: string;
+  urgent_support_guidance: string;
+};
+
 export type DailyPlan = {
   today_theme: string;
   honest_read: string;
   top_3_actions: DailyPlanAction[];
+  recommendation_basis: RecommendationBasis[];
+  restraint_guidance: RestraintGuidance;
+  friction_pattern: string;
+  local_reality_scout: LocalRealityScout;
+  human_help_boundary: string;
   avoid_today: string;
   optional_if_energy_is_high: string;
   minimum_viable_day: string;
@@ -165,6 +221,7 @@ export type NextMoveStep = {
 export type NextMoveResource = {
   name: string;
   why: string;
+  contact_or_url: string;
 };
 
 export type HighestLeverageMove = {
@@ -185,8 +242,13 @@ export type NextMovePlan = {
   next_7_days: NextMoveStep[];
   what_not_to_do: string[];
   likely_trap: string;
+  recommendation_basis: RecommendationBasis[];
+  restraint_guidance: RestraintGuidance;
+  friction_pattern: string;
+  local_reality_scout: LocalRealityScout;
   resources_to_seek: NextMoveResource[];
   when_to_get_human_help: string;
+  safety_boundary: SafetyBoundary;
   confidence_level: ConfidenceLevel;
   assumptions: string[];
   follow_up_questions_if_any: string[];
@@ -204,5 +266,7 @@ export type StoredNextMovePlan = NextMovePlan & {
 export type AppConfig = {
   hasOpenAiKey: boolean;
   model: string;
+  webSearchEnabled: boolean;
+  webSearchContextSize: "low" | "medium" | "high";
   databaseUrl: string;
 };

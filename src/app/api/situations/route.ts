@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     const messages = await addIntakeMessage(
       session.id,
       "assistant",
-      "What do you most want to change about this situation, and what would feel meaningfully different if Needle helped you make progress?",
+      "What do you most want to change about this situation, and what would feel meaningfully different if FlowPath helped you make progress?",
     );
     return dataResponse({ situation, session, messages: [messages] }, 201);
   } catch (error) {

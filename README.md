@@ -1,8 +1,10 @@
-# Needle
+# FlowPath
 
-Needle is a private personal AI prioritization dashboard. It helps answer:
+FlowPath is a private personal AI prioritization dashboard. It helps answer:
 
-> What should I do today to move the needle?
+> What should I do today?
+
+Domain: `flowpath.ai`.
 
 The current MVP also includes **Find My Next Move**, an AI-guided intake flow for
 figuring out the highest-leverage next action when a situation feels stuck,
@@ -39,9 +41,11 @@ cp .env.example .env.local
 ```bash
 OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-5.5
+OPENAI_WEB_SEARCH_ENABLED=true
 ```
 
-`OPENAI_MODEL` is optional. If omitted, Needle defaults to `gpt-5.5`.
+`OPENAI_MODEL` is optional. If omitted, FlowPath defaults to `gpt-5.5`.
+`OPENAI_WEB_SEARCH_ENABLED` is optional and defaults to `true`.
 
 4. Initialize the database:
 
@@ -98,7 +102,9 @@ Optional:
 
 ```bash
 OPENAI_MODEL=gpt-5.5
-DATABASE_URL=file:./data/needle.db
+OPENAI_WEB_SEARCH_ENABLED=true
+OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium
+DATABASE_URL=file:./data/flowpath.db
 TURSO_AUTH_TOKEN=
 APP_TIMEZONE=America/New_York
 ```
@@ -110,7 +116,7 @@ If `OPENAI_API_KEY` is missing, the app still works for profile, areas, projects
 Local development defaults to:
 
 ```bash
-DATABASE_URL=file:./data/needle.db
+DATABASE_URL=file:./data/flowpath.db
 ```
 
 Plain SQLite files generally do not persist correctly on Vercel serverless because serverless filesystems are ephemeral and instances are not guaranteed to share the same disk. For deployed persistence, use Turso/libSQL:
@@ -134,12 +140,22 @@ The main product flow is **Find My Next Move**:
    - `next_24_hours`
    - `next_7_days`
 
-Needle stores situations, intake sessions, transcript messages, generated plans,
+When enabled, FlowPath gives the OpenAI Responses API web search tool to AI plan
+generation across the app. The prompts instruct the model to use search only when
+a plan depends on current, time-sensitive, or location-specific facts not already
+covered by FlowPath context. For local advice, store city, region/state/province,
+and country in Memory/Profile or the Situation intake. If local specificity
+matters and location is missing, FlowPath should ask for it instead of inventing
+local resources. Set `OPENAI_WEB_SEARCH_ENABLED=false` to disable it. Set
+`OPENAI_WEB_SEARCH_CONTEXT_SIZE` to `low`, `medium`, or `high` to tune how much
+search context the model may use.
+
+FlowPath stores situations, intake sessions, transcript messages, generated plans,
 and generated task links in SQLite/libSQL. This MVP remains single-user with no
 auth, but the schema is intentionally isolated around situations so user scoping
 can be added later.
 
-Needle is not a substitute for legal, medical, financial, or emergency help. For
+FlowPath is not a substitute for legal, medical, financial, or emergency help. For
 high-stakes situations, the AI should stay practical and encourage appropriate
 human or professional support.
 
@@ -152,6 +168,8 @@ human or professional support.
 5. Add environment variables in Vercel:
    - `OPENAI_API_KEY`
    - `OPENAI_MODEL` if you want to override the default
+   - `OPENAI_WEB_SEARCH_ENABLED` if you want to override the default
+   - `OPENAI_WEB_SEARCH_CONTEXT_SIZE` if you want something other than `medium`
    - `DATABASE_URL`
    - `TURSO_AUTH_TOKEN` if using Turso
    - `APP_TIMEZONE` if you want something other than `America/New_York`
@@ -177,4 +195,4 @@ human or professional support.
 - No calendar, Notion, email, or background job integrations.
 - No production-grade audit trail or multi-user separation.
 - Local SQLite is great for development, but Turso/libSQL is recommended for deployed persistence.
-- The AI only knows what is stored in Needle: Memory/Profile, life areas, projects, tasks, check-ins, and previous plans.
+- With web search disabled, the AI only knows what is stored in FlowPath: Memory/Profile, life areas, projects, tasks, check-ins, situations, and previous plans.

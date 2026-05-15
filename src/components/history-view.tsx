@@ -48,9 +48,9 @@ export function HistoryView() {
 
   return (
     <div>
-      <PageHeader eyebrow="History" title="Previous Needles">
+      <PageHeader eyebrow="History" title="Previous FlowPath plans">
         <p>
-          Review the signals you gave Needle and the briefings it generated over time.
+          Review the signals you gave FlowPath and the briefings it generated over time.
         </p>
       </PageHeader>
 

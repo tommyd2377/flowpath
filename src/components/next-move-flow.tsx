@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, MessageSquare, Plus, Sparkles } from "lucide-react";
+import { ArrowRight, CheckCircle2, MessageSquare, Plus, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import type {
@@ -13,6 +13,10 @@ import type {
   StoredNextMovePlan,
   Task,
 } from "@/lib/types";
+import {
+  GenerationStatus,
+  nextMoveGenerationStages,
+} from "./generation-status";
 import { NextMovePlanCard } from "./next-move-plan-card";
 import {
   Button,
@@ -189,12 +193,15 @@ export function NextMoveFlow() {
   const lastAssistant = detail?.messages
     .filter((item) => item.role === "assistant")
     .at(-1);
+  const isReadyToGenerate = Boolean(
+    detail?.session.is_complete || detail?.session.current_stage === "ready_to_generate",
+  );
 
   return (
     <div>
       <PageHeader eyebrow="Find My Next Move" title="Figure out what to do next">
         <p>
-          Start with the current reality. Needle will ask one practical question at a
+          Start with the current reality. FlowPath will ask one practical question at a
           time, then turn the signal into a highest-leverage move.
         </p>
       </PageHeader>
@@ -322,33 +329,59 @@ export function NextMoveFlow() {
                 {lastAssistant ? (
                   <div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/70 p-4">
                     <div className="mb-1 text-xs font-medium uppercase text-slate-400">
-                      Needle asks
+                      {isReadyToGenerate ? "FlowPath says" : "FlowPath asks"}
                     </div>
                     <p className="text-slate-100">{lastAssistant.content}</p>
                   </div>
                 ) : null}
-                <form className="grid gap-3" onSubmit={submitAnswer}>
-                  <TextArea
-                    value={answer}
-                    onChange={(event) => setAnswer(event.target.value)}
-                    placeholder="Answer in plain language. Bullet points are fine."
-                    required
-                  />
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button type="submit" disabled={working}>
-                      {working ? "Thinking..." : "Answer next question"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={generatePlan}
-                      disabled={generating}
-                    >
+                {isReadyToGenerate ? (
+                  <div className="grid gap-3">
+                    <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.12)] p-4 text-sm text-blue-100">
+                      <div className="mb-1 flex items-center gap-2 font-medium text-white">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Ready for a plan
+                      </div>
+                      <p>FlowPath has enough context to turn this into a Next Move Plan.</p>
+                    </div>
+                    <Button type="button" onClick={generatePlan} disabled={generating}>
                       <Sparkles className="h-4 w-4" />
-                      {generating ? "Generating..." : "Generate plan now"}
+                      {generating
+                        ? "Generating plan..."
+                        : detail.latestPlan
+                          ? "Generate updated plan"
+                          : "Generate plan"}
                     </Button>
+                    {generating ? (
+                      <GenerationStatus stages={nextMoveGenerationStages} />
+                    ) : null}
                   </div>
-                </form>
+                ) : (
+                  <form className="grid gap-3" onSubmit={submitAnswer}>
+                    <TextArea
+                      value={answer}
+                      onChange={(event) => setAnswer(event.target.value)}
+                      placeholder="Answer in plain language. Bullet points are fine."
+                      required
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button type="submit" disabled={working}>
+                        {working ? "Thinking..." : "Send answer"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={generatePlan}
+                        disabled={generating}
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        {generating ? "Generating plan..." : "Generate plan now"}
+                      </Button>
+                    </div>
+                    {generating ? (
+                      <GenerationStatus stages={nextMoveGenerationStages} />
+                    ) : null}
+                  </form>
+                )}
               </Card>
 
               <NextMovePlanCard

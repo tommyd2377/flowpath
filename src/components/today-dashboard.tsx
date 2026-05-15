@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { AlertCircle, ArrowRight, CheckCircle2, Send, Target } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import type { AppConfig, CheckIn, Situation, StoredPlan } from "@/lib/types";
+import {
+  dailyGenerationStages,
+  GenerationStatus,
+} from "./generation-status";
 import {
   Button,
   Card,
@@ -76,7 +81,7 @@ export function TodayDashboard() {
       setLatestPlan(planData[0] ?? null);
       setActiveSituations(situationData);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Could not load Needle.");
+      setError(loadError instanceof Error ? loadError.message : "Could not load FlowPath.");
     } finally {
       setLoading(false);
     }
@@ -97,7 +102,7 @@ export function TodayDashboard() {
         body: JSON.stringify(form),
       });
       setCheckIns((current) => [saved, ...current]);
-      setMessage("Check-in saved. Needle has fresh signal for today.");
+      setMessage("Check-in saved. FlowPath has fresh signal for today.");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not save check-in.");
     } finally {
@@ -115,13 +120,13 @@ export function TodayDashboard() {
         body: JSON.stringify({}),
       });
       setLatestPlan(plan);
-      setMessage("Today's Needle is ready.");
+      setMessage("Today's FlowPath is ready.");
       await load();
     } catch (generateError) {
       setError(
         generateError instanceof Error
           ? generateError.message
-          : "Could not generate today's Needle.",
+          : "Could not generate today's FlowPath.",
       );
     } finally {
       setGenerating(false);
@@ -132,12 +137,24 @@ export function TodayDashboard() {
 
   return (
     <div>
-      <PageHeader eyebrow="Today" title="Today's Needle">
-        <p>
-          {today}. Start from current reality, not busyness. Use today to choose the
-          next best move.
-        </p>
-      </PageHeader>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <PageHeader eyebrow="Today" title="Today's FlowPath">
+          <p>
+            {today}. Start from current reality, not busyness. Use today to choose the
+            next best move.
+          </p>
+        </PageHeader>
+        <Image
+          src="/brand/flowpath-logo-full.png"
+          alt="FlowPath"
+          width={144}
+          height={144}
+          priority
+          unoptimized
+          className="hidden h-36 w-36 shrink-0 rounded-lg object-contain sm:block"
+          sizes="144px"
+        />
+      </div>
 
       <div className="mb-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
         <Card>
@@ -323,9 +340,10 @@ export function TodayDashboard() {
                   disabled={generating}
                 >
                   <Target className="h-4 w-4" />
-                  {generating ? "Generating..." : "Generate Today's Needle"}
+                  {generating ? "Generating FlowPath..." : "Generate Today's FlowPath"}
                 </Button>
               </div>
+              {generating ? <GenerationStatus stages={dailyGenerationStages} /> : null}
             </form>
           </Card>
         </div>
@@ -356,7 +374,7 @@ function PlanCard({
       <Card className="min-h-[360px]">
         <EmptyState>
           No daily briefing yet. Save a check-in, add any tasks or project context you
-          care about, then generate today&apos;s Needle.
+          care about, then generate today&apos;s FlowPath.
         </EmptyState>
       </Card>
     );
@@ -403,6 +421,32 @@ function PlanCard({
       </div>
 
       <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+        <BriefingNote
+          title={plan.restraint_guidance.should_push ? "Push signal" : "Restraint signal"}
+          value={plan.restraint_guidance.reason}
+        />
+        <BriefingNote title="Friction pattern" value={plan.friction_pattern} />
+        <BriefingNote
+          title="Minimum viable move"
+          value={plan.restraint_guidance.minimum_viable_move}
+        />
+        <BriefingNote
+          title="Scope boundary"
+          value={plan.restraint_guidance.scope_boundary}
+        />
+      </div>
+
+      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+        <BriefingList
+          title="Why these moves"
+          items={plan.recommendation_basis.map(
+            (basis) => `${basis.signal} (${basis.source}): ${basis.implication}`,
+          )}
+        />
+        <LocalScoutNote plan={plan} />
+      </div>
+
+      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
         <BriefingNote title="Avoid today" value={plan.avoid_today} />
         <BriefingNote
           title="If energy is high"
@@ -410,6 +454,11 @@ function PlanCard({
         />
         <BriefingNote title="Minimum viable day" value={plan.minimum_viable_day} />
         <BriefingNote title="Evening review" value={plan.evening_review_prompt} />
+      </div>
+
+      <div className="mt-5 rounded-lg border border-amber-900/60 bg-amber-950/30 p-3 text-sm text-amber-100">
+        <div className="font-medium">Human help boundary</div>
+        <p className="mt-1">{plan.human_help_boundary}</p>
       </div>
     </Card>
   );
@@ -421,5 +470,46 @@ function BriefingNote({ title, value }: { title: string; value: string }) {
       <div className="font-medium text-white">{title}</div>
       <p className="mt-1 text-slate-300">{value}</p>
     </div>
+  );
+}
+
+function BriefingList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+      <div className="font-medium text-white">{title}</div>
+      <ul className="mt-2 grid gap-2 text-slate-300">
+        {items.length ? items.map((item) => <li key={item}>{item}</li>) : <li>None listed.</li>}
+      </ul>
+    </div>
+  );
+}
+
+function LocalScoutNote({ plan }: { plan: StoredPlan }) {
+  const scout = plan.local_reality_scout;
+  const items = scout.findings.map((finding) =>
+    `${finding.title}: ${finding.why_it_matters} (${finding.source})${
+      finding.url_or_next_search ? ` - ${finding.url_or_next_search}` : ""
+    }`,
+  );
+
+  if (items.length > 0) {
+    return (
+      <BriefingList
+        title={`Local scout${scout.location_basis ? `: ${scout.location_basis}` : ""}`}
+        items={items}
+      />
+    );
+  }
+
+  return (
+    <BriefingNote
+      title="Local scout"
+      value={
+        scout.missing_location_question ||
+        (scout.used_web_search
+          ? "No useful local finding changed today's plan."
+          : "No current local lookup was needed for this plan.")
+      }
+    />
   );
 }

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Needle",
+  title: "FlowPath",
   description: "A private AI prioritization dashboard for deciding what matters today.",
 };
 

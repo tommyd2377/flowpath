@@ -86,7 +86,7 @@ export function ProfileEditor() {
     <div>
       <PageHeader eyebrow="Memory" title="Profile">
         <p>
-          Needle only knows what is stored in this app. Paste durable context here so
+          FlowPath only knows what is stored in this app. Paste durable context here so
           future plans can be grounded without relying on ChatGPT memories.
         </p>
       </PageHeader>

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-const databaseUrl = process.env.DATABASE_URL || "file:./data/needle.db";
+const databaseUrl = process.env.DATABASE_URL || "file:./data/flowpath.db";
 const authToken = process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN || undefined;
 
 function ensureLocalDirectory(url) {

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -30,13 +31,21 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4">
             <Link href="/" className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--azure)] bg-[var(--azure)] text-sm font-semibold text-white shadow-[0_0_24px_rgba(0,120,212,0.25)]">
-                N
+              <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-[var(--azure)] bg-slate-950 shadow-[0_0_24px_rgba(0,120,212,0.25)]">
+                <Image
+                  src="/brand/flowpath-mark-square.png"
+                  alt=""
+                  width={40}
+                  height={40}
+                  priority
+                  unoptimized
+                  className="h-full w-full object-cover"
+                />
               </span>
               <div>
-                <div className="text-lg font-semibold tracking-normal">Needle</div>
+                <div className="text-lg font-semibold tracking-normal">FlowPath</div>
                 <div className="text-xs text-slate-400">
-                  What moves the needle today?
+                  Find the next move that actually matters.
                 </div>
               </div>
             </Link>
@@ -66,7 +75,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       <div className="mx-auto max-w-6xl px-4 pb-6 text-xs text-slate-500 sm:px-6 lg:px-8">
-        Needle is not a substitute for legal, medical, financial, or emergency help.
+        FlowPath is not a substitute for legal, medical, financial, or emergency help.
       </div>
     </div>
   );

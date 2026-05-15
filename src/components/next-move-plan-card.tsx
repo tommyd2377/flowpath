@@ -58,6 +58,11 @@ export function NextMovePlanCard({
         <Brief title="Core bottleneck" value={plan.core_bottleneck} />
         <Brief title="Why this move" value={plan.why_this_move} />
         <Brief title="Likely trap" value={plan.likely_trap} />
+        <Brief
+          title={plan.restraint_guidance.should_push ? "Push signal" : "Restraint signal"}
+          value={plan.restraint_guidance.reason}
+        />
+        <Brief title="Friction pattern" value={plan.friction_pattern} />
       </div>
 
       <div className="grid gap-4">
@@ -71,9 +76,25 @@ export function NextMovePlanCard({
       </div>
 
       <div className="grid gap-3 text-sm sm:grid-cols-2">
+        <ListBlock
+          title="Why this plan"
+          items={plan.recommendation_basis.map(
+            (basis) => `${basis.signal} (${basis.source}): ${basis.implication}`,
+          )}
+        />
+        <ListBlock
+          title="Restraint rails"
+          items={[
+            plan.restraint_guidance.minimum_viable_move,
+            plan.restraint_guidance.scope_boundary,
+            plan.restraint_guidance.recovery_move,
+          ]}
+        />
         <ListBlock title="What not to do" items={plan.what_not_to_do} />
         <ListBlock title="Assumptions" items={plan.assumptions} />
       </div>
+
+      <LocalScoutBlock plan={plan} />
 
       <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 p-3 text-sm text-amber-100">
         <div className="mb-1 flex items-center gap-2 font-medium">
@@ -83,14 +104,35 @@ export function NextMovePlanCard({
         <p>{plan.when_to_get_human_help}</p>
       </div>
 
+      <SafetyBoundaryBlock plan={plan} />
+
       {plan.resources_to_seek.length > 0 ? (
         <div>
           <h3 className="mb-2 text-sm font-semibold">Resources to seek</h3>
           <div className="grid gap-2">
             {plan.resources_to_seek.map((resource) => (
-              <div key={resource.name} className="rounded-md bg-slate-900 p-3 text-sm">
+              <div
+                key={`${resource.name}-${resource.contact_or_url ?? ""}`}
+                className="rounded-md bg-slate-900 p-3 text-sm"
+              >
                 <div className="font-medium text-white">{resource.name}</div>
                 <p className="text-slate-300">{resource.why}</p>
+                {resource.contact_or_url ? (
+                  isWebUrl(resource.contact_or_url) ? (
+                    <a
+                      href={resource.contact_or_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-flex break-all text-[var(--azure-light)] hover:text-white"
+                    >
+                      {resource.contact_or_url}
+                    </a>
+                  ) : (
+                    <div className="mt-2 break-words text-slate-400">
+                      {resource.contact_or_url}
+                    </div>
+                  )
+                ) : null}
               </div>
             ))}
           </div>
@@ -106,6 +148,59 @@ export function NextMovePlanCard({
         </div>
       ) : null}
     </Card>
+  );
+}
+
+function LocalScoutBlock({ plan }: { plan: StoredNextMovePlan }) {
+  const scout = plan.local_reality_scout;
+
+  if (scout.findings.length > 0) {
+    return (
+      <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
+        <div className="font-medium text-white">
+          Local scout{scout.location_basis ? `: ${scout.location_basis}` : ""}
+        </div>
+        <div className="mt-2 grid gap-2">
+          {scout.findings.map((finding) => (
+            <div key={`${finding.title}-${finding.source}`}>
+              <div className="font-medium text-slate-100">{finding.title}</div>
+              <p className="text-slate-300">{finding.why_it_matters}</p>
+              <p className="break-words text-slate-400">
+                {finding.source}
+                {finding.url_or_next_search ? ` - ${finding.url_or_next_search}` : ""}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Brief
+      title="Local scout"
+      value={
+        scout.missing_location_question ||
+        (scout.used_web_search
+          ? "No useful local finding changed this plan."
+          : "No current local lookup was needed for this plan.")
+      }
+    />
+  );
+}
+
+function SafetyBoundaryBlock({ plan }: { plan: StoredNextMovePlan }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
+      <div className="font-medium text-white">
+        Safety boundary: {plan.safety_boundary.risk_level}
+      </div>
+      <div className="mt-2 grid gap-2 text-slate-300">
+        <p>{plan.safety_boundary.professional_help_signal}</p>
+        <p>{plan.safety_boundary.do_not_rely_on_ai_for}</p>
+        <p>{plan.safety_boundary.urgent_support_guidance}</p>
+      </div>
+    </div>
   );
 }
 
@@ -154,4 +249,13 @@ function ListBlock({ title, items }: { title: string; items: string[] }) {
       </ul>
     </div>
   );
+}
+
+function isWebUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

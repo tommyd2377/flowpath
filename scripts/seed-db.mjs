@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-const databaseUrl = process.env.DATABASE_URL || "file:./data/needle.db";
+const databaseUrl = process.env.DATABASE_URL || "file:./data/flowpath.db";
 const authToken = process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN || undefined;
 
 function ensureLocalDirectory(url) {
@@ -20,11 +20,11 @@ const now = new Date().toISOString();
 
 const profile = {
   personal_profile:
-    "I am using Needle as a private operating dashboard. I care about work momentum, health, creative output, acting opportunities, money stability, relationships, and keeping life administratively sane.",
+    "I am using FlowPath as a private operating dashboard. Include my city, region/state/province, and country here when I want location-specific advice. I care about work momentum, health, creative output, acting opportunities, money stability, relationships, and keeping life administratively sane.",
   current_season:
     "A building season: ship useful projects, rebuild energy and body trust, and keep creative pipelines alive without creating a fantasy workload.",
   core_priorities:
-    "Protect health, grow FlowTime, make Needle useful, keep screenwriting and acting moving through concrete next steps, and avoid drifting into planning as a substitute for distribution.",
+    "Protect health, grow FlowTime, make FlowPath useful, keep screenwriting and acting moving through concrete next steps, and avoid drifting into planning as a substitute for distribution.",
   constraints:
     "Energy varies day to day. The plan should respect body status, sleep, real deadlines, and emotional resistance. No calendar, Notion, or external memory access is assumed.",
   operating_principles:
@@ -48,7 +48,7 @@ const lifeAreas = [
 
 const projectSeeds = [
   ["FlowTime", "FlowTime", "active", "Primary work/product focus.", "Identify and execute the next highest-leverage distribution or product move.", "Choosing distribution versus product polish.", "It is a core work bet."],
-  ["Needle", "FlowTime", "active", "Personal AI prioritization dashboard.", "Get a private MVP online and actually use it for daily decisions.", "Keeping v1 simple enough to ship.", "It helps choose better days instead of collecting more tasks."],
+  ["FlowPath", "FlowTime", "active", "Personal AI prioritization dashboard.", "Get a private MVP online and actually use it for daily decisions.", "Keeping v1 simple enough to ship.", "It helps choose better days instead of collecting more tasks."],
   ["Under the Arcadian Sky", "Screenwriting", "active", "Screenwriting project.", "Define or complete the next concrete story beat, scene, or revision pass.", "Avoiding vague creative fog.", "It keeps a meaningful creative project moving."],
   ["Lovelacers", "Screenwriting", "paused", "Creative project to keep warm.", "Clarify the next decision when it becomes active again.", "Competing creative attention.", "It may become an important future creative lane."],
   ["Acting / student film pipeline", "Acting", "active", "Build reps through student films and practical acting opportunities.", "Find or submit to one concrete opportunity.", "Turning interest into external action.", "Reps and footage compound."],

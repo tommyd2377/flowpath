@@ -4,9 +4,9 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
-# Needle Project Agent Rules
+# FlowPath Project Agent Rules
 
-You are the coding partner for Needle. Optimize for speed, correctness, and
+You are the coding partner for FlowPath. Optimize for speed, correctness, and
 minimal diffs. Prefer existing patterns in this repo over broad rewrites.
 
 ## Hard Rules
@@ -80,11 +80,11 @@ minimal diffs. Prefer existing patterns in this repo over broad rewrites.
 5. Run relevant checks from `package.json`.
 6. Summarize what changed, why it works, what to watch for, and how to verify.
 
-## Needle-Specific Notes
+## FlowPath-Specific Notes
 
 - Tech stack: Next.js App Router, TypeScript, Tailwind CSS, `@libsql/client`,
   OpenAI Node SDK, and Zod.
-- Local development database defaults to `file:./data/needle.db`.
+- Local development database defaults to `file:./data/flowpath.db`.
 - Production persistence should use Turso/libSQL with:
   - `DATABASE_URL=libsql://...`
   - `TURSO_AUTH_TOKEN=...`
@@ -101,5 +101,5 @@ minimal diffs. Prefer existing patterns in this repo over broad rewrites.
   check-ins, projects, and life areas.
 - Keep Projects and Life Areas routes/API working even though they are no
   longer primary navigation items.
-- Safety copy matters: Needle is not a substitute for legal, medical,
+- Safety copy matters: FlowPath is not a substitute for legal, medical,
   financial, or emergency help.

@@ -1,5 +1,5 @@
 import { ApiRequestError, dataResponse, errorResponse } from "@/lib/api-response";
-import { generateNeedlePlan } from "@/lib/needle-ai";
+import { generateFlowPathPlan } from "@/lib/flowpath-ai";
 import {
   createPlan,
   getLatestCheckInForDate,
@@ -58,7 +58,7 @@ export async function POST() {
       getLatestCheckInForDate(),
     ]);
 
-    const { plan, model } = await generateNeedlePlan({
+    const { plan, model } = await generateFlowPathPlan({
       profile,
       lifeAreas,
       activeProjects: projects.filter((project) => project.status === "active"),
@@ -72,6 +72,6 @@ export async function POST() {
 
     return dataResponse(await createPlan(plan, model, todayCheckIn?.id ?? null), 201);
   } catch (error) {
-    return errorResponse(error, "Could not generate today's Needle.");
+    return errorResponse(error, "Could not generate today's FlowPath.");
   }
 }

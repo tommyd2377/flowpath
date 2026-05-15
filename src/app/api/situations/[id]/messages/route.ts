@@ -5,7 +5,7 @@ import {
   parseId,
   readJson,
 } from "@/lib/api-response";
-import { generateInterviewQuestion } from "@/lib/needle-ai";
+import { generateInterviewQuestion } from "@/lib/flowpath-ai";
 import {
   addIntakeMessage,
   getOrCreateIntakeSession,

@@ -1,0 +1,818 @@
+import OpenAI from "openai";
+import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
+
+import { dailyPlanSchema, interviewerOutputSchema, nextMovePlanSchema } from "./schemas";
+import { DEFAULT_APP_TIMEZONE } from "./env";
+import type {
+  CheckIn,
+  DailyPlan,
+  IntakeMessage,
+  IntakeSession,
+  LifeArea,
+  NextMovePlan,
+  Profile,
+  Project,
+  Situation,
+  StoredNextMovePlan,
+  StoredPlan,
+  Task,
+} from "./types";
+import { todayIsoDate } from "./time";
+
+export const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+export const DEFAULT_WEB_SEARCH_CONTEXT_SIZE = "medium";
+
+const webSearchContextSizes = ["low", "medium", "high"] as const;
+type WebSearchContextSize = (typeof webSearchContextSizes)[number];
+
+const selectiveWebSearchInstruction = `When web search is available, use it only when the plan depends on current, time-sensitive, or location-specific facts that may not be covered by model knowledge or stored FlowPath context. Search for things like local services, laws, rules, schedules, prices, availability, current organizations, current opportunities, current recommendations, or place-specific logistics. Do not search for timeless prioritization advice or facts already present in the user's profile, tasks, projects, check-ins, situation, or transcript. For location-specific advice, use the most specific location available from context, such as city, region/state/province/county, country, and timezone. If local specificity matters and location is missing, ask for city/region/country or state the assumption instead of inventing local resources. Prefer official, primary, or established sources, and do not invent provider names, phone numbers, addresses, URLs, eligibility rules, deadlines, or availability.`;
+
+const phaseOneInstruction = `For every plan, explain the basis for your recommendations from concrete FlowPath signals such as profile facts, tasks, projects, check-ins, situations, message history, or verified web-search findings. Decide whether today should be a push day or a restraint day. Notice friction patterns without shaming the user. Include local reality only when it is useful and verified or when the missing location should be requested. Keep legal, medical, financial, housing, addiction, mental health, crisis, and safety boundaries conservative. FlowPath supports planning; it is not a substitute for professional, emergency, legal, medical, or financial help.`;
+
+const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction}`;
+
+const interviewerSystemPrompt = `You are FlowPath's intake interviewer. Your job is to understand the user's current situation well enough to help identify their next best move. Ask one clear question at a time. Focus on goals, constraints, resources, urgency, what has been tried, what is being avoided, and what would create real-world progress. Before asking, review the full situation, profile, and message history so you do not ask for facts the user already provided. If the next move will depend on local, regional, or current real-world information and the user's location is missing, collect city plus region/state/province/county plus country exactly once. For substance-use situations, ask about the substance and immediate safety or withdrawal risk exactly once when it affects triage. Never repeat location or substance questions once answered; move to constraints, resources, safety, or readiness. Do not overwhelm the user. Do not give the full plan yet unless the user asks. If the situation appears high-stakes, gather enough information to triage safely and recommend appropriate human help. When there is enough context for a useful plan, set current_stage to ready_to_generate and is_complete to true. In that complete state, do not ask whether the user wants a plan; put a short transition in question, such as "I have enough context to generate a plan." Your tone is calm, direct, practical, and humane.`;
+
+const strategistSystemPrompt = `You are FlowPath, a practical AI mentor for people without a mentor. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a generic productivity coach. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${selectiveWebSearchInstruction} ${phaseOneInstruction} Your output should help the user act in the real world today.`;
+
+export function isOpenAIWebSearchEnabled() {
+  const value = process.env.OPENAI_WEB_SEARCH_ENABLED?.trim().toLowerCase();
+  if (!value) return true;
+  return !["0", "false", "no", "off"].includes(value);
+}
+
+export function getOpenAIWebSearchContextSize(): WebSearchContextSize {
+  const value = process.env.OPENAI_WEB_SEARCH_CONTEXT_SIZE?.trim().toLowerCase();
+  if (webSearchContextSizes.includes(value as WebSearchContextSize)) {
+    return value as WebSearchContextSize;
+  }
+  return DEFAULT_WEB_SEARCH_CONTEXT_SIZE;
+}
+
+function getOpenAIWebSearchTools(): ResponseCreateParamsNonStreaming["tools"] | undefined {
+  if (!isOpenAIWebSearchEnabled()) return undefined;
+
+  return [
+    {
+      type: "web_search",
+      search_context_size: getOpenAIWebSearchContextSize(),
+      user_location: {
+        type: "approximate",
+        timezone: process.env.APP_TIMEZONE || DEFAULT_APP_TIMEZONE,
+      },
+    },
+  ];
+}
+
+function getOpenAIWebSearchInclude(): ResponseCreateParamsNonStreaming["include"] | undefined {
+  return isOpenAIWebSearchEnabled() ? ["web_search_call.action.sources"] : undefined;
+}
+
+function recommendationBasisJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["signal", "source", "implication"],
+    properties: {
+      signal: { type: "string" },
+      source: { type: "string" },
+      implication: { type: "string" },
+    },
+  };
+}
+
+function restraintGuidanceJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "should_push",
+      "reason",
+      "minimum_viable_move",
+      "recovery_move",
+      "scope_boundary",
+    ],
+    properties: {
+      should_push: { type: "boolean" },
+      reason: { type: "string" },
+      minimum_viable_move: { type: "string" },
+      recovery_move: { type: "string" },
+      scope_boundary: { type: "string" },
+    },
+  };
+}
+
+function localRealityScoutJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "used_web_search",
+      "location_basis",
+      "findings",
+      "missing_location_question",
+    ],
+    properties: {
+      used_web_search: { type: "boolean" },
+      location_basis: { type: "string" },
+      findings: {
+        type: "array",
+        maxItems: 4,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title", "why_it_matters", "source", "url_or_next_search"],
+          properties: {
+            title: { type: "string" },
+            why_it_matters: { type: "string" },
+            source: { type: "string" },
+            url_or_next_search: { type: "string" },
+          },
+        },
+      },
+      missing_location_question: { type: "string" },
+    },
+  };
+}
+
+function safetyBoundaryJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "risk_level",
+      "professional_help_signal",
+      "do_not_rely_on_ai_for",
+      "urgent_support_guidance",
+    ],
+    properties: {
+      risk_level: {
+        type: "string",
+        enum: ["low", "medium", "high", "crisis"],
+      },
+      professional_help_signal: { type: "string" },
+      do_not_rely_on_ai_for: { type: "string" },
+      urgent_support_guidance: { type: "string" },
+    },
+  };
+}
+
+const dailyPlanJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "today_theme",
+    "honest_read",
+    "top_3_actions",
+    "recommendation_basis",
+    "restraint_guidance",
+    "friction_pattern",
+    "local_reality_scout",
+    "human_help_boundary",
+    "avoid_today",
+    "optional_if_energy_is_high",
+    "minimum_viable_day",
+    "evening_review_prompt",
+  ],
+  properties: {
+    today_theme: { type: "string" },
+    honest_read: { type: "string" },
+    top_3_actions: {
+      type: "array",
+      minItems: 1,
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "title",
+          "area",
+          "why_it_matters",
+          "estimated_minutes",
+          "success_condition",
+          "first_step",
+        ],
+        properties: {
+          title: { type: "string" },
+          area: { type: "string" },
+          why_it_matters: { type: "string" },
+          estimated_minutes: { type: "integer", minimum: 1, maximum: 480 },
+          success_condition: { type: "string" },
+          first_step: { type: "string" },
+        },
+      },
+    },
+    recommendation_basis: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: recommendationBasisJsonSchema(),
+    },
+    restraint_guidance: restraintGuidanceJsonSchema(),
+    friction_pattern: { type: "string" },
+    local_reality_scout: localRealityScoutJsonSchema(),
+    human_help_boundary: { type: "string" },
+    avoid_today: { type: "string" },
+    optional_if_energy_is_high: { type: "string" },
+    minimum_viable_day: { type: "string" },
+    evening_review_prompt: { type: "string" },
+  },
+};
+
+export type FlowPathContext = {
+  profile: Profile;
+  lifeAreas: LifeArea[];
+  activeProjects: Project[];
+  unfinishedTasks: Task[];
+  recentCheckIns: CheckIn[];
+  recentPlans: StoredPlan[];
+  activeSituations?: Situation[];
+  recentNextMovePlans?: StoredNextMovePlan[];
+  todayCheckIn: CheckIn | null;
+};
+
+export type InterviewerContext = {
+  profile: Profile;
+  situation: Situation;
+  session: IntakeSession;
+  messages: IntakeMessage[];
+};
+
+export type StrategistContext = {
+  profile: Profile;
+  situation: Situation;
+  session: IntakeSession | null;
+  messages: IntakeMessage[];
+  openTasks: Task[];
+  recentCheckIns: CheckIn[];
+  recentPlans: StoredNextMovePlan[];
+};
+
+function extractOutputText(response: unknown) {
+  if (
+    response &&
+    typeof response === "object" &&
+    "output_text" in response &&
+    typeof response.output_text === "string"
+  ) {
+    return response.output_text;
+  }
+
+  const output = (response as { output?: unknown[] })?.output;
+  if (!Array.isArray(output)) return "";
+
+  return output
+    .flatMap((item) => {
+      const content = (item as { content?: unknown[] })?.content;
+      if (!Array.isArray(content)) return [];
+      return content
+        .map((part) => {
+          if (
+            part &&
+            typeof part === "object" &&
+            "text" in part &&
+            typeof part.text === "string"
+          ) {
+            return part.text;
+          }
+          return "";
+        })
+        .filter(Boolean);
+    })
+    .join("\n");
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function trimGeneratedString(value: unknown, maxLength: number) {
+  if (typeof value !== "string" || value.length <= maxLength) return value;
+  if (maxLength <= 3) return value.slice(0, maxLength);
+  return `${value.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function trimGeneratedStringArray(value: unknown, maxLength: number) {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => trimGeneratedString(item, maxLength));
+}
+
+function trimGeneratedRecordStrings<T extends JsonRecord>(
+  value: T,
+  limits: Partial<Record<keyof T, number>>,
+) {
+  return Object.fromEntries(
+    Object.entries(value).map(([key, fieldValue]) => [
+      key,
+      key in limits
+        ? trimGeneratedString(fieldValue, limits[key as keyof T] ?? 0)
+        : fieldValue,
+    ]),
+  );
+}
+
+function trimRecommendationBasis(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) =>
+    isJsonRecord(item)
+      ? trimGeneratedRecordStrings(item, {
+          signal: 500,
+          source: 120,
+          implication: 800,
+        })
+      : item,
+  );
+}
+
+function trimRestraintGuidance(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return trimGeneratedRecordStrings(value, {
+    reason: 900,
+    minimum_viable_move: 900,
+    recovery_move: 900,
+    scope_boundary: 900,
+  });
+}
+
+function trimLocalRealityScout(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return {
+    ...value,
+    location_basis: trimGeneratedString(value.location_basis, 240),
+    missing_location_question: trimGeneratedString(value.missing_location_question, 500),
+    findings: Array.isArray(value.findings)
+      ? value.findings.map((finding) =>
+          isJsonRecord(finding)
+            ? trimGeneratedRecordStrings(finding, {
+                title: 180,
+                why_it_matters: 1000,
+                source: 240,
+                url_or_next_search: 500,
+              })
+            : finding,
+        )
+      : value.findings,
+  };
+}
+
+function trimSafetyBoundary(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return trimGeneratedRecordStrings(value, {
+    professional_help_signal: 1200,
+    do_not_rely_on_ai_for: 1200,
+    urgent_support_guidance: 1200,
+  });
+}
+
+function trimDailyPlanOutput(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return {
+    ...trimGeneratedRecordStrings(value, {
+      today_theme: 220,
+      honest_read: 1800,
+      friction_pattern: 1400,
+      human_help_boundary: 1600,
+      avoid_today: 1200,
+      optional_if_energy_is_high: 1200,
+      minimum_viable_day: 1200,
+      evening_review_prompt: 1200,
+    }),
+    top_3_actions: Array.isArray(value.top_3_actions)
+      ? value.top_3_actions.map((action) =>
+          isJsonRecord(action)
+            ? trimGeneratedRecordStrings(action, {
+                title: 160,
+                area: 120,
+                why_it_matters: 1000,
+                success_condition: 1000,
+                first_step: 1000,
+              })
+            : action,
+        )
+      : value.top_3_actions,
+    recommendation_basis: trimRecommendationBasis(value.recommendation_basis),
+    restraint_guidance: trimRestraintGuidance(value.restraint_guidance),
+    local_reality_scout: trimLocalRealityScout(value.local_reality_scout),
+  };
+}
+
+function trimNextMoveStep(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return trimGeneratedRecordStrings(value, {
+    title: 180,
+    details: 3000,
+  });
+}
+
+function trimNextMoveSteps(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map(trimNextMoveStep);
+}
+
+function trimNextMoveResources(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((resource) =>
+    isJsonRecord(resource)
+      ? trimGeneratedRecordStrings(resource, {
+          name: 180,
+          why: 1200,
+          contact_or_url: 500,
+        })
+      : resource,
+  );
+}
+
+function trimHighestLeverageMove(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return trimGeneratedRecordStrings(value, {
+    title: 180,
+    description: 3000,
+    success_condition: 2000,
+  });
+}
+
+function trimNextMovePlanOutput(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return {
+    ...trimGeneratedRecordStrings(value, {
+      situation_summary: 2500,
+      core_bottleneck: 1800,
+      why_this_move: 2000,
+      likely_trap: 1200,
+      friction_pattern: 1400,
+      when_to_get_human_help: 1800,
+    }),
+    highest_leverage_move_today: trimHighestLeverageMove(
+      value.highest_leverage_move_today,
+    ),
+    first_30_minutes: trimNextMoveSteps(value.first_30_minutes),
+    next_24_hours: trimNextMoveSteps(value.next_24_hours),
+    next_7_days: trimNextMoveSteps(value.next_7_days),
+    what_not_to_do: trimGeneratedStringArray(value.what_not_to_do, 500),
+    recommendation_basis: trimRecommendationBasis(value.recommendation_basis),
+    restraint_guidance: trimRestraintGuidance(value.restraint_guidance),
+    local_reality_scout: trimLocalRealityScout(value.local_reality_scout),
+    resources_to_seek: trimNextMoveResources(value.resources_to_seek),
+    safety_boundary: trimSafetyBoundary(value.safety_boundary),
+    assumptions: trimGeneratedStringArray(value.assumptions, 500),
+    follow_up_questions_if_any: trimGeneratedStringArray(
+      value.follow_up_questions_if_any,
+      500,
+    ),
+  };
+}
+
+export async function generateFlowPathPlan(context: FlowPathContext): Promise<{
+  plan: DailyPlan;
+  model: string;
+}> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing OPENAI_API_KEY.");
+  }
+
+  const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const openai = new OpenAI({ apiKey });
+  const tools = getOpenAIWebSearchTools();
+  const include = getOpenAIWebSearchInclude();
+  const response = await openai.responses.create({
+    model,
+    input: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            date: todayIsoDate(),
+            instruction:
+              [
+                "Return a daily command briefing. Be specific, realistic, emotionally honest, and willing to say when today is not a huge push day. Pick no more than three actions.",
+                "If web search is available, use it selectively when today's best actions depend on current or local facts that are not already in FlowPath context.",
+                "Use at most two web searches. If web search is not needed, do not use it.",
+                "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow today.",
+                "Use friction_pattern to name the likely source of resistance in plain language without blame.",
+                "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
+                "Fill human_help_boundary with the human, professional, or emergency boundary relevant to this plan.",
+                "If a recommendation depends on local context and the user's city/region/country is missing, make the action about supplying that location or use a clearly labeled non-local fallback.",
+              ].join(" "),
+            context,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "flowpath_daily_plan",
+        description: "A concise daily prioritization plan for FlowPath.",
+        strict: true,
+        schema: dailyPlanJsonSchema,
+      },
+    },
+    ...(tools
+      ? {
+          tools,
+          tool_choice: "auto" as const,
+          max_tool_calls: 2,
+          parallel_tool_calls: false,
+        }
+      : {}),
+    ...(include ? { include } : {}),
+  });
+
+  const outputText = extractOutputText(response);
+  if (!outputText) {
+    throw new Error("The model returned an empty plan.");
+  }
+
+  const parsed = dailyPlanSchema.parse(trimDailyPlanOutput(JSON.parse(outputText)));
+  return { plan: parsed, model };
+}
+
+const interviewerJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "question",
+    "current_stage",
+    "is_complete",
+    "summary_so_far",
+    "recommended_urgency",
+    "recommended_mode",
+  ],
+  properties: {
+    question: { type: "string" },
+    current_stage: {
+      type: "string",
+      enum: [
+        "understanding_goals",
+        "understanding_constraints",
+        "understanding_resources",
+        "identifying_bottleneck",
+        "ready_to_generate",
+      ],
+    },
+    is_complete: { type: "boolean" },
+    summary_so_far: { type: "string" },
+    recommended_urgency: {
+      type: ["string", "null"],
+      enum: ["low", "medium", "high", "crisis", null],
+    },
+    recommended_mode: {
+      type: ["string", "null"],
+      enum: ["growth", "stability", "crisis_triage", "maintenance", null],
+    },
+  },
+};
+
+const nextMovePlanJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "mode",
+    "situation_summary",
+    "core_bottleneck",
+    "highest_leverage_move_today",
+    "why_this_move",
+    "first_30_minutes",
+    "next_24_hours",
+    "next_7_days",
+    "what_not_to_do",
+    "likely_trap",
+    "recommendation_basis",
+    "restraint_guidance",
+    "friction_pattern",
+    "local_reality_scout",
+    "resources_to_seek",
+    "when_to_get_human_help",
+    "safety_boundary",
+    "confidence_level",
+    "assumptions",
+    "follow_up_questions_if_any",
+  ],
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["growth", "stability", "crisis_triage", "maintenance"],
+    },
+    situation_summary: { type: "string" },
+    core_bottleneck: { type: "string" },
+    highest_leverage_move_today: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "description", "estimated_minutes", "success_condition"],
+      properties: {
+        title: { type: "string" },
+        description: { type: "string" },
+        estimated_minutes: { type: "integer", minimum: 1, maximum: 480 },
+        success_condition: { type: "string" },
+      },
+    },
+    why_this_move: { type: "string" },
+    first_30_minutes: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: nextMoveStepJsonSchema(),
+    },
+    next_24_hours: {
+      type: "array",
+      minItems: 1,
+      maxItems: 7,
+      items: nextMoveStepJsonSchema(),
+    },
+    next_7_days: {
+      type: "array",
+      minItems: 1,
+      maxItems: 10,
+      items: nextMoveStepJsonSchema(),
+    },
+    what_not_to_do: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: { type: "string" },
+    },
+    likely_trap: { type: "string" },
+    recommendation_basis: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: recommendationBasisJsonSchema(),
+    },
+    restraint_guidance: restraintGuidanceJsonSchema(),
+    friction_pattern: { type: "string" },
+    local_reality_scout: localRealityScoutJsonSchema(),
+    resources_to_seek: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "why", "contact_or_url"],
+        properties: {
+          name: { type: "string" },
+          why: { type: "string" },
+          contact_or_url: { type: "string" },
+        },
+      },
+    },
+    when_to_get_human_help: { type: "string" },
+    safety_boundary: safetyBoundaryJsonSchema(),
+    confidence_level: { type: "string", enum: ["low", "medium", "high"] },
+    assumptions: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string" },
+    },
+    follow_up_questions_if_any: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string" },
+    },
+  },
+};
+
+function nextMoveStepJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "details"],
+    properties: {
+      title: { type: "string" },
+      details: { type: "string" },
+    },
+  };
+}
+
+async function createStructuredResponse({
+  system,
+  user,
+  name,
+  description,
+  schema,
+  tools,
+  include,
+  maxToolCalls,
+}: {
+  system: string;
+  user: unknown;
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  tools?: ResponseCreateParamsNonStreaming["tools"];
+  include?: ResponseCreateParamsNonStreaming["include"];
+  maxToolCalls?: number;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("Missing OPENAI_API_KEY.");
+
+  const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const openai = new OpenAI({ apiKey });
+  const response = await openai.responses.create({
+    model,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(user, null, 2) },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name,
+        description,
+        strict: true,
+        schema,
+      },
+    },
+    ...(tools
+      ? {
+          tools,
+          tool_choice: "auto" as const,
+          max_tool_calls: maxToolCalls,
+          parallel_tool_calls: false,
+        }
+      : {}),
+    ...(include ? { include } : {}),
+  });
+
+  const outputText = extractOutputText(response);
+  if (!outputText) throw new Error("The model returned an empty response.");
+  return { outputText, model };
+}
+
+export async function generateInterviewQuestion(context: InterviewerContext) {
+  const { outputText, model } = await createStructuredResponse({
+    system: interviewerSystemPrompt,
+    name: "flowpath_interviewer_turn",
+    description: "One adaptive intake question and current intake progress.",
+    schema: interviewerJsonSchema,
+    user: {
+      instruction:
+        "Ask exactly one next question unless enough information has been gathered. If enough information has been gathered, mark is_complete true, set current_stage to ready_to_generate, and write a short transition statement instead of asking for another answer.",
+      stages: [
+        "understanding_goals",
+        "understanding_constraints",
+        "understanding_resources",
+        "identifying_bottleneck",
+        "ready_to_generate",
+      ],
+      situation: context.situation,
+      session: context.session,
+      messages: context.messages,
+      profile: context.profile,
+    },
+  });
+
+  return {
+    output: interviewerOutputSchema.parse(
+      trimGeneratedRecordStrings(JSON.parse(outputText), {
+        question: 1200,
+        summary_so_far: 5000,
+      }),
+    ),
+    model,
+  };
+}
+
+export async function generateNextMovePlan(context: StrategistContext): Promise<{
+  plan: NextMovePlan;
+  model: string;
+}> {
+  const tools = getOpenAIWebSearchTools();
+  const include = getOpenAIWebSearchInclude();
+  const { outputText, model } = await createStructuredResponse({
+    system: strategistSystemPrompt,
+    name: "flowpath_next_move_plan",
+    description: "A practical next best move plan for a user's current situation.",
+    schema: nextMovePlanJsonSchema,
+    user: {
+      date: todayIsoDate(),
+      instruction:
+        [
+          "Generate a leverage-focused plan the user can act on today. Be careful and practical for high-stakes situations. Do not overclaim certainty.",
+          "Use every prior intake answer; do not ask follow-up questions for details already present in the situation, profile, session summary, or messages.",
+          "If web search is available, use it selectively for current or local facts the model may not know. For local resources, opportunities, programs, rules, or logistics, search with the user's city, region/state/province/county, country, and timezone when available.",
+          "Use at most three web searches. If web search is not needed, do not use it.",
+          "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
+          "Use friction_pattern to name the likely source of resistance in plain language without blame.",
+          "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
+          "Fill safety_boundary with the practical limits of AI help, the professional-help signal, and urgent support guidance.",
+          "For resources_to_seek, include a verified URL, phone number, or practical search target when web search verifies one. Leave contact_or_url empty unless you can provide a reliable official or well-established resource.",
+          "If local specificity matters but location is missing, ask for city plus region/country in follow_up_questions_if_any and give a non-local fallback only when useful.",
+        ].join(" "),
+      context,
+    },
+    tools,
+    include,
+    maxToolCalls: tools ? 3 : undefined,
+  });
+
+  return {
+    plan: nextMovePlanSchema.parse(trimNextMovePlanOutput(JSON.parse(outputText))),
+    model,
+  };
+}

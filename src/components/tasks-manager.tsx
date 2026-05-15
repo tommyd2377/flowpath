@@ -4,7 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
-import type { LifeArea, Project, Task, TaskStatus } from "@/lib/types";
+import { TASK_FRICTION_TYPES } from "@/lib/types";
+import type {
+  LifeArea,
+  Project,
+  Task,
+  TaskFrictionType,
+  TaskStatus,
+} from "@/lib/types";
 import {
   Button,
   Card,
@@ -24,6 +31,8 @@ type TaskForm = {
   status: TaskStatus;
   importance: number;
   effort: number;
+  friction_type: TaskFrictionType;
+  friction_note: string;
   due_date: string | null;
   notes: string;
 };
@@ -35,8 +44,22 @@ const emptyTask: TaskForm = {
   status: "open",
   importance: 3,
   effort: 3,
+  friction_type: "none",
+  friction_note: "",
   due_date: null,
   notes: "",
+};
+
+const frictionLabels: Record<TaskFrictionType, string> = {
+  none: "none",
+  unclear: "unclear",
+  too_large: "too large",
+  scary: "scary",
+  blocked: "blocked",
+  low_energy: "low energy",
+  needs_person: "needs person",
+  not_important: "not important",
+  admin_drag: "admin drag",
 };
 
 function formFromTask(task: Task): TaskForm {
@@ -47,6 +70,8 @@ function formFromTask(task: Task): TaskForm {
     status: task.status,
     importance: task.importance,
     effort: task.effort,
+    friction_type: task.friction_type ?? "none",
+    friction_note: task.friction_note ?? "",
     due_date: task.due_date,
     notes: task.notes,
   };
@@ -150,7 +175,7 @@ export function TasksManager() {
     <div>
       <PageHeader eyebrow="Tasks" title="Open Loops">
         <p>
-          Keep tasks simple and honest. Needle uses open tasks as inputs, not as a
+          Keep tasks simple and honest. FlowPath uses open tasks as inputs, not as a
           demand that every task deserves attention today.
         </p>
       </PageHeader>
@@ -158,7 +183,7 @@ export function TasksManager() {
       {message ? <div className="mb-4"><Notice tone="success">{message}</Notice></div> : null}
       {error ? <div className="mb-4"><Notice tone="error">{error}</Notice></div> : null}
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+      <div className="mb-5 grid gap-3 sm:grid-cols-4">
         <Card>
           <div className="text-2xl font-semibold">{openTasks.length}</div>
           <div className="text-sm text-slate-400">open tasks</div>
@@ -174,6 +199,12 @@ export function TasksManager() {
             {openTasks.filter((task) => task.effort <= 2).length}
           </div>
           <div className="text-sm text-slate-400">low effort</div>
+        </Card>
+        <Card>
+          <div className="text-2xl font-semibold">
+            {openTasks.filter((task) => (task.friction_type ?? "none") !== "none").length}
+          </div>
+          <div className="text-sm text-slate-400">friction signals</div>
         </Card>
       </div>
 
@@ -206,6 +237,7 @@ export function TasksManager() {
           ) : (
             tasks.map((task) => {
               const editing = editingId === task.id;
+              const frictionType = task.friction_type ?? "none";
               return (
                 <Card
                   key={task.id}
@@ -262,10 +294,20 @@ export function TasksManager() {
                                 {task.situation_title}
                               </span>
                             ) : null}
+                            {frictionType !== "none" ? (
+                              <span className="rounded-md bg-amber-950/70 px-2 py-1 text-xs font-medium text-amber-100">
+                                {frictionLabels[frictionType]}
+                              </span>
+                            ) : null}
                           </div>
                           <p className="mt-1 text-sm text-slate-300">
                             {task.notes || "No notes."}
                           </p>
+                          {task.friction_note ? (
+                            <p className="mt-2 text-sm text-amber-100/90">
+                              Friction: {task.friction_note}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {task.status !== "done" ? (
@@ -306,9 +348,13 @@ export function TasksManager() {
                           </Button>
                         </div>
                       </div>
-                      <div className="grid gap-3 text-sm sm:grid-cols-3">
+                      <div className="grid gap-3 text-sm sm:grid-cols-4">
                         <Info title="Importance" value={`${task.importance}/5`} />
                         <Info title="Effort" value={`${task.effort}/5`} />
+                        <Info
+                          title="Friction"
+                          value={frictionLabels[frictionType]}
+                        />
                         <Info title="Due date" value={task.due_date || "None"} />
                       </div>
                     </div>
@@ -446,6 +492,37 @@ function TaskFields({
           }
         />
       </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Friction">
+          <SelectInput
+            value={form.friction_type}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                friction_type: event.target.value as TaskFrictionType,
+              }))
+            }
+          >
+            {TASK_FRICTION_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {frictionLabels[type]}
+              </option>
+            ))}
+          </SelectInput>
+        </Field>
+        <Field label="Friction note">
+          <TextInput
+            value={form.friction_note}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                friction_note: event.target.value,
+              }))
+            }
+            placeholder="Why this might stall..."
+          />
+        </Field>
+      </div>
       <Field label="Notes">
         <TextArea
           value={form.notes}
