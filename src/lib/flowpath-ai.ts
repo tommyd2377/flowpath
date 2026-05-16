@@ -1,5 +1,8 @@
 import OpenAI from "openai";
-import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
+import type {
+  ResponseCreateParamsNonStreaming,
+  ResponseUsage,
+} from "openai/resources/responses/responses";
 
 import { dailyPlanSchema, interviewerOutputSchema, nextMovePlanSchema } from "./schemas";
 import { DEFAULT_APP_TIMEZONE } from "./env";
@@ -21,6 +24,9 @@ import { todayIsoDate } from "./time";
 
 export const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 export const DEFAULT_WEB_SEARCH_CONTEXT_SIZE = "medium";
+export const DAILY_PLAN_MAX_OUTPUT_TOKENS = 8000;
+export const INTERVIEW_MAX_OUTPUT_TOKENS = 3000;
+export const NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS = 10000;
 
 const webSearchContextSizes = ["low", "medium", "high"] as const;
 type WebSearchContextSize = (typeof webSearchContextSizes)[number];
@@ -29,7 +35,7 @@ const selectiveWebSearchInstruction = `When web search is available, use it only
 
 const phaseOneInstruction = `For every plan, explain the basis for your recommendations from concrete FlowPath signals such as profile facts, tasks, projects, check-ins, situations, message history, or verified web-search findings. Decide whether today should be a push day or a restraint day. Notice friction patterns without shaming the user. Include local reality only when it is useful and verified or when the missing location should be requested. Keep legal, medical, financial, housing, addiction, mental health, crisis, and safety boundaries conservative. FlowPath supports planning; it is not a substitute for professional, emergency, legal, medical, or financial help.`;
 
-const operatorLeverageInstruction = `For operator insight, think like an experienced practitioner who wants to save the user from wasted motion. Identify the plausible naive path that feels productive but is low-yield, the higher-leverage operator path that someone closer to the field would try, and the wasted motion to avoid. Ground this in the user's actual context and verified facts. Do not pretend to have secret access, credentials, or certainty; when stakes require domain experts, say so.`;
+const operatorLeverageInstruction = `For operator insight, think like a successful domain insider advising someone they care about who lacks access, context, and hidden knowledge. Surface the field's unstated rules, gatekeepers, credibility signals, high-leverage sequencing, common traps, scams, and low-yield busywork. Identify the plausible naive outsider path that feels productive but is low-yield, the higher-leverage operator path an insider would recommend to prevent wasted motion, and the wasted motion to avoid. Ground this in the user's actual context and verified facts. Do not pretend the user has connections, credentials, insider access, or certainty they have not earned. Do not pretend to have secret access, credentials, or certainty; when stakes require domain experts, say so.`;
 
 const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction}`;
 
@@ -51,7 +57,12 @@ export function getOpenAIWebSearchContextSize(): WebSearchContextSize {
   return DEFAULT_WEB_SEARCH_CONTEXT_SIZE;
 }
 
-function getOpenAIWebSearchTools(): ResponseCreateParamsNonStreaming["tools"] | undefined {
+function getOpenAIWebSearchTools({
+  allowWebSearch = true,
+}: {
+  allowWebSearch?: boolean;
+} = {}): ResponseCreateParamsNonStreaming["tools"] | undefined {
+  if (!allowWebSearch) return undefined;
   if (!isOpenAIWebSearchEnabled()) return undefined;
 
   return [
@@ -66,7 +77,12 @@ function getOpenAIWebSearchTools(): ResponseCreateParamsNonStreaming["tools"] | 
   ];
 }
 
-function getOpenAIWebSearchInclude(): ResponseCreateParamsNonStreaming["include"] | undefined {
+function getOpenAIWebSearchInclude({
+  allowWebSearch = true,
+}: {
+  allowWebSearch?: boolean;
+} = {}): ResponseCreateParamsNonStreaming["include"] | undefined {
+  if (!allowWebSearch) return undefined;
   return isOpenAIWebSearchEnabled() ? ["web_search_call.action.sources"] : undefined;
 }
 
@@ -264,6 +280,18 @@ export type StrategistContext = {
   recentCheckIns: CheckIn[];
   recentPlans: StoredNextMovePlan[];
 };
+
+export type AiUsageMetadata = {
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
+function responseUsageMetadata(usage: ResponseUsage | undefined): AiUsageMetadata {
+  return {
+    inputTokens: usage?.input_tokens,
+    outputTokens: usage?.output_tokens,
+  };
+}
 
 function extractOutputText(response: unknown) {
   if (
@@ -492,9 +520,13 @@ function trimNextMovePlanOutput(value: unknown) {
   };
 }
 
-export async function generateFlowPathPlan(context: FlowPathContext): Promise<{
+export async function generateFlowPathPlan(
+  context: FlowPathContext,
+  options: { allowWebSearch?: boolean } = {},
+): Promise<{
   plan: DailyPlan;
   model: string;
+  usage: AiUsageMetadata;
 }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -503,10 +535,11 @@ export async function generateFlowPathPlan(context: FlowPathContext): Promise<{
 
   const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
   const openai = new OpenAI({ apiKey });
-  const tools = getOpenAIWebSearchTools();
-  const include = getOpenAIWebSearchInclude();
+  const tools = getOpenAIWebSearchTools(options);
+  const include = getOpenAIWebSearchInclude(options);
   const response = await openai.responses.create({
     model,
+    max_output_tokens: DAILY_PLAN_MAX_OUTPUT_TOKENS,
     input: [
       { role: "system", content: systemPrompt },
       {
@@ -520,7 +553,7 @@ export async function generateFlowPathPlan(context: FlowPathContext): Promise<{
                 "If web search is available, use it selectively when today's best actions depend on current or local facts that are not already in FlowPath context.",
                 "Use at most two web searches. If web search is not needed, do not use it.",
                 "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow today.",
-                "Fill operator_insight with the naive path, the higher-leverage operator path, and the wasted motion to avoid.",
+                "Fill operator_insight with insider-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
                 "Use friction_pattern to name the likely source of resistance in plain language without blame.",
                 "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
                 "Fill human_help_boundary with the human, professional, or emergency boundary relevant to this plan.",
@@ -559,7 +592,7 @@ export async function generateFlowPathPlan(context: FlowPathContext): Promise<{
   }
 
   const parsed = dailyPlanSchema.parse(trimDailyPlanOutput(JSON.parse(outputText)));
-  return { plan: parsed, model };
+  return { plan: parsed, model, usage: responseUsageMetadata(response.usage) };
 }
 
 const interviewerJsonSchema = {
@@ -729,6 +762,7 @@ async function createStructuredResponse({
   tools,
   include,
   maxToolCalls,
+  maxOutputTokens,
 }: {
   system: string;
   user: unknown;
@@ -738,6 +772,7 @@ async function createStructuredResponse({
   tools?: ResponseCreateParamsNonStreaming["tools"];
   include?: ResponseCreateParamsNonStreaming["include"];
   maxToolCalls?: number;
+  maxOutputTokens: number;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY.");
@@ -746,6 +781,7 @@ async function createStructuredResponse({
   const openai = new OpenAI({ apiKey });
   const response = await openai.responses.create({
     model,
+    max_output_tokens: maxOutputTokens,
     input: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(user, null, 2) },
@@ -772,11 +808,11 @@ async function createStructuredResponse({
 
   const outputText = extractOutputText(response);
   if (!outputText) throw new Error("The model returned an empty response.");
-  return { outputText, model };
+  return { outputText, model, usage: responseUsageMetadata(response.usage) };
 }
 
 export async function generateInterviewQuestion(context: InterviewerContext) {
-  const { outputText, model } = await createStructuredResponse({
+  const { outputText, model, usage } = await createStructuredResponse({
     system: interviewerSystemPrompt,
     name: "flowpath_interviewer_turn",
     description: "One adaptive intake question and current intake progress.",
@@ -796,6 +832,7 @@ export async function generateInterviewQuestion(context: InterviewerContext) {
       messages: context.messages,
       profile: context.profile,
     },
+    maxOutputTokens: INTERVIEW_MAX_OUTPUT_TOKENS,
   });
 
   return {
@@ -806,16 +843,21 @@ export async function generateInterviewQuestion(context: InterviewerContext) {
       }),
     ),
     model,
+    usage,
   };
 }
 
-export async function generateNextMovePlan(context: StrategistContext): Promise<{
+export async function generateNextMovePlan(
+  context: StrategistContext,
+  options: { allowWebSearch?: boolean } = {},
+): Promise<{
   plan: NextMovePlan;
   model: string;
+  usage: AiUsageMetadata;
 }> {
-  const tools = getOpenAIWebSearchTools();
-  const include = getOpenAIWebSearchInclude();
-  const { outputText, model } = await createStructuredResponse({
+  const tools = getOpenAIWebSearchTools(options);
+  const include = getOpenAIWebSearchInclude(options);
+  const { outputText, model, usage } = await createStructuredResponse({
     system: strategistSystemPrompt,
     name: "flowpath_next_move_plan",
     description: "A practical next best move plan for a user's current situation.",
@@ -829,7 +871,7 @@ export async function generateNextMovePlan(context: StrategistContext): Promise<
           "If web search is available, use it selectively for current or local facts the model may not know. For local resources, opportunities, programs, rules, or logistics, search with the user's city, region/state/province/county, country, and timezone when available.",
           "Use at most three web searches. If web search is not needed, do not use it.",
           "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
-          "Fill operator_insight with the naive path, the higher-leverage operator path, and the wasted motion to avoid.",
+          "Fill operator_insight with insider-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
           "Use friction_pattern to name the likely source of resistance in plain language without blame.",
           "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
           "Fill safety_boundary with the practical limits of AI help, the professional-help signal, and urgent support guidance.",
@@ -841,10 +883,12 @@ export async function generateNextMovePlan(context: StrategistContext): Promise<
     tools,
     include,
     maxToolCalls: tools ? 3 : undefined,
+    maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
   });
 
   return {
     plan: nextMovePlanSchema.parse(trimNextMovePlanOutput(JSON.parse(outputText))),
     model,
+    usage,
   };
 }

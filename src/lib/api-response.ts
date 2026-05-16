@@ -6,6 +6,7 @@ export class ApiRequestError extends Error {
     message: string,
     public status = 400,
     public code?: string,
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -30,7 +31,7 @@ export function emptyResponse(status = 204) {
 export function errorResponse(error: unknown, fallback = "Something went wrong.") {
   if (error instanceof ApiRequestError) {
     return NextResponse.json(
-      { error: error.message, code: error.code },
+      { error: error.message, code: error.code, details: error.details },
       { status: error.status },
     );
   }

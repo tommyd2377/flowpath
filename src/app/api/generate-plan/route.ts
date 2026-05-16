@@ -1,5 +1,7 @@
 import { ApiRequestError, dataResponse, errorResponse } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { canUseWebSearchForTier } from "@/lib/billing/plans";
+import { assertCanUseFeature, incrementUsage } from "@/lib/billing/usage";
 import { generateFlowPathPlan } from "@/lib/flowpath-ai";
 import {
   createPlan,
@@ -38,6 +40,7 @@ export async function POST() {
         "missing_api_key",
       );
     }
+    const usageDecision = await assertCanUseFeature(user.id, "today_checkin");
 
     const [
       profile,
@@ -61,17 +64,21 @@ export async function POST() {
       getLatestCheckInForDate(user.id),
     ]);
 
-    const { plan, model } = await generateFlowPathPlan({
-      profile,
-      lifeAreas,
-      activeProjects: projects.filter((project) => project.status === "active"),
-      unfinishedTasks: tasks.filter((task) => task.status === "open"),
-      recentCheckIns,
-      recentPlans,
-      activeSituations,
-      recentNextMovePlans,
-      todayCheckIn,
-    });
+    const { plan, model, usage } = await generateFlowPathPlan(
+      {
+        profile,
+        lifeAreas,
+        activeProjects: projects.filter((project) => project.status === "active"),
+        unfinishedTasks: tasks.filter((task) => task.status === "open"),
+        recentCheckIns,
+        recentPlans,
+        activeSituations,
+        recentNextMovePlans,
+        todayCheckIn,
+      },
+      { allowWebSearch: canUseWebSearchForTier(usageDecision.planTier) },
+    );
+    await incrementUsage(user.id, "today_checkin", usage);
 
     return dataResponse(
       await createPlan(user.id, plan, model, todayCheckIn?.id ?? null),

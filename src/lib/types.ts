@@ -29,6 +29,26 @@ export const NEXT_MOVE_MODES = [
 ] as const;
 export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
 export const SAFETY_RISK_LEVELS = ["low", "medium", "high", "crisis"] as const;
+export const PLAN_TIERS = [
+  "free",
+  "core",
+  "internal_unlimited",
+  "pro",
+  "sponsored",
+] as const;
+export const BILLING_STATUSES = [
+  "none",
+  "active",
+  "trialing",
+  "past_due",
+  "canceled",
+  "incomplete",
+] as const;
+export const USAGE_TYPES = [
+  "today_checkin",
+  "next_move_plan",
+  "lightweight_assist",
+] as const;
 
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
@@ -40,6 +60,9 @@ export type IntakeStage = (typeof INTAKE_STAGES)[number];
 export type NextMoveMode = (typeof NEXT_MOVE_MODES)[number];
 export type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
 export type SafetyRiskLevel = (typeof SAFETY_RISK_LEVELS)[number];
+export type PlanTier = (typeof PLAN_TIERS)[number];
+export type BillingStatus = (typeof BILLING_STATUSES)[number];
+export type UsageType = (typeof USAGE_TYPES)[number];
 
 export type Profile = {
   id: number;
@@ -276,4 +299,27 @@ export type AppConfig = {
   model: string;
   webSearchEnabled: boolean;
   webSearchContextSize: "low" | "medium" | "high";
+};
+
+export type UsageLimit = number | null;
+
+export type UsageSummaryItem = {
+  usage_type: UsageType;
+  used: number;
+  limit: UsageLimit;
+  remaining: UsageLimit;
+};
+
+export type BillingSummary = {
+  plan_tier: PlanTier;
+  billing_status: BillingStatus;
+  internal_unlimited: boolean;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  usage_period_start: string;
+  usage_period_end: string;
+  stripe_customer_id: string | null;
+  usage: UsageSummaryItem[];
+  upgrade_message: string;
+  core_price_cents: number;
 };

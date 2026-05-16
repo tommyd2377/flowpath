@@ -111,6 +111,15 @@ CLERK_SECRET_KEY=
 FLOWPATH_OWNER_EMAIL=
 ```
 
+Required for paid billing:
+
+```bash
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_CORE_MONTHLY_PRICE_ID=
+APP_URL=
+```
+
 Optional:
 
 ```bash
@@ -122,6 +131,9 @@ NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 DATABASE_URL=file:./data/flowpath.db
 TURSO_AUTH_TOKEN=
 APP_TIMEZONE=America/New_York
+INTERNAL_UNLIMITED_EMAILS=
+STRIPE_SUCCESS_URL=
+STRIPE_CANCEL_URL=
 ```
 
 If `OPENAI_API_KEY` is missing, the app still works for profile, areas, projects, tasks, check-ins, and history. The Today screen will show a setup warning and AI generation will return a friendly error.
@@ -176,6 +188,15 @@ Dashboard.
 FlowPath is not a substitute for legal, medical, financial, or emergency help. For
 high-stakes situations, the AI should stay practical and encourage appropriate
 human or professional support.
+
+## Billing
+
+FlowPath supports Free, Core, and Internal Unlimited tiers. Free users get a
+small monthly AI allowance; Core is the early paid subscription tier at
+`$12/month`; Internal Unlimited is reserved for configured test users.
+
+See [docs/billing.md](docs/billing.md) for Stripe setup, webhook testing, usage
+limits, and internal unlimited assignment.
 
 ## Vercel Deployment
 

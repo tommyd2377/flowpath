@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { AlertCircle, ArrowRight, CheckCircle2, Send, Target } from "lucide-react";
@@ -42,15 +42,6 @@ const emptyCheckIn: CheckInForm = {
   brain_dump: "",
 };
 
-function formatLongDate(date = new Date()) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 export function TodayDashboard() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [form, setForm] = useState<CheckInForm>(emptyCheckIn);
@@ -65,8 +56,6 @@ export function TodayDashboard() {
   const [error, setError] = useState<string | null>(null);
 
   const latestCheckIn = checkIns[0];
-  const today = useMemo(() => formatLongDate(), []);
-
   async function load() {
     setLoading(true);
     setError(null);
@@ -150,10 +139,13 @@ export function TodayDashboard() {
   return (
     <div>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <PageHeader eyebrow="Today" title="Today's FlowPath">
+        <PageHeader
+          eyebrow="Today"
+          title="Start where you are. Leave with one clear next move."
+        >
           <p>
-            {today}. Start from current reality, not busyness. Use today to choose the
-            next best move.
+            FlowPath helps you sort today&apos;s reality, focus on what matters, and choose
+            a practical step forward.
           </p>
         </PageHeader>
         <Image

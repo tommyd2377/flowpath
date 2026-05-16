@@ -9,6 +9,7 @@ import {
   Brain,
   CheckSquare,
   Compass,
+  CreditCard,
   LifeBuoy,
   MapPinned,
 } from "lucide-react";
@@ -19,6 +20,7 @@ const links = [
   { href: "/next-move", label: "Find My Next Move", icon: LifeBuoy },
   { href: "/situations", label: "Situations", icon: MapPinned },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
+  { href: "/billing", label: "Billing", icon: CreditCard },
   { href: "/memory", label: "Memory / Profile", icon: Brain },
   { href: "/history", label: "History", icon: Archive },
 ];

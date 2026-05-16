@@ -5,6 +5,8 @@ import {
   parseId,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { canUseWebSearchForTier } from "@/lib/billing/plans";
+import { assertCanUseFeature, incrementUsage } from "@/lib/billing/usage";
 import { generateNextMovePlan } from "@/lib/flowpath-ai";
 import {
   createNextMovePlan,
@@ -38,6 +40,7 @@ export async function POST(_request: Request, context: Context) {
     const situationId = parseId(idParam);
     const situation = await getSituation(user.id, situationId);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    const usageDecision = await assertCanUseFeature(user.id, "next_move_plan");
 
     const session = await getLatestIntakeSession(user.id, situationId);
     const [profile, messages, openTasks, recentCheckIns, recentPlans] =
@@ -49,15 +52,19 @@ export async function POST(_request: Request, context: Context) {
         listNextMovePlans(user.id, 5, situationId),
       ]);
 
-    const { plan, model } = await generateNextMovePlan({
-      profile,
-      situation,
-      session,
-      messages,
-      openTasks,
-      recentCheckIns,
-      recentPlans,
-    });
+    const { plan, model, usage } = await generateNextMovePlan(
+      {
+        profile,
+        situation,
+        session,
+        messages,
+        openTasks,
+        recentCheckIns,
+        recentPlans,
+      },
+      { allowWebSearch: canUseWebSearchForTier(usageDecision.planTier) },
+    );
+    await incrementUsage(user.id, "next_move_plan", usage);
 
     if (session) {
       await updateIntakeSession(user.id, session.id, {

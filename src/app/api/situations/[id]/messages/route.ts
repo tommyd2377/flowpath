@@ -6,6 +6,7 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { assertCanUseFeature, incrementUsage } from "@/lib/billing/usage";
 import { generateInterviewQuestion } from "@/lib/flowpath-ai";
 import {
   addIntakeMessage,
@@ -39,17 +40,19 @@ export async function POST(request: Request, context: Context) {
     const input = intakeAnswerInputSchema.parse(await readJson(request));
     const situation = await getSituation(user.id, situationId);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    await assertCanUseFeature(user.id, "lightweight_assist");
 
     const session = await getOrCreateIntakeSession(user.id, situationId);
     await addIntakeMessage(user.id, session.id, "user", input.content);
     const messagesAfterUser = await listIntakeMessages(user.id, session.id);
     const profile = await getProfile(user.id);
-    const { output } = await generateInterviewQuestion({
+    const { output, usage } = await generateInterviewQuestion({
       profile,
       situation,
       session,
       messages: messagesAfterUser,
     });
+    await incrementUsage(user.id, "lightweight_assist", usage);
 
     const updatedSession = await updateIntakeSession(user.id, session.id, output);
     const assistantMessage = await addIntakeMessage(
