@@ -165,6 +165,13 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
     return <Notice tone="error">{error || "Situation not found."}</Notice>;
   }
 
+  const latestPlanHasTasks = Boolean(
+    detail.latestPlan &&
+      detail.tasks.some(
+        (task) => task.source_next_move_plan_id === detail.latestPlan?.id,
+      ),
+  );
+
   return (
     <div>
       <PageHeader eyebrow="Situation" title={detail.situation.title}>
@@ -183,7 +190,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           <Sparkles className="h-4 w-4" />
           {generating ? "Generating plan..." : "Generate updated plan"}
         </Button>
-        {detail.latestPlan ? (
+        {detail.latestPlan && !latestPlanHasTasks ? (
           <Button
             type="button"
             variant="secondary"

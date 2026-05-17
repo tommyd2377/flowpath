@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
+import { Check, Clock3, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import { TASK_FRICTION_TYPES } from "@/lib/types";
@@ -93,6 +94,10 @@ export function TasksManager() {
     () => tasks.filter((task) => task.status === "open"),
     [tasks],
   );
+  const deferredOrDone = useMemo(
+    () => tasks.filter((task) => task.status !== "open"),
+    [tasks],
+  );
   const isInitialLoading = loading && tasks.length === 0;
 
   async function load() {
@@ -118,7 +123,7 @@ export function TasksManager() {
     void Promise.resolve().then(load);
   }, []);
 
-  async function createTask(event: React.FormEvent<HTMLFormElement>) {
+  async function createTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setError(null);
@@ -174,10 +179,10 @@ export function TasksManager() {
 
   return (
     <div>
-      <PageHeader eyebrow="Tasks" title="Open Loops">
+      <PageHeader eyebrow="Tasks" title="Ranked next actions">
         <p>
-          Keep tasks simple and honest. FlowPath uses open tasks as inputs, not as a
-          demand that every task deserves attention today.
+          Tasks from every situation are ranked by what matters most now, not by
+          where they came from.
         </p>
       </PageHeader>
 
@@ -189,7 +194,7 @@ export function TasksManager() {
           <div className="text-2xl font-semibold">
             {isInitialLoading ? "..." : openTasks.length}
           </div>
-          <div className="text-sm text-slate-400">open tasks</div>
+          <div className="text-sm text-slate-400">open actions</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold">
@@ -211,169 +216,248 @@ export function TasksManager() {
           <div className="text-2xl font-semibold">
             {isInitialLoading
               ? "..."
-              : openTasks.filter((task) => (task.friction_type ?? "none") !== "none").length}
+              : openTasks.filter((task) => task.source_next_move_plan_id).length}
           </div>
-          <div className="text-sm text-slate-400">friction signals</div>
+          <div className="text-sm text-slate-400">from plans</div>
         </Card>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+      <div className="grid gap-5">
         <Card>
-          <h2 className="mb-4 text-xl font-semibold">Add Task</h2>
-          <form className="grid gap-4" onSubmit={createTask}>
-            <TaskFields
-              form={form}
-              setForm={setForm}
-              areas={areas}
-              projects={projects}
-            />
-            <div>
-              <Button type="submit" disabled={saving}>
-                <Plus className="h-4 w-4" />
-                {saving ? "Saving..." : "Add Task"}
+          <div className="mb-4 flex items-center gap-2">
+            <Clock3 className="h-4 w-4 text-[var(--azure-light)]" />
+            <h2 className="text-xl font-semibold">Action queue</h2>
+          </div>
+          {loading ? (
+            <div className="text-sm text-slate-400">Loading tasks...</div>
+          ) : openTasks.length === 0 ? (
+            <EmptyState>
+              No tasks yet. Start with a situation and FlowPath will turn the plan
+              into ranked next actions.
+            </EmptyState>
+          ) : (
+            <div className="grid gap-3">
+              {openTasks.map((task, index) => (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  rank={index + 1}
+                  editing={editingId === task.id}
+                  editingForm={editingForm}
+                  setEditingForm={setEditingForm}
+                  areas={areas}
+                  projects={projects}
+                  saving={saving}
+                  onSave={() => saveTask(task.id, editingForm)}
+                  onDone={() =>
+                    saveTask(task.id, {
+                      ...formFromTask(task),
+                      status: "done",
+                    })
+                  }
+                  onDefer={() =>
+                    saveTask(task.id, {
+                      ...formFromTask(task),
+                      status: "ignored",
+                    })
+                  }
+                  onEdit={() => {
+                    setEditingId(task.id);
+                    setEditingForm(formFromTask(task));
+                  }}
+                  onCancel={() => setEditingId(null)}
+                  onDelete={() => deleteTask(task.id)}
+                />
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <details>
+            <summary className="cursor-pointer text-xl font-semibold text-white">
+              Add a task manually
+            </summary>
+            <form className="mt-5 grid gap-4" onSubmit={createTask}>
+              <TaskFields
+                form={form}
+                setForm={setForm}
+                areas={areas}
+                projects={projects}
+              />
+              <div>
+                <Button type="submit" disabled={saving}>
+                  <Plus className="h-4 w-4" />
+                  {saving ? "Saving..." : "Add Task"}
+                </Button>
+              </div>
+            </form>
+          </details>
+        </Card>
+
+        {deferredOrDone.length > 0 ? (
+          <Card>
+            <details>
+              <summary className="cursor-pointer text-xl font-semibold text-white">
+                Deferred and completed tasks
+              </summary>
+              <div className="mt-4 grid gap-3">
+                {deferredOrDone.map((task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    editing={editingId === task.id}
+                    editingForm={editingForm}
+                    setEditingForm={setEditingForm}
+                    areas={areas}
+                    projects={projects}
+                    saving={saving}
+                    onSave={() => saveTask(task.id, editingForm)}
+                    onDone={() =>
+                      saveTask(task.id, {
+                        ...formFromTask(task),
+                        status: "done",
+                      })
+                    }
+                    onDefer={() =>
+                      saveTask(task.id, {
+                        ...formFromTask(task),
+                        status: "ignored",
+                      })
+                    }
+                    onEdit={() => {
+                      setEditingId(task.id);
+                      setEditingForm(formFromTask(task));
+                    }}
+                    onCancel={() => setEditingId(null)}
+                    onDelete={() => deleteTask(task.id)}
+                  />
+                ))}
+              </div>
+            </details>
+          </Card>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({
+  task,
+  rank,
+  editing,
+  editingForm,
+  setEditingForm,
+  areas,
+  projects,
+  saving,
+  onSave,
+  onDone,
+  onDefer,
+  onEdit,
+  onCancel,
+  onDelete,
+}: {
+  task: Task;
+  rank?: number;
+  editing: boolean;
+  editingForm: TaskForm;
+  setEditingForm: Dispatch<SetStateAction<TaskForm>>;
+  areas: LifeArea[];
+  projects: Project[];
+  saving: boolean;
+  onSave: () => void;
+  onDone: () => void;
+  onDefer: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  const frictionType = task.friction_type ?? "none";
+
+  return (
+    <div className={`rounded-md border border-slate-800 bg-slate-900/70 p-4 ${task.status === "done" ? "opacity-70" : ""}`}>
+      {editing ? (
+        <div className="grid gap-4">
+          <TaskFields
+            form={editingForm}
+            setForm={setEditingForm}
+            areas={areas}
+            projects={projects}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={onSave} disabled={saving}>
+              <Save className="h-4 w-4" />
+              Save
+            </Button>
+            <Button type="button" variant="secondary" onClick={onCancel}>
+              <X className="h-4 w-4" />
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                {rank ? (
+                  <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--azure)] text-sm font-semibold text-white">
+                    {rank}
+                  </span>
+                ) : null}
+                <h2 className="text-lg font-semibold">{task.title}</h2>
+                <Badge>{task.status === "ignored" ? "deferred" : task.status}</Badge>
+                {task.situation_title ? <Badge>{task.situation_title}</Badge> : null}
+                {task.source_next_move_plan_id ? <Badge>Next Move plan</Badge> : null}
+                {frictionType !== "none" ? <Badge>{frictionLabels[frictionType]}</Badge> : null}
+              </div>
+              <p className="mt-2 text-sm text-slate-300">
+                {task.notes || "No notes."}
+              </p>
+              {task.rank_reason ? (
+                <p className="mt-2 text-sm text-[var(--azure-light)]">
+                  Why ranked here: {task.rank_reason}
+                </p>
+              ) : null}
+              {task.friction_note ? (
+                <p className="mt-2 text-sm text-amber-100/90">
+                  Friction: {task.friction_note}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              {task.status !== "done" ? (
+                <Button type="button" variant="secondary" onClick={onDone} disabled={saving}>
+                  <Check className="h-4 w-4" />
+                  Complete
+                </Button>
+              ) : null}
+              {task.status === "open" ? (
+                <Button type="button" variant="secondary" onClick={onDefer} disabled={saving}>
+                  <Clock3 className="h-4 w-4" />
+                  Defer
+                </Button>
+              ) : null}
+              <Button type="button" variant="secondary" onClick={onEdit}>
+                <Pencil className="h-4 w-4" />
+                Edit
+              </Button>
+              <Button type="button" variant="danger" onClick={onDelete} disabled={saving}>
+                <Trash2 className="h-4 w-4" />
+                Delete
               </Button>
             </div>
-          </form>
-        </Card>
-
-        <div className="grid gap-3">
-          {loading ? (
-            <Card>
-              <div className="text-sm text-slate-400">Loading tasks...</div>
-            </Card>
-          ) : tasks.length === 0 ? (
-            <EmptyState>No tasks yet. Add one when something needs a holding pen.</EmptyState>
-          ) : (
-            tasks.map((task) => {
-              const editing = editingId === task.id;
-              const frictionType = task.friction_type ?? "none";
-              return (
-                <Card
-                  key={task.id}
-                  className={task.status === "done" ? "opacity-70" : ""}
-                >
-                  {editing ? (
-                    <div className="grid gap-4">
-                      <TaskFields
-                        form={editingForm}
-                        setForm={setEditingForm}
-                        areas={areas}
-                        projects={projects}
-                      />
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          onClick={() => saveTask(task.id, editingForm)}
-                          disabled={saving}
-                        >
-                          <Save className="h-4 w-4" />
-                          Save
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => setEditingId(null)}
-                        >
-                          <X className="h-4 w-4" />
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid gap-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h2 className="text-lg font-semibold">{task.title}</h2>
-                            <span className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300">
-                              {task.status}
-                            </span>
-                            {task.life_area_name ? (
-                              <span className="rounded-md bg-[rgba(0,120,212,0.18)] px-2 py-1 text-xs font-medium text-blue-100">
-                                {task.life_area_name}
-                              </span>
-                            ) : null}
-                            {task.project_name ? (
-                              <span className="rounded-md bg-blue-950/60 px-2 py-1 text-xs font-medium text-blue-100">
-                                {task.project_name}
-                              </span>
-                            ) : null}
-                            {task.situation_title ? (
-                              <span className="rounded-md bg-[rgba(0,120,212,0.18)] px-2 py-1 text-xs font-medium text-blue-100">
-                                {task.situation_title}
-                              </span>
-                            ) : null}
-                            {frictionType !== "none" ? (
-                              <span className="rounded-md bg-amber-950/70 px-2 py-1 text-xs font-medium text-amber-100">
-                                {frictionLabels[frictionType]}
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-1 text-sm text-slate-300">
-                            {task.notes || "No notes."}
-                          </p>
-                          {task.friction_note ? (
-                            <p className="mt-2 text-sm text-amber-100/90">
-                              Friction: {task.friction_note}
-                            </p>
-                          ) : null}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {task.status !== "done" ? (
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              onClick={() =>
-                                saveTask(task.id, {
-                                  ...formFromTask(task),
-                                  status: "done",
-                                })
-                              }
-                              disabled={saving}
-                            >
-                              <Check className="h-4 w-4" />
-                              Done
-                            </Button>
-                          ) : null}
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            onClick={() => {
-                              setEditingId(task.id);
-                              setEditingForm(formFromTask(task));
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                            Edit
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            onClick={() => deleteTask(task.id)}
-                            disabled={saving}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Delete
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="grid gap-3 text-sm sm:grid-cols-4">
-                        <Info title="Importance" value={`${task.importance}/5`} />
-                        <Info title="Effort" value={`${task.effort}/5`} />
-                        <Info
-                          title="Friction"
-                          value={frictionLabels[frictionType]}
-                        />
-                        <Info title="Due date" value={task.due_date || "None"} />
-                      </div>
-                    </div>
-                  )}
-                </Card>
-              );
-            })
-          )}
+          </div>
+          <div className="grid gap-3 text-sm sm:grid-cols-5">
+            <Info title="Importance" value={`${task.importance}/5`} />
+            <Info title="Effort" value={`${task.effort}/5`} />
+            <Info title="Friction" value={frictionLabels[frictionType]} />
+            <Info title="Due date" value={task.due_date || "None"} />
+            <Info title="Score" value={String(Math.round(task.rank_score ?? 0))} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -385,7 +469,7 @@ function TaskFields({
   projects,
 }: {
   form: TaskForm;
-  setForm: React.Dispatch<React.SetStateAction<TaskForm>>;
+  setForm: Dispatch<SetStateAction<TaskForm>>;
   areas: LifeArea[];
   projects: Project[];
 }) {
@@ -451,7 +535,7 @@ function TaskFields({
           >
             <option value="open">open</option>
             <option value="done">done</option>
-            <option value="ignored">ignored</option>
+            <option value="ignored">deferred</option>
           </SelectInput>
         </Field>
         <Field label="Importance">
@@ -541,6 +625,14 @@ function TaskFields({
         />
       </Field>
     </>
+  );
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
+      {children}
+    </span>
   );
 }
 

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { ProhibitedDataError } from "./privacy";
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -44,6 +46,13 @@ export function errorResponse(error: unknown, fallback = "Something went wrong."
         details: error.issues.map((issue) => issue.message).join(" "),
       },
       { status: 400 },
+    );
+  }
+
+  if (error instanceof ProhibitedDataError) {
+    return NextResponse.json(
+      { error: error.message, code: error.code, details: error.field },
+      { status: error.status },
     );
   }
 

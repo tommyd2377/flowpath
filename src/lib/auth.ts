@@ -108,6 +108,33 @@ export async function requireUser(): Promise<CurrentFlowPathUser> {
     );
   }
 
+  const existingByEmail = await first<LocalUser>(
+    "SELECT * FROM users WHERE email = ?",
+    [email],
+  );
+  if (existingByEmail) {
+    if (existingByEmail.clerk_user_id !== clerkAuth.userId) {
+      await run("UPDATE users SET clerk_user_id = ?, updated_at = ? WHERE id = ?", [
+        clerkAuth.userId,
+        nowIso(),
+        existingByEmail.id,
+      ]);
+      const claimedByEmail =
+        (await first<LocalUser>("SELECT * FROM users WHERE id = ?", [
+          existingByEmail.id,
+        ])) ?? existingByEmail;
+      return toCurrentUser(
+        await applyInternalUnlimitedConfig(claimedByEmail),
+        clerkAuth.userId,
+      );
+    }
+
+    return toCurrentUser(
+      await applyInternalUnlimitedConfig(existingByEmail),
+      clerkAuth.userId,
+    );
+  }
+
   const ownerEmail = normalizeEmail(process.env.FLOWPATH_OWNER_EMAIL);
   const owner = await getOwnerUser();
   if (!owner) {

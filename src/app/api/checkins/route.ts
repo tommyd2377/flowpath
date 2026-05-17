@@ -1,7 +1,6 @@
-import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
+import { ApiRequestError, dataResponse, errorResponse } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
-import { createCheckIn, listCheckIns } from "@/lib/repository";
-import { checkInInputSchema } from "@/lib/schemas";
+import { listCheckIns } from "@/lib/repository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,9 +18,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireUser();
-    const input = checkInInputSchema.parse(await readJson(request));
-    return dataResponse(await createCheckIn(user.id, input), 201);
+    await request.text();
+    throw new ApiRequestError(
+      "Daily check-ins are deprecated. Start with a situation to find your next move.",
+      410,
+      "daily_checkin_deprecated",
+    );
   } catch (error) {
     return errorResponse(error, "Could not save check-in.");
   }

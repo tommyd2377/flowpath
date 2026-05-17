@@ -18,11 +18,14 @@ import type { ReactNode } from "react";
 const links = [
   { href: "/", label: "Today", icon: Compass },
   { href: "/next-move", label: "Find My Next Move", icon: LifeBuoy },
-  { href: "/situations", label: "Situations", icon: MapPinned },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/billing", label: "Billing", icon: CreditCard },
-  { href: "/memory", label: "Memory / Profile", icon: Brain },
+  { href: "/memory", label: "Memory", icon: Brain },
+];
+
+const secondaryLinks = [
+  { href: "/situations", label: "Situations", icon: MapPinned },
   { href: "/history", label: "History", icon: Archive },
+  { href: "/billing", label: "Billing", icon: CreditCard },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -55,27 +58,44 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
             {isSignedIn ? <UserButton /> : null}
           </div>
-          <nav className="flex gap-2 overflow-x-auto pb-1">
-            {links.map((link) => {
-              const Icon = link.icon;
-              const active =
-                link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-                    active
-                      ? "bg-[var(--azure)] text-white shadow-[0_0_24px_rgba(0,120,212,0.22)]"
-                      : "border border-slate-800 bg-slate-950 text-slate-300 hover:border-[var(--azure)] hover:text-white"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {link.label}
-                </Link>
-              );
-            })}
-          </nav>
+          <div className="flex flex-col gap-2">
+            <nav className="flex gap-2 overflow-x-auto pb-1">
+              {links.map((link) => {
+                const Icon = link.icon;
+                const active =
+                  link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
+                      active
+                        ? "bg-[var(--azure)] text-white shadow-[0_0_24px_rgba(0,120,212,0.22)]"
+                        : "border border-slate-800 bg-slate-950 text-slate-300 hover:border-[var(--azure)] hover:text-white"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </nav>
+            <nav className="flex flex-wrap gap-3 text-xs text-slate-500">
+              {secondaryLinks.map((link) => {
+                const Icon = link.icon;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className="inline-flex items-center gap-1 hover:text-slate-300"
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>

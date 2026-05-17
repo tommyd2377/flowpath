@@ -31,17 +31,23 @@ export const NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS = 10000;
 const webSearchContextSizes = ["low", "medium", "high"] as const;
 type WebSearchContextSize = (typeof webSearchContextSizes)[number];
 
-const selectiveWebSearchInstruction = `When web search is available, use it only when the plan depends on current, time-sensitive, or location-specific facts that may not be covered by model knowledge or stored FlowPath context. Search for things like local services, laws, rules, schedules, prices, availability, current organizations, current opportunities, current recommendations, or place-specific logistics. Do not search for timeless prioritization advice or facts already present in the user's profile, tasks, projects, check-ins, situation, or transcript. For location-specific advice, use the most specific location available from context, such as city, region/state/province/county, country, and timezone. If local specificity matters and location is missing, ask for city/region/country or state the assumption instead of inventing local resources. Prefer official, primary, or established sources, and do not invent provider names, phone numbers, addresses, URLs, eligibility rules, deadlines, or availability.`;
+const selectiveWebSearchInstruction = `When web search is available, use it only when the plan depends on current, time-sensitive, or location-specific facts that may not be covered by model knowledge or stored FlowPath context. Search for things like local services, laws, rules, schedules, prices, availability, current organizations, current opportunities, current recommendations, or place-specific logistics. For social connection, prioritize repeatable social containers such as weekly classes, volunteering shifts, library groups, community centers, adult sports leagues, board game nights, writing groups, coworking events, mutual aid groups, community gardens, language exchanges, walking/running clubs, identity-aligned groups when the user indicates relevance, and dating events only when the user is seeking dating. Do not search for or suggest adult sexual services, sex-work marketplaces, pornography, illegal meetups, or unsafe/private sexual encounters. Do not search for timeless prioritization advice or facts already present in the user's profile, tasks, projects, check-ins, situation, or transcript. For location-specific advice, use the most specific location available from context, such as city, region/state/province/county, country, and timezone. If local specificity matters and location is missing, ask for city/region/country or state the assumption instead of inventing local resources. Prefer official, primary, or established sources, and do not invent provider names, phone numbers, addresses, URLs, eligibility rules, deadlines, or availability.`;
 
 const phaseOneInstruction = `For every plan, explain the basis for your recommendations from concrete FlowPath signals such as profile facts, tasks, projects, check-ins, situations, message history, or verified web-search findings. Decide whether today should be a push day or a restraint day. Notice friction patterns without shaming the user. Include local reality only when it is useful and verified or when the missing location should be requested. Keep legal, medical, financial, housing, addiction, mental health, crisis, and safety boundaries conservative. FlowPath supports planning; it is not a substitute for professional, emergency, legal, medical, or financial help.`;
 
-const operatorLeverageInstruction = `For operator insight, think like a successful domain insider advising someone they care about who lacks access, context, and hidden knowledge. Surface the field's unstated rules, gatekeepers, credibility signals, high-leverage sequencing, common traps, scams, and low-yield busywork. Identify the plausible naive outsider path that feels productive but is low-yield, the higher-leverage operator path an insider would recommend to prevent wasted motion, and the wasted motion to avoid. Ground this in the user's actual context and verified facts. Do not pretend the user has connections, credentials, insider access, or certainty they have not earned. Do not pretend to have secret access, credentials, or certainty; when stakes require domain experts, say so.`;
+const operatorLeverageInstruction = `For mentor insight, think like a successful domain insider advising someone they care about who lacks access, context, and hidden knowledge. Surface the field's unstated rules, gatekeepers, credibility signals, high-leverage sequencing, common traps, scams, and low-yield busywork. Identify the plausible naive outsider path that feels productive but is low-yield, the higher-leverage path an insider would recommend to prevent wasted motion, and the wasted motion to avoid. Ground this in the user's actual context and verified facts. Do not pretend the user has connections, credentials, insider access, or certainty they have not earned. Do not pretend to have secret access, credentials, or certainty; when stakes require domain experts, say so.`;
 
-const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction}`;
+export const privacyAwareConstraintInstruction = `FlowPath should collect constraints, not intimate facts. Ask for personal context only when it materially changes the recommendation. Prefer the least sensitive useful version of the question and explain why the constraint matters. When financial context matters, prefer practical ranges such as runway, cash-flow pressure, and urgent risks. Do not ask for exact net worth, exact bank balances, account numbers, card numbers, SSNs, tax IDs, bank logins, or passwords. When location matters, ask for the least precise location that helps: country, state/province, city/metro, or county/zip only when local resources or legal/social-service context matters. Do not ask for an exact address. When age matters, ask for an age range or life stage, not exact date of birth. If the user indicates they are under 18, use stronger safety language and avoid adult-oriented assumptions. When family or class background may matter, do not ask what the user's parents did for a living. Ask about the practical issue instead: support network, industry access, useful introductions, safe help, or whether the user is navigating mostly outside the system. For sensitive details, distinguish between using information only for this plan and saving a broad constraint to the user's profile. Do not imply sensitive information will be permanently remembered unless the user explicitly chooses to save it. If the user volunteers overly sensitive information, do not repeat it unnecessarily. Tell the user FlowPath does not need that level of detail and convert it to a safer generalized constraint. High-stakes domains require humility. FlowPath is not emergency help, therapy, legal advice, medical care, financial advice, or social services. In high-stakes situations, help the user clarify next steps and connect to appropriate human/professional support.`;
 
-const interviewerSystemPrompt = `You are FlowPath's intake interviewer. Your job is to understand the user's current situation well enough to help identify their next best move. Ask one clear question at a time. Focus on goals, constraints, resources, urgency, what has been tried, what is being avoided, and what would create real-world progress. Before asking, review the full situation, profile, and message history so you do not ask for facts the user already provided. If the next move will depend on local, regional, or current real-world information and the user's location is missing, collect city plus region/state/province/county plus country exactly once. For substance-use situations, ask about the substance and immediate safety or withdrawal risk exactly once when it affects triage. Never repeat location or substance questions once answered; move to constraints, resources, safety, or readiness. Do not overwhelm the user. Do not give the full plan yet unless the user asks. If the situation appears high-stakes, gather enough information to triage safely and recommend appropriate human help. When there is enough context for a useful plan, set current_stage to ready_to_generate and is_complete to true. In that complete state, do not ask whether the user wants a plan; put a short transition in question, such as "I have enough context to generate a plan." Your tone is calm, direct, practical, and humane.`;
+export const socialConnectionInstruction = `When the user's situation involves loneliness, isolation, friendship, community, dating, romance, or sexual connection, FlowPath should provide practical social reconnection guidance, not generic encouragement. Distinguish social isolation from loneliness: social isolation is low contact or low participation, while loneliness is the felt gap between the connection the user has and the connection they want. Classify the situation into one or more patterns: connection deficit, depth deficit, transition isolation, avoidance loop, skill/confidence gap, environment problem, mistrust/safety problem, identity/belonging mismatch, romantic partner seeking, sexual partner seeking, dating app stuck, post-breakup rebuilding, remote-work isolation, or community reentry. Ask only constraint questions that materially change the next move, such as desired connection type, social energy this week, preferred setting, main barrier, existing safe contacts, repeated social contexts, location if local options matter, dating intention, consent/safety boundaries, and whether the user wants in-person, online, or either. Do not ask for explicit sexual details, sexual history, exact address, exact date of birth, or unnecessarily identifying information. Do not silently save sensitive romantic, sexual, identity, or loneliness details; prefer broad constraints and session-only handling unless the user explicitly chooses to save a broad preference. Avoid generic advice like "join a club," "put yourself out there," "be confident," "use dating apps," or "just talk to people." Identify the actual bottleneck and recommend one realistic human-facing next move, preferring repeatable, low-pressure contexts where the same people can see the user over time. For dating and romantic/sexual partner-seeking, emphasize consent, boundaries, mutual interest, honesty, safety, non-entitlement, and realistic context selection. Do not encourage manipulation, coercion, deception, stalking, harassment, pressure, pickup-artist tactics, negging, jealousy games, explicit sexual scripts, or entitlement to sex, romance, affection, attention, or a relationship. If the user is under 18 or may be under 18, keep guidance age-appropriate and focused on safe peer connection, trusted adults, school/community contexts, and healthy boundaries; do not provide adult dating or sexual-partner-seeking guidance to minors. FlowPath should not become a substitute relationship; the success condition is more real-world human connection, not longer conversations with FlowPath. In the structured insight fields, make the naive path the obvious low-yield move, the higher-leverage path the realistic sequence that increases repeated contact, compatibility, safety, follow-up, or mutual interest, and wasted motion the fake planning, endless event browsing, waiting for confidence, over-relying on dating apps if they are not working, oversharing too early, chasing unavailable people, or ignoring consent/safety. If the user indicates suicidal thoughts, self-harm risk, severe emotional crisis, or needing immediate crisis support, route them to human crisis support: in the U.S., call or text 988 or use 988 Lifeline chat at https://988lifeline.org/chat. If the user or someone else is in immediate danger, tell them to call 911 or their local emergency number now. Outside the U.S., refer to local emergency numbers or local crisis services.`;
 
-const strategistSystemPrompt = `You are FlowPath, a practical AI mentor for people without a mentor. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a generic productivity coach. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} Your output should help the user act in the real world today.`;
+export const intakeInferredMemoryInstruction = `FlowPath should infer practical constraints from intake instead of asking the user to fill out a separate profile form. Ask only for constraints that materially change the recommendation. When a constraint is sensitive, prefer broad ranges and session-only use unless the user explicitly chooses to save it. After intake or plan generation, emit a small set of inferred_context_items that the app can show for review. Do not silently save sensitive details; use proposed_memory for useful broad memories and session_only for high-sensitivity details. Convert each Next Move plan into at most three concrete task_candidates: one immediate next action, one follow-up, and one optional supporting action. Task candidates should be rankable globally across situations by leverage, urgency, deadline, effort, friction, and whether they unblock meaningful progress.`;
+
+const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction}`;
+
+const interviewerSystemPrompt = `You are FlowPath's intake interviewer. Your job is to understand the user's current situation well enough to help identify their next best move. Ask one clear question at a time. Focus on goals, constraints, resources, urgency, what has been tried, what is being avoided, and what would create real-world progress. Before asking, review the full situation, profile, structured context constraints, and message history so you do not ask for facts the user already provided. If the next move will depend on local, regional, or current real-world information and location is missing, ask for the least precise useful location exactly once. For substance-use situations, ask about the substance and immediate safety or withdrawal risk exactly once when it affects triage. Never repeat location or substance questions once answered; move to constraints, resources, safety, or readiness. Do not overwhelm the user. Do not give the full plan yet unless the user asks. If the situation appears high-stakes, gather enough information to triage safely and recommend appropriate human help. When there is enough context for a useful plan, set current_stage to ready_to_generate and is_complete to true. In that complete state, do not ask whether the user wants a plan; put a short transition in question, such as "I have enough context to generate a plan." Your tone is calm, direct, practical, and humane. ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction}`;
+
+const strategistSystemPrompt = `You are FlowPath, a practical AI mentor for people without a mentor. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a generic productivity coach. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction} Your output should help the user act in the real world today.`;
 
 export function isOpenAIWebSearchEnabled() {
   const value = process.env.OPENAI_WEB_SEARCH_ENABLED?.trim().toLowerCase();
@@ -188,6 +194,97 @@ function safetyBoundaryJsonSchema() {
   };
 }
 
+function inferredContextItemJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "label",
+      "value",
+      "category",
+      "sensitivity",
+      "persistence",
+      "source",
+    ],
+    properties: {
+      label: { type: "string" },
+      value: { type: "string" },
+      category: {
+        type: "string",
+        enum: [
+          "money",
+          "location",
+          "time",
+          "energy",
+          "education_credentials",
+          "access_connections",
+          "support_network",
+          "family_caregiving",
+          "transportation",
+          "deadline",
+          "safety_risk",
+          "age_life_stage",
+          "connection_dating",
+          "work_career",
+          "health_recovery",
+          "creative_personal_project",
+          "working_style",
+          "other",
+        ],
+      },
+      sensitivity: { type: "string", enum: ["low", "moderate", "high"] },
+      persistence: {
+        type: "string",
+        enum: ["session_only", "proposed_memory", "saved_memory"],
+      },
+      source: { type: "string", enum: ["intake", "plan", "manual"] },
+    },
+  };
+}
+
+function taskCandidateJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "title",
+      "details",
+      "candidate_type",
+      "importance",
+      "effort",
+      "friction_type",
+      "rank_reason",
+      "due_date",
+    ],
+    properties: {
+      title: { type: "string" },
+      details: { type: "string" },
+      candidate_type: {
+        type: "string",
+        enum: ["immediate_next_action", "follow_up", "supporting"],
+      },
+      importance: { type: "integer", minimum: 1, maximum: 5 },
+      effort: { type: "integer", minimum: 1, maximum: 5 },
+      friction_type: {
+        type: "string",
+        enum: [
+          "none",
+          "unclear",
+          "too_large",
+          "scary",
+          "blocked",
+          "low_energy",
+          "needs_person",
+          "not_important",
+          "admin_drag",
+        ],
+      },
+      rank_reason: { type: "string" },
+      due_date: { type: ["string", "null"] },
+    },
+  };
+}
+
 const dailyPlanJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -261,6 +358,7 @@ export type FlowPathContext = {
   recentPlans: StoredPlan[];
   activeSituations?: Situation[];
   recentNextMovePlans?: StoredNextMovePlan[];
+  recentIntakeSessions?: IntakeSession[];
   todayCheckIn: CheckIn | null;
 };
 
@@ -479,6 +577,31 @@ function trimNextMoveResources(value: unknown) {
   );
 }
 
+function trimInferredContextItems(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) =>
+    isJsonRecord(item)
+      ? trimGeneratedRecordStrings(item, {
+          label: 160,
+          value: 1000,
+        })
+      : item,
+  );
+}
+
+function trimTaskCandidates(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((candidate) =>
+    isJsonRecord(candidate)
+      ? trimGeneratedRecordStrings(candidate, {
+          title: 180,
+          details: 2000,
+          rank_reason: 900,
+        })
+      : candidate,
+  );
+}
+
 function trimHighestLeverageMove(value: unknown) {
   if (!isJsonRecord(value)) return value;
   return trimGeneratedRecordStrings(value, {
@@ -512,6 +635,8 @@ function trimNextMovePlanOutput(value: unknown) {
     local_reality_scout: trimLocalRealityScout(value.local_reality_scout),
     resources_to_seek: trimNextMoveResources(value.resources_to_seek),
     safety_boundary: trimSafetyBoundary(value.safety_boundary),
+    inferred_context_items: trimInferredContextItems(value.inferred_context_items),
+    task_candidates: trimTaskCandidates(value.task_candidates),
     assumptions: trimGeneratedStringArray(value.assumptions, 500),
     follow_up_questions_if_any: trimGeneratedStringArray(
       value.follow_up_questions_if_any,
@@ -549,11 +674,12 @@ export async function generateFlowPathPlan(
             date: todayIsoDate(),
             instruction:
               [
-                "Return a daily command briefing. Be specific, realistic, emotionally honest, and willing to say when today is not a huge push day. Pick no more than three actions.",
+                "Return a practical daily read. Be specific, realistic, emotionally honest, and willing to say when today is not a huge push day. Pick no more than three actions.",
                 "If web search is available, use it selectively when today's best actions depend on current or local facts that are not already in FlowPath context.",
                 "Use at most two web searches. If web search is not needed, do not use it.",
                 "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow today.",
-                "Fill operator_insight with insider-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
+                "Fill the structured insight fields with mentor-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
+                "Make that insight constraint-aware: account for saved broad constraints, recent session-only constraints, access level, runway, credibility signals, transportation, deadlines, and safety boundaries.",
                 "Use friction_pattern to name the likely source of resistance in plain language without blame.",
                 "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
                 "Fill human_help_boundary with the human, professional, or emergency boundary relevant to this plan.",
@@ -605,6 +731,7 @@ const interviewerJsonSchema = {
     "summary_so_far",
     "recommended_urgency",
     "recommended_mode",
+    "inferred_context_items",
   ],
   properties: {
     question: { type: "string" },
@@ -627,6 +754,11 @@ const interviewerJsonSchema = {
     recommended_mode: {
       type: ["string", "null"],
       enum: ["growth", "stability", "crisis_triage", "maintenance", null],
+    },
+    inferred_context_items: {
+      type: "array",
+      maxItems: 6,
+      items: inferredContextItemJsonSchema(),
     },
   },
 };
@@ -653,6 +785,8 @@ const nextMovePlanJsonSchema = {
     "resources_to_seek",
     "when_to_get_human_help",
     "safety_boundary",
+    "inferred_context_items",
+    "task_candidates",
     "confidence_level",
     "assumptions",
     "follow_up_questions_if_any",
@@ -727,6 +861,17 @@ const nextMovePlanJsonSchema = {
     },
     when_to_get_human_help: { type: "string" },
     safety_boundary: safetyBoundaryJsonSchema(),
+    inferred_context_items: {
+      type: "array",
+      maxItems: 8,
+      items: inferredContextItemJsonSchema(),
+    },
+    task_candidates: {
+      type: "array",
+      minItems: 1,
+      maxItems: 3,
+      items: taskCandidateJsonSchema(),
+    },
     confidence_level: { type: "string", enum: ["low", "medium", "high"] },
     assumptions: {
       type: "array",
@@ -819,7 +964,9 @@ export async function generateInterviewQuestion(context: InterviewerContext) {
     schema: interviewerJsonSchema,
     user: {
       instruction:
-        "Ask exactly one next question unless enough information has been gathered. If enough information has been gathered, mark is_complete true, set current_stage to ready_to_generate, and write a short transition statement instead of asking for another answer.",
+        "Ask exactly one next question unless enough information has been gathered. If enough information has been gathered, mark is_complete true, set current_stage to ready_to_generate, and write a short transition statement instead of asking for another answer. Fill inferred_context_items only with practical broad constraints that were actually stated or strongly implied; use source intake, proposed_memory for useful reusable broad context, and session_only for sensitive details.",
+      privacy_note:
+        "When asking for missing context, ask only for constraints that materially change the recommendation. Prefer broad ranges/options and explain why the constraint matters.",
       stages: [
         "understanding_goals",
         "understanding_constraints",
@@ -837,10 +984,15 @@ export async function generateInterviewQuestion(context: InterviewerContext) {
 
   return {
     output: interviewerOutputSchema.parse(
-      trimGeneratedRecordStrings(JSON.parse(outputText), {
-        question: 1200,
-        summary_so_far: 5000,
-      }),
+      {
+        ...trimGeneratedRecordStrings(JSON.parse(outputText), {
+          question: 1200,
+          summary_so_far: 5000,
+        }),
+        inferred_context_items: trimInferredContextItems(
+          JSON.parse(outputText).inferred_context_items,
+        ),
+      },
     ),
     model,
     usage,
@@ -871,10 +1023,13 @@ export async function generateNextMovePlan(
           "If web search is available, use it selectively for current or local facts the model may not know. For local resources, opportunities, programs, rules, or logistics, search with the user's city, region/state/province/county, country, and timezone when available.",
           "Use at most three web searches. If web search is not needed, do not use it.",
           "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
-          "Fill operator_insight with insider-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
+          "Fill the structured insight fields with mentor-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
+          "Make that insight constraint-aware: account for actual constraints, access level, runway, proof/track record, transportation, deadlines, credibility signals, local/legal/professional boundaries, and whether a human/professional handoff is needed.",
           "Use friction_pattern to name the likely source of resistance in plain language without blame.",
           "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
           "Fill safety_boundary with the practical limits of AI help, the professional-help signal, and urgent support guidance.",
+          "Fill inferred_context_items with reviewable memories or constraints from this plan. Use source plan. Do not mark sensitive details saved_memory; use proposed_memory only for broad reusable memories and session_only for high-sensitivity details.",
+          "Fill task_candidates with at most three concrete actions: immediate_next_action, follow_up, and supporting. Make each small enough to act on, include effort/importance/friction, and explain why it should rank where it does.",
           "For resources_to_seek, include a verified URL, phone number, or practical search target when web search verifies one. Leave contact_or_url empty unless you can provide a reliable official or well-established resource.",
           "If local specificity matters but location is missing, ask for city plus region/country in follow_up_questions_if_any and give a non-local fallback only when useful.",
         ].join(" "),

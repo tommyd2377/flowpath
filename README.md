@@ -4,7 +4,7 @@ FlowPath is a private personal AI prioritization dashboard. It helps answer:
 
 > What should I do today?
 
-Domain: `flowpath.ai`.
+Production domain: `https://flowpathapp.com`.
 
 The current MVP also includes **Find My Next Move**, an AI-guided intake flow for
 figuring out the highest-leverage next action when a situation feels stuck,

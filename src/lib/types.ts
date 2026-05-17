@@ -49,6 +49,218 @@ export const USAGE_TYPES = [
   "next_move_plan",
   "lightweight_assist",
 ] as const;
+export const CONSTRAINT_SENSITIVITIES = ["low", "moderate", "high"] as const;
+export const MEMORY_PERSISTENCE = [
+  "session_only",
+  "save_broad_constraint",
+] as const;
+export const FINANCIAL_PRESSURE_LEVELS = [
+  "none",
+  "manageable",
+  "tight",
+  "urgent",
+  "crisis",
+  "prefer_not_to_say",
+] as const;
+export const FINANCIAL_RUNWAYS = [
+  "under_2_weeks",
+  "2_to_4_weeks",
+  "1_to_3_months",
+  "3_to_6_months",
+  "6_plus_months",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const MONTHLY_CASH_FLOWS = [
+  "short_each_month",
+  "roughly_break_even",
+  "save_a_little",
+  "save_comfortably",
+  "irregular",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const URGENT_FINANCIAL_RISKS = [
+  "housing",
+  "food",
+  "utilities",
+  "transportation",
+  "medical_costs",
+  "debt_or_collections",
+  "childcare",
+  "none",
+  "prefer_not_to_say",
+] as const;
+export const LOCATION_PRECISIONS = [
+  "none",
+  "country",
+  "state_or_province",
+  "city_or_metro",
+  "county_or_zip",
+] as const;
+export const AGE_RANGES = [
+  "under_18",
+  "18_24",
+  "25_34",
+  "35_49",
+  "50_64",
+  "65_plus",
+  "prefer_not_to_say",
+] as const;
+export const DOMAIN_ACCESS_LEVELS = [
+  "insider_access",
+  "some_access",
+  "outside_the_system",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const SITUATION_SAFETY_RISKS = [
+  "none",
+  "possible",
+  "urgent",
+  "prefer_not_to_say",
+] as const;
+export const SOCIAL_CONNECTION_PATTERNS = [
+  "connection_deficit",
+  "depth_deficit",
+  "transition_isolation",
+  "avoidance_loop",
+  "skill_or_confidence_gap",
+  "environment_problem",
+  "mistrust_or_safety_problem",
+  "identity_or_belonging_mismatch",
+  "romantic_partner_seeking",
+  "sexual_partner_seeking",
+  "dating_app_stuck",
+  "post_breakup_rebuilding",
+  "remote_work_isolation",
+  "community_reentry",
+  "not_sure",
+] as const;
+export const SOCIAL_ENERGY_LEVELS = [
+  "one_tiny_action",
+  "short_message_or_call",
+  "one_low_pressure_event",
+  "one_recurring_commitment",
+  "moderate_capacity",
+  "high_capacity",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const DESIRED_CONNECTION_TYPES = [
+  "casual_friendship",
+  "close_friendship",
+  "community_belonging",
+  "professional_peers",
+  "creative_collaborators",
+  "family_repair",
+  "romantic_relationship",
+  "long_term_partner",
+  "dating_exploration",
+  "sexual_connection",
+  "queer_or_identity_aligned_community",
+  "regular_human_contact",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const SOCIAL_SETTING_PREFERENCES = [
+  "in_person",
+  "online",
+  "either",
+  "structured_group",
+  "one_on_one",
+  "activity_based",
+  "low_pressure_public_setting",
+  "identity_aligned_community",
+  "non_alcohol_centered",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const SOCIAL_BARRIERS = [
+  "access",
+  "confidence",
+  "time",
+  "money",
+  "transportation",
+  "health_or_energy",
+  "fear_of_rejection",
+  "not_knowing_where_to_go",
+  "not_knowing_how_to_follow_up",
+  "past_hurt_or_mistrust",
+  "safety_concern",
+  "dating_app_fatigue",
+  "shame_or_embarrassment",
+  "lack_of_repeated_context",
+  "identity_or_belonging_mismatch",
+  "none",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const DATING_INTENTIONS = [
+  "long_term_relationship",
+  "casual_dating",
+  "sexual_connection",
+  "exploring",
+  "rebuilding_after_breakup",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const DATING_ENVIRONMENTS = [
+  "dating_apps",
+  "in_person",
+  "friends_or_network",
+  "hobby_or_activity_groups",
+  "queer_or_identity_specific_spaces",
+  "events_or_social_scenes",
+  "online_communities",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const SOCIAL_CRISIS_RISKS = [
+  "none",
+  "possible",
+  "urgent",
+  "immediate_danger",
+  "prefer_not_to_say",
+] as const;
+export const SAFE_PEOPLE_TO_CONTACT_OPTIONS = [
+  "yes",
+  "maybe",
+  "no",
+  "not_sure",
+  "prefer_not_to_say",
+] as const;
+export const INFERRED_CONTEXT_CATEGORIES = [
+  "money",
+  "location",
+  "time",
+  "energy",
+  "education_credentials",
+  "access_connections",
+  "support_network",
+  "family_caregiving",
+  "transportation",
+  "deadline",
+  "safety_risk",
+  "age_life_stage",
+  "connection_dating",
+  "work_career",
+  "health_recovery",
+  "creative_personal_project",
+  "working_style",
+  "other",
+] as const;
+export const INFERRED_CONTEXT_PERSISTENCE = [
+  "session_only",
+  "proposed_memory",
+  "saved_memory",
+] as const;
+export const INFERRED_CONTEXT_SOURCES = ["intake", "plan", "manual"] as const;
+export const PLAN_TASK_CANDIDATE_TYPES = [
+  "immediate_next_action",
+  "follow_up",
+  "supporting",
+] as const;
 
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
@@ -63,6 +275,103 @@ export type SafetyRiskLevel = (typeof SAFETY_RISK_LEVELS)[number];
 export type PlanTier = (typeof PLAN_TIERS)[number];
 export type BillingStatus = (typeof BILLING_STATUSES)[number];
 export type UsageType = (typeof USAGE_TYPES)[number];
+export type ConstraintSensitivity = (typeof CONSTRAINT_SENSITIVITIES)[number];
+export type MemoryPersistence = (typeof MEMORY_PERSISTENCE)[number];
+export type FinancialPressureLevel = (typeof FINANCIAL_PRESSURE_LEVELS)[number];
+export type FinancialRunway = (typeof FINANCIAL_RUNWAYS)[number];
+export type MonthlyCashFlow = (typeof MONTHLY_CASH_FLOWS)[number];
+export type UrgentFinancialRisk = (typeof URGENT_FINANCIAL_RISKS)[number];
+export type LocationPrecision = (typeof LOCATION_PRECISIONS)[number];
+export type AgeRange = (typeof AGE_RANGES)[number];
+export type DomainAccessLevel = (typeof DOMAIN_ACCESS_LEVELS)[number];
+export type SituationSafetyRisk = (typeof SITUATION_SAFETY_RISKS)[number];
+export type SocialConnectionPattern =
+  (typeof SOCIAL_CONNECTION_PATTERNS)[number];
+export type SocialEnergyLevel = (typeof SOCIAL_ENERGY_LEVELS)[number];
+export type DesiredConnectionType = (typeof DESIRED_CONNECTION_TYPES)[number];
+export type SocialSettingPreference =
+  (typeof SOCIAL_SETTING_PREFERENCES)[number];
+export type SocialBarrier = (typeof SOCIAL_BARRIERS)[number];
+export type DatingIntention = (typeof DATING_INTENTIONS)[number];
+export type DatingEnvironment = (typeof DATING_ENVIRONMENTS)[number];
+export type SocialCrisisRisk = (typeof SOCIAL_CRISIS_RISKS)[number];
+export type SafePeopleToContact =
+  (typeof SAFE_PEOPLE_TO_CONTACT_OPTIONS)[number];
+export type InferredContextCategory =
+  (typeof INFERRED_CONTEXT_CATEGORIES)[number];
+export type InferredContextPersistence =
+  (typeof INFERRED_CONTEXT_PERSISTENCE)[number];
+export type InferredContextSource =
+  (typeof INFERRED_CONTEXT_SOURCES)[number];
+export type PlanTaskCandidateType =
+  (typeof PLAN_TASK_CANDIDATE_TYPES)[number];
+
+type PersistedConstraint<T> = {
+  value?: T;
+  persistence?: MemoryPersistence;
+};
+
+type PersistedMultiConstraint<T> = {
+  values?: T[];
+  persistence?: MemoryPersistence;
+};
+
+export type SocialConnectionContext = {
+  patterns?: SocialConnectionPattern[];
+  desired_connection?: PersistedMultiConstraint<DesiredConnectionType>;
+  social_energy?: PersistedConstraint<SocialEnergyLevel>;
+  preferred_settings?: PersistedMultiConstraint<SocialSettingPreference>;
+  barriers?: PersistedMultiConstraint<SocialBarrier>;
+  existing_connection_surface?: PersistedConstraint<string>;
+  repeatable_contexts_available?: PersistedConstraint<string>;
+  safe_people_to_contact?: PersistedConstraint<SafePeopleToContact> & {
+    notes?: string;
+  };
+  dating_intention?: PersistedConstraint<DatingIntention>;
+  dating_environment?: PersistedMultiConstraint<DatingEnvironment>;
+  attraction_or_partner_preferences?: PersistedConstraint<string>;
+  consent_and_safety_constraints?: {
+    value?: string;
+    persistence?: "session_only";
+  };
+  avoid_contexts?: PersistedConstraint<string>;
+  crisis_or_immediate_safety_risk?: {
+    value?: SocialCrisisRisk;
+    persistence?: "session_only";
+  };
+};
+
+export type ContextConstraints = {
+  location?: PersistedConstraint<string> & {
+    precision?: LocationPrecision;
+  };
+  age_range?: PersistedConstraint<AgeRange>;
+  life_stage?: PersistedConstraint<string>;
+  education_or_credentials?: PersistedConstraint<string>;
+  financial_context?: {
+    pressure_level?: FinancialPressureLevel;
+    runway?: FinancialRunway;
+    monthly_cash_flow?: MonthlyCashFlow;
+    urgent_risks?: UrgentFinancialRisk[];
+    persistence?: MemoryPersistence;
+  };
+  time_availability?: PersistedConstraint<string>;
+  energy_capacity?: PersistedConstraint<string>;
+  dependents_or_caregiving?: PersistedConstraint<string>;
+  transportation?: PersistedConstraint<string>;
+  support_network?: PersistedConstraint<string>;
+  domain_access?: PersistedConstraint<DomainAccessLevel> & {
+    notes?: string;
+  };
+  proof_or_track_record?: PersistedConstraint<string>;
+  urgent_deadline?: PersistedConstraint<string>;
+  safety_or_emergency_risk?: {
+    value?: SituationSafetyRisk;
+    persistence?: "session_only";
+  };
+  social_connection?: SocialConnectionContext;
+  other?: PersistedConstraint<string>;
+};
 
 export type Profile = {
   id: number;
@@ -73,6 +382,7 @@ export type Profile = {
   operating_principles: string;
   remember: string;
   challenge_on: string;
+  context_constraints: ContextConstraints;
   created_at: string;
   updated_at: string;
 };
@@ -113,6 +423,9 @@ export type Task = {
   situation_title?: string | null;
   source_next_move_plan_id?: number | null;
   source_plan_section?: string | null;
+  situation_urgency?: SituationUrgency | null;
+  rank_score?: number;
+  rank_reason?: string;
   status: TaskStatus;
   importance: number;
   effort: number;
@@ -120,6 +433,22 @@ export type Task = {
   friction_note: string;
   due_date: string | null;
   notes: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InferredContextItem = {
+  id: number;
+  label: string;
+  value: string;
+  category: InferredContextCategory;
+  sensitivity: ConstraintSensitivity;
+  persistence: InferredContextPersistence;
+  source: InferredContextSource;
+  situation_id: number | null;
+  situation_title?: string | null;
+  intake_session_id: number | null;
+  next_move_plan_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -231,6 +560,7 @@ export type IntakeSession = {
   current_stage: IntakeStage;
   is_complete: boolean;
   summary_so_far: string;
+  context_constraints: ContextConstraints;
   created_at: string;
   updated_at: string;
 };
@@ -252,6 +582,26 @@ export type NextMoveResource = {
   name: string;
   why: string;
   contact_or_url: string;
+};
+
+export type GeneratedInferredContextItem = {
+  label: string;
+  value: string;
+  category: InferredContextCategory;
+  sensitivity: ConstraintSensitivity;
+  persistence: InferredContextPersistence;
+  source: InferredContextSource;
+};
+
+export type PlanTaskCandidate = {
+  title: string;
+  details: string;
+  candidate_type: PlanTaskCandidateType;
+  importance: number;
+  effort: number;
+  friction_type: TaskFrictionType;
+  rank_reason: string;
+  due_date: string | null;
 };
 
 export type HighestLeverageMove = {
@@ -280,6 +630,8 @@ export type NextMovePlan = {
   resources_to_seek: NextMoveResource[];
   when_to_get_human_help: string;
   safety_boundary: SafetyBoundary;
+  inferred_context_items: GeneratedInferredContextItem[];
+  task_candidates: PlanTaskCandidate[];
   confidence_level: ConfidenceLevel;
   assumptions: string[];
   follow_up_questions_if_any: string[];

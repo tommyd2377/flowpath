@@ -1,5 +1,6 @@
 import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { buildFirstIntakeQuestion } from "@/lib/intake";
 import {
   addIntakeMessage,
   createSituation,
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
       user.id,
       session.id,
       "assistant",
-      "What do you most want to change about this situation, and what would feel meaningfully different if FlowPath helped you make progress?",
+      buildFirstIntakeQuestion(situation),
     );
     return dataResponse({ situation, session, messages: [messages] }, 201);
   } catch (error) {

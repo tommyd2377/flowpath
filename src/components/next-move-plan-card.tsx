@@ -95,7 +95,7 @@ export function NextMovePlanCard({
       </div>
 
       <div>
-        <h3 className="mb-2 text-sm font-semibold">Operator insight</h3>
+        <h3 className="mb-2 text-sm font-semibold">Mentor insight</h3>
         <div className="grid gap-3 text-sm sm:grid-cols-3">
           <Brief title="Naive path" value={plan.operator_insight.naive_path} />
           <Brief
@@ -187,7 +187,7 @@ export function NextMovePlanCard({
         <div>
           <Button type="button" onClick={onConvert} disabled={converting}>
             <CheckSquare className="h-4 w-4" />
-            {converting ? "Creating tasks..." : "Turn this plan into tasks"}
+            {converting ? "Creating tasks..." : "Add ranked tasks from this plan"}
           </Button>
         </div>
       ) : null}
@@ -234,6 +234,10 @@ function LocalScoutBlock({ plan }: { plan: StoredNextMovePlan }) {
 }
 
 function SafetyBoundaryBlock({ plan }: { plan: StoredNextMovePlan }) {
+  const isElevatedRisk =
+    plan.safety_boundary.risk_level === "high" ||
+    plan.safety_boundary.risk_level === "crisis";
+
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
       <div className="font-medium text-white">
@@ -242,7 +246,7 @@ function SafetyBoundaryBlock({ plan }: { plan: StoredNextMovePlan }) {
       <div className="mt-2 grid gap-2 text-slate-300">
         <p>{plan.safety_boundary.professional_help_signal}</p>
         <p>{plan.safety_boundary.do_not_rely_on_ai_for}</p>
-        <p>{plan.safety_boundary.urgent_support_guidance}</p>
+        {isElevatedRisk ? <p>{plan.safety_boundary.urgent_support_guidance}</p> : null}
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import { assertCanUseFeature, incrementUsage } from "@/lib/billing/usage";
 import { generateNextMovePlan } from "@/lib/flowpath-ai";
 import {
   createNextMovePlan,
+  createInferredContextItems,
   getLatestIntakeSession,
   getProfile,
   getSituation,
@@ -74,10 +75,21 @@ export async function POST(_request: Request, context: Context) {
       });
     }
 
-    return dataResponse(
-      await createNextMovePlan(user.id, situationId, session?.id ?? null, plan, model),
-      201,
+    const storedPlan = await createNextMovePlan(
+      user.id,
+      situationId,
+      session?.id ?? null,
+      plan,
+      model,
     );
+    await createInferredContextItems(user.id, plan.inferred_context_items, {
+      situation_id: situationId,
+      intake_session_id: session?.id ?? null,
+      next_move_plan_id: storedPlan.id,
+      source: "plan",
+    });
+
+    return dataResponse(storedPlan, 201);
   } catch (error) {
     return errorResponse(error, "Could not generate next move plan.");
   }

@@ -6,6 +6,7 @@ import { ArrowRight, CheckCircle2, CheckSquare, MessageSquare, Plus, Sparkles } 
 
 import { apiFetch } from "@/lib/client-api";
 import type {
+  ContextConstraints,
   IntakeMessage,
   IntakeSession,
   Situation,
@@ -13,6 +14,7 @@ import type {
   StoredNextMovePlan,
   Task,
 } from "@/lib/types";
+import { ContextConstraintsEditor } from "./context-constraints-editor";
 import {
   GenerationStatus,
   nextMoveGenerationStages,
@@ -27,7 +29,6 @@ import {
   PageHeader,
   SelectInput,
   TextArea,
-  TextInput,
 } from "./ui";
 
 type SituationDetail = {
@@ -40,16 +41,13 @@ type SituationDetail = {
 };
 
 const templates = [
-  ["stuck", "I feel stuck and need direction"],
-  ["business", "I am trying to build a business"],
-  ["health", "I need to improve my health"],
-  ["career", "I am trying to change careers"],
-  ["creative", "I am trying to move forward creatively"],
-  ["money", "I am facing a money problem"],
-  ["housing", "I am dealing with housing instability"],
-  ["overwhelm", "I am overwhelmed by too many options"],
-  ["recovery", "I am trying to recover from a bad period"],
-  ["custom", "Custom situation"],
+  ["work_career", "Work / Career"],
+  ["money_stability", "Money / Stability"],
+  ["relationships_connection", "Relationships / Connection"],
+  ["health_recovery", "Health / Recovery"],
+  ["creative_project", "Creative / Personal Project"],
+  ["overwhelm", "Overwhelm / Too Many Open Loops"],
+  ["something_else", "Something Else"],
 ] as const;
 
 export function NextMoveFlow() {
@@ -63,6 +61,7 @@ export function NextMoveFlow() {
   const [working, setWorking] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [converting, setConverting] = useState(false);
+  const [savingConstraints, setSavingConstraints] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -190,19 +189,48 @@ export function NextMoveFlow() {
     }
   }
 
+  async function saveConstraintContext(context_constraints: ContextConstraints) {
+    if (!detail) return;
+    setSavingConstraints(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiFetch(`/api/situations/${detail.situation.id}/constraints`, {
+        method: "PATCH",
+        body: JSON.stringify({ context_constraints }),
+      });
+      await loadDetail(detail.situation.id);
+      setMessage("Constraint context saved.");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Could not save constraint context.",
+      );
+    } finally {
+      setSavingConstraints(false);
+    }
+  }
+
   const lastAssistant = detail?.messages
     .filter((item) => item.role === "assistant")
     .at(-1);
   const isReadyToGenerate = Boolean(
     detail?.session.is_complete || detail?.session.current_stage === "ready_to_generate",
   );
+  const latestPlanHasTasks = Boolean(
+    detail?.latestPlan &&
+      detail.tasks.some(
+        (task) => task.source_next_move_plan_id === detail.latestPlan?.id,
+      ),
+  );
 
   return (
     <div>
-      <PageHeader eyebrow="Find My Next Move" title="Figure out what to do next">
+      <PageHeader eyebrow="Find My Next Move" title="Start with the situation">
         <p>
-          Start with the current reality. FlowPath will ask one practical question at a
-          time, then turn the signal into a highest-leverage move.
+          Answer a few focused questions. FlowPath will turn the signal into a
+          practical plan, inferred context, and ranked next actions.
         </p>
       </PageHeader>
 
@@ -212,7 +240,10 @@ export function NextMoveFlow() {
       <div className="grid gap-5 lg:grid-cols-[0.75fr_1.25fr]">
         <div className="grid gap-5">
           <Card>
-            <h2 className="mb-3 text-xl font-semibold">Start new situation</h2>
+            <h2 className="mb-3 text-xl font-semibold">Start a situation</h2>
+            <p className="mb-4 text-sm text-slate-400">
+              Pick the broad lane. The intake will classify the specifics.
+            </p>
             <div className="mb-4 grid gap-2">
               {templates.map(([templateCategory, label]) => (
                 <button
@@ -220,53 +251,55 @@ export function NextMoveFlow() {
                   type="button"
                   onClick={() => {
                     setCategory(templateCategory);
-                    setTitle(label === "Custom situation" ? "" : label);
                   }}
-                  className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-left text-sm text-slate-200 transition hover:border-[var(--azure)]"
+                  className={`rounded-md border px-3 py-2 text-left text-sm transition ${
+                    category === templateCategory
+                      ? "border-[var(--azure)] bg-[rgba(0,120,212,0.16)] text-white"
+                      : "border-slate-800 bg-slate-900 text-slate-200 hover:border-[var(--azure)]"
+                  }`}
                 >
                   {label}
                 </button>
               ))}
             </div>
             <form className="grid gap-4" onSubmit={createSituation}>
-              <Field label="Situation title">
-                <TextInput
+              <Field label="What is going on?">
+                <TextArea
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
                   required
-                  placeholder="What are you trying to move through?"
+                  placeholder="Example: I have been applying to jobs for months and nothing is happening."
                 />
               </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Category">
-                  <TextInput
-                    value={category}
-                    onChange={(event) => setCategory(event.target.value)}
-                  />
-                </Field>
-                <Field label="Urgency">
-                  <SelectInput
-                    value={urgency}
-                    onChange={(event) =>
-                      setUrgency(event.target.value as SituationUrgency)
-                    }
-                  >
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high">high</option>
-                    <option value="crisis">crisis</option>
-                  </SelectInput>
-                </Field>
-              </div>
+              <details className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                  Optional urgency
+                </summary>
+                <div className="mt-3">
+                  <Field label="Urgency">
+                    <SelectInput
+                      value={urgency}
+                      onChange={(event) =>
+                        setUrgency(event.target.value as SituationUrgency)
+                      }
+                    >
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="crisis">crisis</option>
+                    </SelectInput>
+                  </Field>
+                </div>
+              </details>
               <Button type="submit" disabled={working}>
                 <Plus className="h-4 w-4" />
-                {working ? "Starting..." : "Start Situation"}
+                {working ? "Starting..." : "Start intake"}
               </Button>
             </form>
           </Card>
 
           <Card>
-            <h2 className="mb-3 text-xl font-semibold">Continue active intake</h2>
+            <h2 className="mb-3 text-xl font-semibold">Active situations</h2>
             {loading ? (
               <div className="text-sm text-slate-400">Loading situations...</div>
             ) : activeSituations.length === 0 ? (
@@ -324,7 +357,7 @@ export function NextMoveFlow() {
               <Card>
                 <div className="mb-4 flex items-center gap-2">
                   <MessageSquare className="h-4 w-4 text-[var(--azure-light)]" />
-                  <h2 className="text-xl font-semibold">Intake interview</h2>
+                  <h2 className="text-xl font-semibold">Focused intake</h2>
                 </div>
                 {lastAssistant ? (
                   <div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/70 p-4">
@@ -384,12 +417,37 @@ export function NextMoveFlow() {
                 )}
               </Card>
 
+              <Card className="bg-slate-950/70">
+                <div className="mb-4">
+                  <h2 className="text-xl font-semibold">Context FlowPath can use</h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    This is optional. FlowPath will infer useful constraints through
+                    the intake; use this only to correct or add something material.
+                  </p>
+                </div>
+                <details>
+                  <summary className="cursor-pointer text-sm font-medium text-[var(--azure-light)]">
+                    Review or edit constraints
+                  </summary>
+                  <div className="mt-4">
+                    <ContextConstraintsEditor
+                      key={detail.session.updated_at}
+                      value={detail.session.context_constraints ?? {}}
+                      onSave={saveConstraintContext}
+                      saving={savingConstraints}
+                    />
+                  </div>
+                </details>
+              </Card>
+
               <RelatedTasksCard tasks={detail.tasks} />
 
               <NextMovePlanCard
                 plan={detail.latestPlan}
                 fallbackTask={detail.tasks[0] ?? null}
-                onConvert={detail.latestPlan ? convertPlan : undefined}
+                onConvert={
+                  detail.latestPlan && !latestPlanHasTasks ? convertPlan : undefined
+                }
                 converting={converting}
               />
             </>

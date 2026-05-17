@@ -10,6 +10,7 @@ import { assertCanUseFeature, incrementUsage } from "@/lib/billing/usage";
 import { generateInterviewQuestion } from "@/lib/flowpath-ai";
 import {
   addIntakeMessage,
+  createInferredContextItems,
   getOrCreateIntakeSession,
   getProfile,
   getSituation,
@@ -61,6 +62,11 @@ export async function POST(request: Request, context: Context) {
       "assistant",
       output.question,
     );
+    await createInferredContextItems(user.id, output.inferred_context_items, {
+      situation_id: situation.id,
+      intake_session_id: session.id,
+      source: "intake",
+    });
 
     if (output.recommended_urgency && output.recommended_urgency !== situation.urgency) {
       await updateSituation(user.id, situation.id, {

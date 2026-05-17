@@ -1,16 +1,39 @@
 import { z } from "zod";
 
 import {
+  AGE_RANGES,
   CONFIDENCE_LEVELS,
+  CONSTRAINT_SENSITIVITIES,
+  DOMAIN_ACCESS_LEVELS,
+  DATING_ENVIRONMENTS,
+  DATING_INTENTIONS,
+  DESIRED_CONNECTION_TYPES,
+  FINANCIAL_PRESSURE_LEVELS,
+  FINANCIAL_RUNWAYS,
   INTAKE_STAGES,
+  INFERRED_CONTEXT_CATEGORIES,
+  INFERRED_CONTEXT_PERSISTENCE,
+  INFERRED_CONTEXT_SOURCES,
+  LOCATION_PRECISIONS,
+  MEMORY_PERSISTENCE,
+  MONTHLY_CASH_FLOWS,
   NEXT_MOVE_MODES,
+  PLAN_TASK_CANDIDATE_TYPES,
   PRIORITY_LEVELS,
   PROJECT_STATUSES,
   SAFETY_RISK_LEVELS,
+  SAFE_PEOPLE_TO_CONTACT_OPTIONS,
+  SITUATION_SAFETY_RISKS,
   SITUATION_STATUSES,
   SITUATION_URGENCIES,
+  SOCIAL_BARRIERS,
+  SOCIAL_CONNECTION_PATTERNS,
+  SOCIAL_CRISIS_RISKS,
+  SOCIAL_ENERGY_LEVELS,
+  SOCIAL_SETTING_PREFERENCES,
   TASK_FRICTION_TYPES,
   TASK_STATUSES,
+  URGENT_FINANCIAL_RISKS,
 } from "./types";
 
 const text = (max = 4000) => z.string().trim().max(max).optional().default("");
@@ -22,6 +45,134 @@ const optionalDate = z
   .nullable()
   .optional()
   .default(null);
+const persistence = z.enum(MEMORY_PERSISTENCE).optional().default("session_only");
+
+const persistedTextConstraint = (max = 1000) =>
+  z
+    .object({
+      value: text(max),
+      persistence,
+    })
+    .partial()
+    .optional();
+
+const persistedMultiConstraint = <T extends readonly [string, ...string[]]>(
+  values: T,
+  max = values.length,
+) =>
+  z
+    .object({
+      values: z.array(z.enum(values)).max(max).optional(),
+      persistence,
+    })
+    .partial()
+    .optional();
+
+export const contextConstraintsSchema = z
+  .object({
+    location: z
+      .object({
+        value: text(240),
+        precision: z.enum(LOCATION_PRECISIONS).optional().default("none"),
+        persistence,
+      })
+      .partial()
+      .optional(),
+    age_range: z
+      .object({
+        value: z.enum(AGE_RANGES).optional(),
+        persistence,
+      })
+      .partial()
+      .optional(),
+    life_stage: persistedTextConstraint(500),
+    education_or_credentials: persistedTextConstraint(1000),
+    financial_context: z
+      .object({
+        pressure_level: z.enum(FINANCIAL_PRESSURE_LEVELS).optional(),
+        runway: z.enum(FINANCIAL_RUNWAYS).optional(),
+        monthly_cash_flow: z.enum(MONTHLY_CASH_FLOWS).optional(),
+        urgent_risks: z.array(z.enum(URGENT_FINANCIAL_RISKS)).max(9).optional(),
+        persistence,
+      })
+      .partial()
+      .optional(),
+    time_availability: persistedTextConstraint(500),
+    energy_capacity: persistedTextConstraint(500),
+    dependents_or_caregiving: persistedTextConstraint(500),
+    transportation: persistedTextConstraint(500),
+    support_network: persistedTextConstraint(1000),
+    domain_access: z
+      .object({
+        value: z.enum(DOMAIN_ACCESS_LEVELS).optional(),
+        notes: text(1000),
+        persistence,
+      })
+      .partial()
+      .optional(),
+    proof_or_track_record: persistedTextConstraint(1000),
+    urgent_deadline: persistedTextConstraint(500),
+    safety_or_emergency_risk: z
+      .object({
+        value: z.enum(SITUATION_SAFETY_RISKS).optional(),
+        persistence: z.literal("session_only").optional().default("session_only"),
+      })
+      .partial()
+      .optional(),
+    social_connection: z
+      .object({
+        patterns: z.array(z.enum(SOCIAL_CONNECTION_PATTERNS)).max(8).optional(),
+        desired_connection: persistedMultiConstraint(DESIRED_CONNECTION_TYPES),
+        social_energy: z
+          .object({
+            value: z.enum(SOCIAL_ENERGY_LEVELS).optional(),
+            persistence,
+          })
+          .partial()
+          .optional(),
+        preferred_settings: persistedMultiConstraint(SOCIAL_SETTING_PREFERENCES),
+        barriers: persistedMultiConstraint(SOCIAL_BARRIERS),
+        existing_connection_surface: persistedTextConstraint(1000),
+        repeatable_contexts_available: persistedTextConstraint(1000),
+        safe_people_to_contact: z
+          .object({
+            value: z.enum(SAFE_PEOPLE_TO_CONTACT_OPTIONS).optional(),
+            notes: text(1000),
+            persistence,
+          })
+          .partial()
+          .optional(),
+        dating_intention: z
+          .object({
+            value: z.enum(DATING_INTENTIONS).optional(),
+            persistence,
+          })
+          .partial()
+          .optional(),
+        dating_environment: persistedMultiConstraint(DATING_ENVIRONMENTS),
+        attraction_or_partner_preferences: persistedTextConstraint(1000),
+        consent_and_safety_constraints: z
+          .object({
+            value: text(1000),
+            persistence: z.literal("session_only").optional().default("session_only"),
+          })
+          .partial()
+          .optional(),
+        avoid_contexts: persistedTextConstraint(1000),
+        crisis_or_immediate_safety_risk: z
+          .object({
+            value: z.enum(SOCIAL_CRISIS_RISKS).optional(),
+            persistence: z.literal("session_only").optional().default("session_only"),
+          })
+          .partial()
+          .optional(),
+      })
+      .partial()
+      .optional(),
+    other: persistedTextConstraint(1000),
+  })
+  .partial()
+  .default({});
 
 export const profileInputSchema = z.object({
   personal_profile: text(12000),
@@ -31,6 +182,11 @@ export const profileInputSchema = z.object({
   operating_principles: text(8000),
   remember: text(12000),
   challenge_on: text(8000),
+  context_constraints: contextConstraintsSchema.optional().default({}),
+});
+
+export const contextConstraintsInputSchema = z.object({
+  context_constraints: contextConstraintsSchema,
 });
 
 export const lifeAreaInputSchema = z.object({
@@ -157,6 +313,15 @@ export const intakeAnswerInputSchema = z.object({
   content: z.string().trim().min(1, "Answer is required.").max(8000),
 });
 
+export const generatedInferredContextItemSchema = z.object({
+  label: z.string().trim().min(1).max(160),
+  value: z.string().trim().min(1).max(1000),
+  category: z.enum(INFERRED_CONTEXT_CATEGORIES),
+  sensitivity: z.enum(CONSTRAINT_SENSITIVITIES),
+  persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE),
+  source: z.enum(INFERRED_CONTEXT_SOURCES),
+});
+
 export const interviewerOutputSchema = z.object({
   question: z.string().trim().min(1).max(1200),
   current_stage: z.enum(INTAKE_STAGES),
@@ -164,7 +329,32 @@ export const interviewerOutputSchema = z.object({
   summary_so_far: z.string().trim().max(5000).default(""),
   recommended_urgency: z.enum(SITUATION_URGENCIES).nullable(),
   recommended_mode: z.enum(NEXT_MOVE_MODES).nullable(),
+  inferred_context_items: z.array(generatedInferredContextItemSchema).max(6).default([]),
 });
+
+export const inferredContextItemInputSchema = generatedInferredContextItemSchema
+  .extend({
+    situation_id: nullableId,
+    intake_session_id: nullableId,
+    next_move_plan_id: nullableId,
+  })
+  .partial({
+    situation_id: true,
+    intake_session_id: true,
+    next_move_plan_id: true,
+  });
+
+export const inferredContextItemUpdateSchema = z
+  .object({
+    label: z.string().trim().min(1).max(160).optional(),
+    value: z.string().trim().min(1).max(1000).optional(),
+    category: z.enum(INFERRED_CONTEXT_CATEGORIES).optional(),
+    sensitivity: z.enum(CONSTRAINT_SENSITIVITIES).optional(),
+    persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one field is required.",
+  });
 
 export const nextMoveStepSchema = z.object({
   title: z.string().trim().min(1).max(180),
@@ -175,6 +365,17 @@ export const nextMoveResourceSchema = z.object({
   name: z.string().trim().min(1).max(180),
   why: z.string().trim().min(1).max(1200),
   contact_or_url: z.string().trim().max(500).default(""),
+});
+
+export const planTaskCandidateSchema = z.object({
+  title: z.string().trim().min(1).max(180),
+  details: z.string().trim().min(1).max(2000),
+  candidate_type: z.enum(PLAN_TASK_CANDIDATE_TYPES),
+  importance: z.number().int().min(1).max(5),
+  effort: z.number().int().min(1).max(5),
+  friction_type: z.enum(TASK_FRICTION_TYPES),
+  rank_reason: z.string().trim().min(1).max(900),
+  due_date: optionalDate,
 });
 
 export const highestLeverageMoveSchema = z.object({
@@ -203,6 +404,8 @@ export const nextMovePlanSchema = z.object({
   resources_to_seek: z.array(nextMoveResourceSchema).max(8),
   when_to_get_human_help: z.string().trim().min(1).max(1800),
   safety_boundary: safetyBoundarySchema,
+  inferred_context_items: z.array(generatedInferredContextItemSchema).max(8),
+  task_candidates: z.array(planTaskCandidateSchema).min(1).max(3),
   confidence_level: z.enum(CONFIDENCE_LEVELS),
   assumptions: z.array(z.string().trim().min(1).max(500)).max(8),
   follow_up_questions_if_any: z.array(z.string().trim().min(1).max(500)).max(8),
@@ -213,6 +416,13 @@ export type LifeAreaInput = z.infer<typeof lifeAreaInputSchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type CheckInInput = z.infer<typeof checkInInputSchema>;
+export type ContextConstraintsInput = z.infer<typeof contextConstraintsInputSchema>;
+export type InferredContextItemInput = z.infer<
+  typeof inferredContextItemInputSchema
+>;
+export type InferredContextItemUpdate = z.infer<
+  typeof inferredContextItemUpdateSchema
+>;
 export type SituationInput = z.infer<typeof situationInputSchema>;
 export type SituationUpdate = z.infer<typeof situationUpdateSchema>;
 export type IntakeAnswerInput = z.infer<typeof intakeAnswerInputSchema>;
