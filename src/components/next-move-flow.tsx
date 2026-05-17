@@ -7,6 +7,7 @@ import { ArrowRight, CheckCircle2, CheckSquare, MessageSquare, Plus, Sparkles } 
 import { apiFetch } from "@/lib/client-api";
 import type {
   ContextConstraints,
+  BillingSummary,
   IntakeMessage,
   IntakeSession,
   Situation,
@@ -62,6 +63,7 @@ export function NextMoveFlow() {
   const [generating, setGenerating] = useState(false);
   const [converting, setConverting] = useState(false);
   const [savingConstraints, setSavingConstraints] = useState(false);
+  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,6 +82,14 @@ export function NextMoveFlow() {
     setDetail(await apiFetch<SituationDetail>(`/api/situations/${id}`));
   }, []);
 
+  const loadBillingSummary = useCallback(async () => {
+    try {
+      setBillingSummary(await apiFetch<BillingSummary>("/api/billing/summary"));
+    } catch {
+      setBillingSummary(null);
+    }
+  }, []);
+
   const initialLoad = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -96,6 +106,10 @@ export function NextMoveFlow() {
   useEffect(() => {
     void Promise.resolve().then(initialLoad);
   }, [initialLoad]);
+
+  useEffect(() => {
+    void Promise.resolve().then(loadBillingSummary);
+  }, [loadBillingSummary]);
 
   async function createSituation(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -146,6 +160,10 @@ export function NextMoveFlow() {
 
   async function generatePlan() {
     if (!detail) return;
+    if (isNextMovePlanQuotaExhausted) {
+      setError(nextMovePlanQuotaMessage);
+      return;
+    }
     setGenerating(true);
     setError(null);
     setMessage(null);
@@ -156,8 +174,10 @@ export function NextMoveFlow() {
       );
       await loadDetail(detail.situation.id);
       await loadSituations();
+      await loadBillingSummary();
       setMessage("Next Move Plan generated.");
     } catch (generateError) {
+      await loadBillingSummary();
       setError(
         generateError instanceof Error
           ? generateError.message
@@ -218,6 +238,13 @@ export function NextMoveFlow() {
   const isReadyToGenerate = Boolean(
     detail?.session.is_complete || detail?.session.current_stage === "ready_to_generate",
   );
+  const nextMovePlanUsage = billingSummary?.usage.find(
+    (usage) => usage.usage_type === "next_move_plan",
+  );
+  const isNextMovePlanQuotaExhausted = nextMovePlanUsage?.remaining === 0;
+  const nextMovePlanQuotaMessage =
+    billingSummary?.upgrade_message ??
+    "Your monthly Next Move plan usage is used up.";
   const latestPlanHasTasks = Boolean(
     detail?.latestPlan &&
       detail.tasks.some(
@@ -376,14 +403,23 @@ export function NextMoveFlow() {
                       </div>
                       <p>FlowPath has enough context to turn this into a Next Move Plan.</p>
                     </div>
-                    <Button type="button" onClick={generatePlan} disabled={generating}>
+                    <Button
+                      type="button"
+                      onClick={generatePlan}
+                      disabled={generating || isNextMovePlanQuotaExhausted}
+                    >
                       <Sparkles className="h-4 w-4" />
-                      {generating
+                      {isNextMovePlanQuotaExhausted
+                        ? "Next Move limit reached"
+                        : generating
                         ? "Generating plan..."
                         : detail.latestPlan
                           ? "Generate updated plan"
                           : "Generate plan"}
                     </Button>
+                    {isNextMovePlanQuotaExhausted ? (
+                      <QuotaNotice message={nextMovePlanQuotaMessage} />
+                    ) : null}
                     {generating ? (
                       <GenerationStatus stages={nextMoveGenerationStages} />
                     ) : null}
@@ -404,12 +440,19 @@ export function NextMoveFlow() {
                         type="button"
                         variant="secondary"
                         onClick={generatePlan}
-                        disabled={generating}
+                        disabled={generating || isNextMovePlanQuotaExhausted}
                       >
                         <Sparkles className="h-4 w-4" />
-                        {generating ? "Generating plan..." : "Generate plan now"}
+                        {isNextMovePlanQuotaExhausted
+                          ? "Next Move limit reached"
+                          : generating
+                            ? "Generating plan..."
+                            : "Generate plan now"}
                       </Button>
                     </div>
+                    {isNextMovePlanQuotaExhausted ? (
+                      <QuotaNotice message={nextMovePlanQuotaMessage} />
+                    ) : null}
                     {generating ? (
                       <GenerationStatus stages={nextMoveGenerationStages} />
                     ) : null}
@@ -457,6 +500,22 @@ export function NextMoveFlow() {
         </div>
       </div>
     </div>
+  );
+}
+
+function QuotaNotice({ message }: { message: string }) {
+  return (
+    <Notice tone="warning">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>{message}</span>
+        <Link
+          href="/billing"
+          className="font-medium text-amber-50 underline underline-offset-4"
+        >
+          View billing
+        </Link>
+      </div>
+    </Notice>
   );
 }
 
