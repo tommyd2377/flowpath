@@ -1,5 +1,6 @@
 import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { isQaRequest } from "@/lib/qa-mode";
 import {
   createInferredContextItem,
   listInferredContextItems,
@@ -9,10 +10,12 @@ import { inferredContextItemInputSchema } from "@/lib/schemas";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const user = await requireUser();
-    return dataResponse(await listInferredContextItems(user.id));
+    return dataResponse(
+      await listInferredContextItems(user.id, { isQa: isQaRequest(request) }),
+    );
   } catch (error) {
     return errorResponse(error, "Could not load memory cards.");
   }
@@ -25,6 +28,7 @@ export async function POST(request: Request) {
     return dataResponse(
       await createInferredContextItem(user.id, input, {
         allowSavedMemory: input.source === "manual",
+        isQa: isQaRequest(request),
       }),
       201,
     );

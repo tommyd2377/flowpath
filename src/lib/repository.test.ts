@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 
+import {
+  buildCognitiveMetadata,
+  buildCognitivePlanContext,
+} from "./cognitive-operating-layer";
 import { assertNoProhibitedData, ProhibitedDataError } from "./privacy";
 import type { NextMovePlanInput } from "./schemas";
 
@@ -141,6 +145,14 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
       {
         title: "Write the broad constraint",
         details: "Use a safe range for the pressure and leave out exact balances.",
+        description: "Use a safe range for the pressure and leave out exact balances.",
+        estimated_minutes: 15,
+        friction_level: "low",
+        leverage: "high",
+        why_now: "It is the safest first move from the plan.",
+        success_condition: "A broad next action is written without exact financial details.",
+        category: "money",
+        source_message_id: null,
         candidate_type: "immediate_next_action",
         importance: 5,
         effort: 1,
@@ -151,6 +163,14 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
       {
         title: "Call the bank",
         details: "Ask about account 123456789 and keep the note broad afterward.",
+        description: "Ask about account 123456789 and keep the note broad afterward.",
+        estimated_minutes: 30,
+        friction_level: "medium",
+        leverage: "medium",
+        why_now: "It moves the situation forward after the first action.",
+        success_condition: "The call is made or the next contact window is known.",
+        category: "money",
+        source_message_id: null,
         candidate_type: "follow_up",
         importance: 4,
         effort: 2,
@@ -161,6 +181,14 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
       {
         title: "Review the next stable step",
         details: "Keep future planning at the constraint level.",
+        description: "Keep future planning at the constraint level.",
+        estimated_minutes: 20,
+        friction_level: "medium",
+        leverage: "medium",
+        why_now: "It keeps the plan scoped.",
+        success_condition: "The next stable step is chosen.",
+        category: "money",
+        source_message_id: null,
         candidate_type: "supporting",
         importance: 3,
         effort: 3,
@@ -184,17 +212,52 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
     category: "money",
     urgency: "medium",
   });
+  const profile = await repository.getProfile(1);
+  const cognitiveContext = buildCognitivePlanContext({
+    userMessage: "I am facing a money problem and need one action.",
+    situation,
+    profile,
+    inferredContextItems: [],
+    allowWebSearch: false,
+  });
+  const cognitiveMetadata = buildCognitiveMetadata({
+    context: cognitiveContext,
+    evaluator: null,
+    responseRewritten: false,
+    modelUsedByStage: { generator: "test-model" },
+    promptTokensByStage: { generator: 10 },
+    completionTokensByStage: { generator: 20 },
+    totalEstimatedCost: null,
+    webSearchUsed: false,
+  });
   const storedPlan = await repository.createNextMovePlan(
     1,
     situation.id,
     null,
     plan,
     "test-model",
+    { cognitiveMetadata },
+  );
+  assert.equal(
+    storedPlan.cognitive_metadata?.state_detection.primary_state,
+    "legal_financial_caution_mode",
   );
 
-  const tasks = await repository.createTasksFromNextMovePlan(1, storedPlan.id);
+  const outcome = await repository.createOutcomeRecord(1, {
+    conversation_id: String(situation.id),
+    next_move_plan_id: storedPlan.id,
+    detected_state: cognitiveContext.stateDetection.primary_state,
+    intervention_type: cognitiveContext.intervention.intervention_type,
+    recommended_action: plan.highest_leverage_move_today.title,
+  });
+  assert.equal(outcome.user_outcome, "unknown");
+
+  const conversion = await repository.createTasksFromNextMovePlan(1, storedPlan.id);
+  const tasks = conversion.items.map((item) => item.task);
 
   assert.equal(tasks.length, 3);
+  assert.equal(conversion.created, true);
+  assert.equal(conversion.items.every((item) => item.globalRank > 0), true);
   assert.equal(tasks[1].title, "Call the bank");
   assert.equal(
     tasks[1].notes,
@@ -202,7 +265,17 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
   );
 
   const existingTasks = await repository.createTasksFromNextMovePlan(1, storedPlan.id);
-  assert.equal(existingTasks.length, 3);
+  assert.equal(existingTasks.items.length, 3);
+  assert.equal(existingTasks.alreadyExisted, true);
+
+  const updatedOutcome = await repository.getOutcomeRecord(1, outcome.id);
+  assert.equal(updatedOutcome?.task_ids_created.length, 3);
+
+  const feedback = await repository.updateOutcomeForNextMovePlan(1, storedPlan.id, {
+    user_outcome: "acted",
+    evidence: "I did it",
+  });
+  assert.equal(feedback?.user_outcome, "acted");
 });
 
 test("inferred context items downgrade model-saved memory and can be updated or deleted", async () => {
@@ -304,4 +377,16 @@ test("inferred context creation dedupes repeated notes in the same situation", a
       item.persistence === "session_only",
   );
   assert.equal(matchingItems.length, 1);
+});
+
+test("QA cleanup removes QA outcome records", async () => {
+  const outcome = await repository.createOutcomeRecord(1, {
+    detected_state: "execution_mode",
+    intervention_type: "one_next_action",
+    recommended_action: "Do one QA action",
+    is_qa: true,
+  });
+
+  await repository.clearQaData(1);
+  assert.equal(await repository.getOutcomeRecord(1, outcome.id), null);
 });

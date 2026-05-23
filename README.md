@@ -51,6 +51,10 @@ OPENAI_WEB_SEARCH_ENABLED=true
 
 `OPENAI_MODEL` is optional. If omitted, FlowPath defaults to `gpt-5.5`.
 `OPENAI_WEB_SEARCH_ENABLED` is optional and defaults to `true`.
+Optional role-specific model overrides are available for the cognitive
+operating layer: `OPENAI_CLASSIFIER_MODEL`, `OPENAI_MEMORY_MODEL`,
+`OPENAI_GENERATOR_MODEL`, `OPENAI_ESCALATION_MODEL`, `OPENAI_EVALUATOR_MODEL`,
+and `OPENAI_EXTRACTION_MODEL`.
 
 4. Initialize the database:
 
@@ -124,8 +128,16 @@ Optional:
 
 ```bash
 OPENAI_MODEL=gpt-5.5
+OPENAI_CLASSIFIER_MODEL=
+OPENAI_MEMORY_MODEL=
+OPENAI_GENERATOR_MODEL=
+OPENAI_ESCALATION_MODEL=
+OPENAI_EVALUATOR_MODEL=
+OPENAI_EXTRACTION_MODEL=
+OPENAI_MODEL_PRICING_JSON=
 OPENAI_WEB_SEARCH_ENABLED=true
 OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium
+NEXT_PUBLIC_FLOWPATH_COGNITIVE_DEBUG=false
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 DATABASE_URL=file:./data/flowpath.db
@@ -166,6 +178,14 @@ The main product flow is **Find My Next Move**:
    - `first_30_minutes`
    - `next_24_hours`
    - `next_7_days`
+
+The cognitive operating layer now runs around this flow. It detects the user's
+state, chooses an intervention style, selects compact relevant memory, gates web
+search, evaluates the generated plan once, stores outcome records, and records
+stage-level telemetry. In development, QA mode, or when
+`NEXT_PUBLIC_FLOWPATH_COGNITIVE_DEBUG=true`, plan cards can show a compact "Why
+this response?" panel with operational metadata. See
+[docs/cognitive-operating-layer.md](docs/cognitive-operating-layer.md).
 
 When enabled, FlowPath gives the OpenAI Responses API web search tool to AI plan
 generation across the app. The prompts instruct the model to use search only when

@@ -1,5 +1,6 @@
 type SituationText = {
   title: string;
+  description?: string;
   category: string;
 };
 
@@ -22,14 +23,20 @@ export const immediateDangerCopy =
   "If you or someone else is in immediate danger, call 911 or your local emergency number now.";
 
 export function isSocialConnectionSituation(situation: SituationText) {
-  return socialConnectionPattern.test(`${situation.category} ${situation.title}`);
+  return socialConnectionPattern.test(
+    `${situation.category} ${situation.title} ${situation.description ?? ""}`,
+  );
 }
 
 export function isDatingOrSexualConnectionSituation(situation: SituationText) {
-  return datingPattern.test(`${situation.category} ${situation.title}`);
+  return datingPattern.test(
+    `${situation.category} ${situation.title} ${situation.description ?? ""}`,
+  );
 }
 
 export function isImmediateDangerText(text: string) {
+  if (/\bnot (in )?immediate danger\b/i.test(text)) return false;
+  if (/\bno immediate danger\b/i.test(text)) return false;
   return immediateDangerPattern.test(text);
 }
 

@@ -5,11 +5,24 @@ import { useEffect, useState } from "react";
 
 export const nextMoveGenerationStages = [
   "Reading your situation...",
-  "Reviewing profile and recent context...",
-  "Checking whether current web info is needed...",
-  "Waiting for the model to finish the plan...",
+  "Checking constraints...",
+  "Finding the bottleneck...",
+  "Building the operator path...",
+  "Preparing task candidates...",
   "Still working. Current or local plans can take about a minute...",
-  "Almost there. FlowPath will save the plan when it returns...",
+] as const;
+
+export const intakeGenerationStages = [
+  "Reading your answer...",
+  "Checking constraints...",
+  "Choosing the next useful question...",
+  "Still working...",
+] as const;
+
+export const taskGenerationStages = [
+  "Creating ranked task candidates...",
+  "Checking for duplicates...",
+  "Ranking tasks globally...",
 ] as const;
 
 export const dailyGenerationStages = [
@@ -25,10 +38,29 @@ const generationStageDurationsMs = [6000, 8000, 10000, 18000, 18000, 16000];
 
 export function GenerationStatus({
   stages = nextMoveGenerationStages,
+  startedAt,
+  softWarningSeconds = 20,
+  hardTimeoutSeconds = 90,
+  onContinue,
+  onRetry,
+  onCancel,
+  onEdit,
+  onTimeout,
 }: {
   stages?: readonly string[];
+  startedAt?: number;
+  softWarningSeconds?: number;
+  hardTimeoutSeconds?: number;
+  onContinue?: () => void;
+  onRetry?: () => void;
+  onCancel?: () => void;
+  onEdit?: () => void;
+  onTimeout?: () => void;
 }) {
   const [stageIndex, setStageIndex] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [dismissedWarning, setDismissedWarning] = useState(false);
+  const [didTimeout, setDidTimeout] = useState(false);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(
@@ -39,25 +71,120 @@ export function GenerationStatus({
     return () => window.clearTimeout(timeoutId);
   }, [stageIndex, stages]);
 
+  useEffect(() => {
+    const start = startedAt ?? Date.now();
+    const intervalId = window.setInterval(() => {
+      const nextElapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      setElapsedSeconds(nextElapsed);
+      if (nextElapsed >= hardTimeoutSeconds && !didTimeout) {
+        setDidTimeout(true);
+        onTimeout?.();
+      }
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [didTimeout, hardTimeoutSeconds, onTimeout, startedAt]);
+
   const message = stages[stageIndex] ?? stages[0] ?? "Working...";
+
+  const showSoftWarning =
+    elapsedSeconds >= softWarningSeconds && !dismissedWarning && !didTimeout;
 
   return (
     <div
       aria-live="polite"
-      className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-300"
+      className="grid gap-3 rounded-md border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300"
     >
-      <span className="relative flex h-5 w-5 shrink-0 overflow-hidden rounded bg-slate-950">
-        <Image
-          src="/brand/flowpath-mark-square.png"
-          alt=""
-          width={20}
-          height={20}
-          unoptimized
-          className="h-full w-full object-cover"
-        />
-        <span className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--azure-light)]" />
-      </span>
-      <span>{message}</span>
+      <div className="flex min-h-7 items-center gap-2">
+        <span className="relative flex h-5 w-5 shrink-0 overflow-hidden rounded bg-slate-950">
+          <Image
+            src="/brand/flowpath-mark-square.png"
+            alt=""
+            width={20}
+            height={20}
+            unoptimized
+            className="h-full w-full object-cover"
+          />
+          <span className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--azure-light)]" />
+        </span>
+        <span>{didTimeout ? "This took too long." : message}</span>
+        {elapsedSeconds >= 4 ? (
+          <span className="text-slate-500">Still working... {elapsedSeconds}s</span>
+        ) : null}
+      </div>
+
+      {showSoftWarning ? (
+        <div className="grid gap-2 rounded-md border border-amber-900/70 bg-amber-950/30 p-3 text-amber-100">
+          <div>This is taking longer than usual.</div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDismissedWarning(true);
+                onContinue?.();
+              }}
+              className="rounded-md border border-amber-700 px-2 py-1 text-xs font-medium text-amber-50 hover:bg-amber-900/40"
+            >
+              Continue waiting
+            </button>
+            {onRetry ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="rounded-md border border-amber-700 px-2 py-1 text-xs font-medium text-amber-50 hover:bg-amber-900/40"
+              >
+                Retry
+              </button>
+            ) : null}
+            {onCancel ? (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="rounded-md border border-amber-700 px-2 py-1 text-xs font-medium text-amber-50 hover:bg-amber-900/40"
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {didTimeout ? (
+        <div className="grid gap-2 rounded-md border border-red-900/70 bg-red-950/30 p-3 text-red-100">
+          <div>
+            FlowPath did not get a complete response. You can retry, cancel, or
+            edit the situation and try again.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {onRetry ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="rounded-md border border-red-700 px-2 py-1 text-xs font-medium text-red-50 hover:bg-red-900/40"
+              >
+                Retry
+              </button>
+            ) : null}
+            {onEdit ? (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="rounded-md border border-red-700 px-2 py-1 text-xs font-medium text-red-50 hover:bg-red-900/40"
+              >
+                Edit situation
+              </button>
+            ) : null}
+            {onCancel ? (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="rounded-md border border-red-700 px-2 py-1 text-xs font-medium text-red-50 hover:bg-red-900/40"
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

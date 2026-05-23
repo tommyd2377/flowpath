@@ -5,6 +5,7 @@ import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
 import { Check, Clock3, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
+import { TASK_NOTES_MAX, TASK_TITLE_MAX } from "@/lib/schemas";
 import { TASK_FRICTION_TYPES } from "@/lib/types";
 import type {
   LifeArea,
@@ -16,6 +17,7 @@ import type {
 import {
   Button,
   Card,
+  CharacterCount,
   EmptyState,
   Field,
   Notice,
@@ -478,11 +480,13 @@ function TaskFields({
       <Field label="Title">
         <TextInput
           value={form.title}
+          maxLength={TASK_TITLE_MAX}
           onChange={(event) =>
             setForm((current) => ({ ...current, title: event.target.value }))
           }
           required
         />
+        <CharacterCount value={form.title} max={TASK_TITLE_MAX} />
       </Field>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Life area">
@@ -606,6 +610,7 @@ function TaskFields({
         <Field label="Friction note">
           <TextInput
             value={form.friction_note}
+            maxLength={1200}
             onChange={(event) =>
               setForm((current) => ({
                 ...current,
@@ -614,15 +619,18 @@ function TaskFields({
             }
             placeholder="Why this might stall..."
           />
+          <CharacterCount value={form.friction_note} max={1200} />
         </Field>
       </div>
       <Field label="Notes">
         <TextArea
           value={form.notes}
+          maxLength={TASK_NOTES_MAX}
           onChange={(event) =>
             setForm((current) => ({ ...current, notes: event.target.value }))
           }
         />
+        <CharacterCount value={form.notes} max={TASK_NOTES_MAX} />
       </Field>
     </>
   );

@@ -4,6 +4,8 @@ import {
   AGE_RANGES,
   CONFIDENCE_LEVELS,
   CONSTRAINT_SENSITIVITIES,
+  CONTEXT_USED_CATEGORIES,
+  CONTEXT_USED_SOURCES,
   DOMAIN_ACCESS_LEVELS,
   DATING_ENVIRONMENTS,
   DATING_INTENTIONS,
@@ -35,6 +37,14 @@ import {
   TASK_STATUSES,
   URGENT_FINANCIAL_RISKS,
 } from "./types";
+
+export const SITUATION_TITLE_MAX = 120;
+export const SITUATION_DESCRIPTION_MAX = 8000;
+export const INTAKE_ANSWER_MAX = 8000;
+export const MEMORY_LABEL_MAX = 160;
+export const MEMORY_VALUE_MAX = 1000;
+export const TASK_TITLE_MAX = 220;
+export const TASK_NOTES_MAX = 5000;
 
 const text = (max = 4000) => z.string().trim().max(max).optional().default("");
 const nullableId = z.number().int().positive().nullable().optional().default(null);
@@ -208,7 +218,11 @@ export const projectInputSchema = z.object({
 });
 
 export const taskInputSchema = z.object({
-  title: z.string().trim().min(1, "Title is required.").max(220),
+  title: z
+    .string()
+    .trim()
+    .min(1, "Task title is required.")
+    .max(TASK_TITLE_MAX, `Task title must be ${TASK_TITLE_MAX} characters or fewer.`),
   life_area_id: nullableId,
   project_id: nullableId,
   status: z.enum(TASK_STATUSES).default("open"),
@@ -217,7 +231,7 @@ export const taskInputSchema = z.object({
   friction_type: z.enum(TASK_FRICTION_TYPES).default("none"),
   friction_note: text(1200),
   due_date: optionalDate,
-  notes: text(5000),
+  notes: text(TASK_NOTES_MAX),
 });
 
 export const checkInInputSchema = z.object({
@@ -296,26 +310,76 @@ export const dailyPlanSchema = z.object({
   evening_review_prompt: z.string().min(1).max(1200),
 });
 
-export const situationInputSchema = z.object({
-  title: z.string().trim().min(1, "Title is required.").max(180),
-  category: z.string().trim().min(1).max(120).default("custom"),
-  urgency: z.enum(SITUATION_URGENCIES).default("medium"),
-});
+function situationTitleField() {
+  return z
+    .string()
+    .trim()
+    .max(
+      SITUATION_TITLE_MAX,
+      `Situation title must be ${SITUATION_TITLE_MAX} characters or fewer.`,
+    )
+    .optional()
+    .default("");
+}
+
+function situationDescriptionField() {
+  return z
+    .string()
+    .trim()
+    .max(
+      SITUATION_DESCRIPTION_MAX,
+      `Situation description must be ${SITUATION_DESCRIPTION_MAX} characters or fewer.`,
+    )
+    .optional()
+    .default("");
+}
+
+export const situationInputSchema = z
+  .object({
+    title: situationTitleField(),
+    description: situationDescriptionField(),
+    category: z.string().trim().min(1).max(120).default("custom"),
+    urgency: z.enum(SITUATION_URGENCIES).default("medium"),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.title && !value.description) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["description"],
+        message: "Describe the situation before starting intake.",
+      });
+    }
+  });
 
 export const situationUpdateSchema = z.object({
-  title: z.string().trim().min(1, "Title is required.").max(180),
+  title: z
+    .string()
+    .trim()
+    .min(1, "Situation title is required.")
+    .max(
+      SITUATION_TITLE_MAX,
+      `Situation title must be ${SITUATION_TITLE_MAX} characters or fewer.`,
+    ),
+  description: situationDescriptionField(),
   category: z.string().trim().min(1).max(120).default("custom"),
   urgency: z.enum(SITUATION_URGENCIES).default("medium"),
   status: z.enum(SITUATION_STATUSES).default("active"),
 });
 
 export const intakeAnswerInputSchema = z.object({
-  content: z.string().trim().min(1, "Answer is required.").max(8000),
+  content: z
+    .string()
+    .trim()
+    .min(1, "Answer is required.")
+    .max(INTAKE_ANSWER_MAX, `Answer must be ${INTAKE_ANSWER_MAX} characters or fewer.`),
+  client_message_id: z.string().trim().max(120).optional().default(""),
+  client_generation_id: z.string().trim().max(120).optional().default(""),
+  retry_count: z.number().int().min(0).max(10).optional().default(0),
 });
 
 export const generatedInferredContextItemSchema = z.object({
-  label: z.string().trim().min(1).max(160),
-  value: z.string().trim().min(1).max(1000),
+  label: z.string().trim().min(1).max(MEMORY_LABEL_MAX),
+  value: z.string().trim().min(1).max(MEMORY_VALUE_MAX),
   category: z.enum(INFERRED_CONTEXT_CATEGORIES),
   sensitivity: z.enum(CONSTRAINT_SENSITIVITIES),
   persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE),
@@ -346,8 +410,8 @@ export const inferredContextItemInputSchema = generatedInferredContextItemSchema
 
 export const inferredContextItemUpdateSchema = z
   .object({
-    label: z.string().trim().min(1).max(160).optional(),
-    value: z.string().trim().min(1).max(1000).optional(),
+    label: z.string().trim().min(1).max(MEMORY_LABEL_MAX).optional(),
+    value: z.string().trim().min(1).max(MEMORY_VALUE_MAX).optional(),
     category: z.enum(INFERRED_CONTEXT_CATEGORIES).optional(),
     sensitivity: z.enum(CONSTRAINT_SENSITIVITIES).optional(),
     persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE).optional(),
@@ -361,6 +425,16 @@ export const nextMoveStepSchema = z.object({
   details: z.string().trim().min(1).max(3000),
 });
 
+export const contextUsedItemSchema = z.object({
+  id: z.number().int().positive().nullable().optional().default(null),
+  label: z.string().trim().min(1).max(160),
+  value: z.string().trim().min(1).max(1000),
+  category: z.enum(CONTEXT_USED_CATEGORIES),
+  sensitivity: z.enum(CONSTRAINT_SENSITIVITIES),
+  source: z.enum(CONTEXT_USED_SOURCES),
+  persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE),
+});
+
 export const nextMoveResourceSchema = z.object({
   name: z.string().trim().min(1).max(180),
   why: z.string().trim().min(1).max(1200),
@@ -370,6 +444,14 @@ export const nextMoveResourceSchema = z.object({
 export const planTaskCandidateSchema = z.object({
   title: z.string().trim().min(1).max(180),
   details: z.string().trim().min(1).max(2000),
+  description: z.string().trim().max(2000).optional().default(""),
+  estimated_minutes: z.number().int().min(1).max(480).optional().default(30),
+  friction_level: z.enum(["low", "medium", "high"]).optional().default("medium"),
+  leverage: z.enum(["low", "medium", "high"]).optional().default("medium"),
+  why_now: z.string().trim().max(900).optional().default(""),
+  success_condition: z.string().trim().max(900).optional().default(""),
+  category: z.string().trim().max(120).optional().default("other"),
+  source_message_id: z.string().trim().max(120).nullable().optional().default(null),
   candidate_type: z.enum(PLAN_TASK_CANDIDATE_TYPES),
   importance: z.number().int().min(1).max(5),
   effort: z.number().int().min(1).max(5),
@@ -386,11 +468,16 @@ export const highestLeverageMoveSchema = z.object({
 });
 
 export const nextMovePlanSchema = z.object({
+  generation_mode: z.literal("operator_plan").default("operator_plan"),
   mode: z.enum(NEXT_MOVE_MODES),
+  situation_read: z.string().trim().min(1).max(2500),
+  likely_bottleneck: z.string().trim().min(1).max(1800),
+  key_constraints: z.array(z.string().trim().min(1).max(500)).min(1).max(8),
   situation_summary: z.string().trim().min(1).max(2500),
   core_bottleneck: z.string().trim().min(1).max(1800),
   highest_leverage_move_today: highestLeverageMoveSchema,
   why_this_move: z.string().trim().min(1).max(2000),
+  first_10_minute_action: nextMoveStepSchema,
   first_30_minutes: z.array(nextMoveStepSchema).min(1).max(5),
   next_24_hours: z.array(nextMoveStepSchema).min(1).max(7),
   next_7_days: z.array(nextMoveStepSchema).min(1).max(10),
@@ -404,8 +491,9 @@ export const nextMovePlanSchema = z.object({
   resources_to_seek: z.array(nextMoveResourceSchema).max(8),
   when_to_get_human_help: z.string().trim().min(1).max(1800),
   safety_boundary: safetyBoundarySchema,
+  context_used: z.array(contextUsedItemSchema).min(1).max(8),
   inferred_context_items: z.array(generatedInferredContextItemSchema).max(8),
-  task_candidates: z.array(planTaskCandidateSchema).min(1).max(3),
+  task_candidates: z.array(planTaskCandidateSchema).max(3),
   confidence_level: z.enum(CONFIDENCE_LEVELS),
   assumptions: z.array(z.string().trim().min(1).max(500)).max(8),
   follow_up_questions_if_any: z.array(z.string().trim().min(1).max(500)).max(8),

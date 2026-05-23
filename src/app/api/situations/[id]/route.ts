@@ -7,6 +7,7 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { isQaRequest } from "@/lib/qa-mode";
 import {
   deleteSituation,
   getLatestIntakeSession,
@@ -25,7 +26,7 @@ export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ id: string }> };
 
-async function situationDetail(userId: number, id: number) {
+async function situationDetail(userId: number, id: number, isQa = false) {
   const situation = await getSituation(userId, id);
   if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
   const session =
@@ -33,18 +34,20 @@ async function situationDetail(userId: number, id: number) {
     (await getOrCreateIntakeSession(userId, id));
   const [messages, latestPlan, plans, tasks] = await Promise.all([
     listIntakeMessages(userId, session.id),
-    getLatestNextMovePlan(userId, id),
-    listNextMovePlans(userId, 10, id),
-    listTasksForSituation(userId, id),
+    getLatestNextMovePlan(userId, id, { isQa }),
+    listNextMovePlans(userId, 10, id, { isQa }),
+    listTasksForSituation(userId, id, { isQa }),
   ]);
   return { situation, session, messages, latestPlan, plans, tasks };
 }
 
-export async function GET(_request: Request, context: Context) {
+export async function GET(request: Request, context: Context) {
   try {
     const user = await requireUser();
     const { id: idParam } = await context.params;
-    return dataResponse(await situationDetail(user.id, parseId(idParam)));
+    return dataResponse(
+      await situationDetail(user.id, parseId(idParam), isQaRequest(request)),
+    );
   } catch (error) {
     return errorResponse(error, "Could not load situation.");
   }
@@ -58,7 +61,7 @@ export async function PUT(request: Request, context: Context) {
     const input = situationUpdateSchema.parse(await readJson(request));
     const situation = await updateSituation(user.id, id, input);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
-    return dataResponse(await situationDetail(user.id, id));
+    return dataResponse(await situationDetail(user.id, id, isQaRequest(request)));
   } catch (error) {
     return errorResponse(error, "Could not update situation.");
   }

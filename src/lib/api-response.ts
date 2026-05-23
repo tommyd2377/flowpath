@@ -39,11 +39,23 @@ export function errorResponse(error: unknown, fallback = "Something went wrong."
   }
 
   if (error instanceof ZodError) {
+    const issues = error.issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message,
+      code: issue.code,
+      maximum: "maximum" in issue ? issue.maximum : undefined,
+    }));
+    const details = issues.map((issue) => {
+      const field = issue.path ? `${issue.path}: ` : "";
+      return `${field}${issue.message}`;
+    });
+
     return NextResponse.json(
       {
-        error: "Please check the highlighted fields.",
+        error: details[0] ?? "Please check the highlighted fields.",
         code: "validation_error",
-        details: error.issues.map((issue) => issue.message).join(" "),
+        details: details.join(" "),
+        issues,
       },
       { status: 400 },
     );

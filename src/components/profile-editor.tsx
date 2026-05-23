@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { Check, Pencil, Save, Trash2, X } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
+import { MEMORY_LABEL_MAX, MEMORY_VALUE_MAX } from "@/lib/schemas";
 import type {
   ContextConstraints,
   InferredContextCategory,
@@ -16,6 +17,7 @@ import { ContextConstraintsEditor } from "./context-constraints-editor";
 import {
   Button,
   Card,
+  CharacterCount,
   EmptyState,
   Field,
   Notice,
@@ -564,18 +566,22 @@ function MemoryItemCard({
           <Field label="Label">
             <TextInput
               value={draft.label}
+              maxLength={MEMORY_LABEL_MAX}
               onChange={(event) =>
                 setEditingItem({ ...draft, label: event.target.value })
               }
             />
+            <CharacterCount value={draft.label} max={MEMORY_LABEL_MAX} />
           </Field>
           <Field label="Value">
             <TextArea
               value={draft.value}
+              maxLength={MEMORY_VALUE_MAX}
               onChange={(event) =>
                 setEditingItem({ ...draft, value: event.target.value })
               }
             />
+            <CharacterCount value={draft.value} max={MEMORY_VALUE_MAX} />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Category">

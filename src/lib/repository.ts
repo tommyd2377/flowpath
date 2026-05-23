@@ -1,9 +1,15 @@
+import { randomUUID } from "node:crypto";
+
 import { all, first, insert, run } from "./db";
 import type {
   CheckIn,
   ContextConstraints,
+  ContextUsedItem,
   DailyPlan,
   GeneratedInferredContextItem,
+  GenerationEvent,
+  GenerationStatus,
+  GenerationType,
   HighestLeverageMove,
   InferredContextItem,
   InferredContextPersistence,
@@ -12,6 +18,7 @@ import type {
   LifeArea,
   LocalRealityScout,
   OperatorInsight,
+  OutcomeRecord,
   PlanTaskCandidate,
   Profile,
   Project,
@@ -23,6 +30,7 @@ import type {
   StoredNextMovePlan,
   Task,
 } from "./types";
+import type { CognitiveMetadata, OutcomeValue } from "./cognitive-schemas";
 import type {
   CheckInInput,
   InferredContextItemInput,
@@ -104,12 +112,69 @@ const defaultSafetyBoundary: SafetyBoundary = {
 
 const defaultTaskCandidates: PlanTaskCandidate[] = [];
 const defaultInferredContextItems: GeneratedInferredContextItem[] = [];
+const defaultCognitiveMetadata: CognitiveMetadata | null = null;
+const defaultFirst10MinuteAction = {
+  title: "Take the smallest first step",
+  details: "Do the first useful 10-minute action from this plan.",
+};
+const defaultContextUsed: ContextUsedItem[] = [];
+
+function normalizePlanTaskCandidate(candidate: Partial<PlanTaskCandidate>): PlanTaskCandidate {
+  const importance = candidate.importance ?? 3;
+  const effort = candidate.effort ?? 3;
+  const details = candidate.details ?? candidate.description ?? "";
+  return {
+    title: candidate.title ?? "Take the next useful action",
+    details,
+    description: candidate.description || details,
+    estimated_minutes: candidate.estimated_minutes ?? Math.min(480, Math.max(10, effort * 15)),
+    friction_level:
+      candidate.friction_level ??
+      (effort >= 4 ||
+      candidate.friction_type === "scary" ||
+      candidate.friction_type === "blocked"
+        ? "high"
+        : effort <= 2
+          ? "low"
+          : "medium"),
+    leverage:
+      candidate.leverage ??
+      (importance >= 5 ? "high" : importance >= 3 ? "medium" : "low"),
+    why_now: candidate.why_now || candidate.rank_reason || "This is the next useful action from the plan.",
+    success_condition:
+      candidate.success_condition || "The action is completed and the next blocker is clearer.",
+    category: candidate.category || "other",
+    source_message_id: candidate.source_message_id ?? null,
+    candidate_type: candidate.candidate_type ?? "supporting",
+    importance,
+    effort,
+    friction_type: candidate.friction_type ?? "none",
+    rank_reason: candidate.rank_reason ?? "Best balance of leverage and friction.",
+    due_date: candidate.due_date ?? null,
+  };
+}
+
+function normalizePlanTaskCandidates(value: unknown): PlanTaskCandidate[] {
+  if (!Array.isArray(value)) return defaultTaskCandidates;
+  return value.map((candidate) =>
+    normalizePlanTaskCandidate(
+      candidate && typeof candidate === "object"
+        ? (candidate as Partial<PlanTaskCandidate>)
+        : {},
+    ),
+  );
+}
 
 type UserScopedRow = { user_id?: unknown };
+type QaScopedRow = { is_qa?: unknown };
 
 const emptyContextConstraints: ContextConstraints = {};
 type IntakeSessionRow = Omit<IntakeSession, "is_complete" | "context_constraints"> &
-  UserScopedRow & { is_complete: number; context_constraints_json?: string | null };
+  UserScopedRow & {
+    is_complete: number;
+    is_qa?: number;
+    context_constraints_json?: string | null;
+  };
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
@@ -118,6 +183,13 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function deriveSituationTitle(title: string | undefined, description: string) {
+  const candidate = (title || description).trim().replace(/\s+/g, " ");
+  if (!candidate) return "Untitled situation";
+  if (candidate.length <= 120) return candidate;
+  return `${candidate.slice(0, 117).trimEnd()}...`;
 }
 
 type ProfileRow = Omit<Profile, "context_constraints"> &
@@ -134,7 +206,7 @@ function rowToProfile(row: ProfileRow): Profile {
   };
 }
 
-type InferredContextItemRow = InferredContextItem & UserScopedRow;
+type InferredContextItemRow = InferredContextItem & UserScopedRow & QaScopedRow;
 
 type SanitizedInferredContextItem = Pick<
   InferredContextItem,
@@ -234,6 +306,7 @@ async function findDuplicateInferredContextItem(
   userId: number,
   candidate: SanitizedInferredContextItem,
   refs: InferredContextRefs,
+  isQa = false,
 ) {
   const situationId = refs.situation_id ?? null;
   const situationClause =
@@ -255,6 +328,7 @@ async function findDuplicateInferredContextItem(
     WHERE inferred_context_items.user_id = ?
       AND inferred_context_items.category = ?
       AND inferred_context_items.persistence = ?
+      ${qaClause("inferred_context_items", isQa)}
       AND ${situationClause}
     ORDER BY inferred_context_items.updated_at DESC`,
     args,
@@ -303,6 +377,44 @@ function withoutUserId<T extends UserScopedRow>(row: T): Omit<T, "user_id"> {
   const safeRow = { ...row };
   delete safeRow.user_id;
   return safeRow;
+}
+
+function rowBoolean(value: unknown) {
+  return value === true || value === 1;
+}
+
+function qaClause(alias: string, isQa?: boolean) {
+  return `AND ${alias}.is_qa = ${isQa ? 1 : 0}`;
+}
+
+async function inferQaForRefs(
+  userId: number,
+  refs: InferredContextRefs,
+  explicit?: boolean,
+) {
+  if (typeof explicit === "boolean") return explicit;
+  if (refs.next_move_plan_id) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM next_move_plans WHERE id = ? AND user_id = ?",
+      [refs.next_move_plan_id, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  if (refs.intake_session_id) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM intake_sessions WHERE id = ? AND user_id = ?",
+      [refs.intake_session_id, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  if (refs.situation_id) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM situations WHERE id = ? AND user_id = ?",
+      [refs.situation_id, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  return false;
 }
 
 function withoutUserIds<T extends UserScopedRow>(rows: T[]): Omit<T, "user_id">[] {
@@ -400,6 +512,7 @@ export async function updateProfile(
 
 export async function listInferredContextItems(
   userId: number,
+  { isQa = false }: { isQa?: boolean } = {},
 ): Promise<InferredContextItem[]> {
   const rows = await all<InferredContextItemRow>(
     `SELECT
@@ -410,6 +523,7 @@ export async function listInferredContextItems(
       ON situations.id = inferred_context_items.situation_id
       AND situations.user_id = inferred_context_items.user_id
     WHERE inferred_context_items.user_id = ?
+      ${qaClause("inferred_context_items", isQa)}
     ORDER BY
       CASE inferred_context_items.persistence
         WHEN 'proposed_memory' THEN 1
@@ -444,7 +558,7 @@ export async function getInferredContextItem(
 export async function createInferredContextItem(
   userId: number,
   input: InferredContextItemInput,
-  options: { allowSavedMemory?: boolean } = {},
+  options: { allowSavedMemory?: boolean; isQa?: boolean } = {},
 ): Promise<InferredContextItem> {
   await ensureOwnedRecord("situations", userId, input.situation_id ?? null);
   await ensureOwnedRecord("intake_sessions", userId, input.intake_session_id ?? null);
@@ -459,7 +573,8 @@ export async function createInferredContextItem(
     intake_session_id: input.intake_session_id ?? null,
     next_move_plan_id: input.next_move_plan_id ?? null,
   };
-  const duplicate = await findDuplicateInferredContextItem(userId, safe, refs);
+  const isQa = await inferQaForRefs(userId, refs, options.isQa);
+  const duplicate = await findDuplicateInferredContextItem(userId, safe, refs, isQa);
   if (duplicate) {
     return updateDuplicateInferredContextItem(userId, duplicate, safe, refs);
   }
@@ -467,8 +582,8 @@ export async function createInferredContextItem(
   const id = await insert(
     `INSERT INTO inferred_context_items (
       user_id, label, value, category, sensitivity, persistence, source,
-      situation_id, intake_session_id, next_move_plan_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      situation_id, intake_session_id, next_move_plan_id, is_qa, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       safe.label,
@@ -480,6 +595,7 @@ export async function createInferredContextItem(
       refs.situation_id,
       refs.intake_session_id,
       refs.next_move_plan_id,
+      isQa ? 1 : 0,
       now,
       now,
     ],
@@ -497,6 +613,7 @@ export async function createInferredContextItems(
     intake_session_id?: number | null;
     next_move_plan_id?: number | null;
     source?: InferredContextItem["source"];
+    isQa?: boolean;
   },
 ): Promise<InferredContextItem[]> {
   const created: InferredContextItem[] = [];
@@ -511,7 +628,7 @@ export async function createInferredContextItems(
           intake_session_id: refs.intake_session_id ?? null,
           next_move_plan_id: refs.next_move_plan_id ?? null,
         },
-        { allowSavedMemory: false },
+        { allowSavedMemory: false, isQa: refs.isQa },
       ),
     );
   }
@@ -759,7 +876,10 @@ export async function deleteProject(userId: number, id: number) {
   return result.rowsAffected > 0;
 }
 
-export async function listTasks(userId: number): Promise<Task[]> {
+export async function listTasks(
+  userId: number,
+  { isQa = false }: { isQa?: boolean } = {},
+): Promise<Task[]> {
   const rows = await all<Task & UserScopedRow>(
     `SELECT
       tasks.*,
@@ -778,6 +898,7 @@ export async function listTasks(userId: number): Promise<Task[]> {
       ON situations.id = tasks.situation_id
       AND situations.user_id = tasks.user_id
     WHERE tasks.user_id = ?
+      ${qaClause("tasks", isQa)}
     ORDER BY
       CASE tasks.status WHEN 'open' THEN 1 WHEN 'ignored' THEN 2 ELSE 3 END,
       tasks.importance DESC,
@@ -812,7 +933,11 @@ export async function getTask(userId: number, id: number): Promise<Task | null> 
   return row ? rankTasks([withoutUserId(row) as Task])[0] : null;
 }
 
-export async function createTask(userId: number, input: TaskInput): Promise<Task> {
+export async function createTask(
+  userId: number,
+  input: TaskInput,
+  { isQa = false }: { isQa?: boolean } = {},
+): Promise<Task> {
   assertSafeTextFields(input);
   await ensureOwnedRecord("life_areas", userId, input.life_area_id);
   await ensureOwnedRecord("projects", userId, input.project_id);
@@ -821,7 +946,8 @@ export async function createTask(userId: number, input: TaskInput): Promise<Task
     `INSERT INTO tasks (
       user_id, title, life_area_id, project_id, status, importance, effort,
       friction_type, friction_note, due_date, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      , is_qa
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       input.title,
@@ -836,6 +962,7 @@ export async function createTask(userId: number, input: TaskInput): Promise<Task
       input.notes,
       now,
       now,
+      isQa ? 1 : 0,
     ],
   );
   const created = await getTask(userId, id);
@@ -1074,6 +1201,7 @@ function rowToIntakeSession(
   return {
     ...session,
     is_complete: Boolean(row.is_complete),
+    is_qa: rowBoolean(row.is_qa),
     context_constraints: parseJson(context_constraints_json, emptyContextConstraints),
   };
 }
@@ -1081,6 +1209,7 @@ function rowToIntakeSession(
 export async function listSituations(
   userId: number,
   status?: string,
+  { isQa = false }: { isQa?: boolean } = {},
 ): Promise<Situation[]> {
   const statusWhere = status ? "AND situations.status = ?" : "";
   const rows = await all<Situation & UserScopedRow>(
@@ -1107,6 +1236,7 @@ export async function listSituations(
       LIMIT 1
     )
     WHERE situations.user_id = ?
+    ${qaClause("situations", isQa)}
     ${statusWhere}
     ORDER BY
       CASE situations.status WHEN 'active' THEN 1 WHEN 'resolved' THEN 2 ELSE 3 END,
@@ -1153,13 +1283,26 @@ export async function getSituation(
 export async function createSituation(
   userId: number,
   input: SituationInput,
+  { isQa = false }: { isQa?: boolean } = {},
 ): Promise<Situation> {
   assertSafeTextFields(input);
   const now = nowIso();
+  const description = input.description || input.title;
+  const derivedTitle = deriveSituationTitle(input.title, description);
   const id = await insert(
-    `INSERT INTO situations (user_id, title, category, status, urgency, created_at, updated_at)
-    VALUES (?, ?, ?, 'active', ?, ?, ?)`,
-    [userId, input.title, input.category, input.urgency, now, now],
+    `INSERT INTO situations (
+      user_id, title, description, category, status, urgency, is_qa, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+    [
+      userId,
+      derivedTitle,
+      description,
+      input.category,
+      input.urgency,
+      isQa ? 1 : 0,
+      now,
+      now,
+    ],
   );
   const situation = await getSituation(userId, id);
   if (!situation) throw new Error("Created situation could not be loaded.");
@@ -1175,12 +1318,22 @@ export async function updateSituation(
   await run(
     `UPDATE situations SET
       title = ?,
+      description = ?,
       category = ?,
       urgency = ?,
       status = ?,
       updated_at = ?
     WHERE id = ? AND user_id = ?`,
-    [input.title, input.category, input.urgency, input.status, nowIso(), id, userId],
+    [
+      input.title,
+      input.description,
+      input.category,
+      input.urgency,
+      input.status,
+      nowIso(),
+      id,
+      userId,
+    ],
   );
   return getSituation(userId, id);
 }
@@ -1230,11 +1383,13 @@ export async function getOrCreateIntakeSession(
   if (existing) return rowToIntakeSession(existing);
 
   const now = nowIso();
+  const situation = await getSituation(userId, situationId);
+  const isQa = Boolean(situation?.is_qa);
   const id = await insert(
     `INSERT INTO intake_sessions (
-      user_id, situation_id, current_stage, is_complete, summary_so_far, created_at, updated_at
-    ) VALUES (?, ?, 'understanding_goals', 0, '', ?, ?)`,
-    [userId, situationId, now, now],
+      user_id, situation_id, current_stage, is_complete, summary_so_far, is_qa, created_at, updated_at
+    ) VALUES (?, ?, 'understanding_goals', 0, '', ?, ?, ?)`,
+    [userId, situationId, isQa ? 1 : 0, now, now],
   );
   const created = await getIntakeSession(userId, id);
   if (!created) throw new Error("Created intake session could not be loaded.");
@@ -1354,7 +1509,7 @@ export async function listIntakeMessages(
   sessionId: number,
 ): Promise<IntakeMessage[]> {
   return all<IntakeMessage>(
-    `SELECT id, session_id, role, content, created_at
+    `SELECT id, session_id, role, content, client_message_id, is_qa, created_at
     FROM intake_messages
     WHERE user_id = ? AND session_id = ?
     ORDER BY created_at ASC, id ASC`,
@@ -1367,16 +1522,30 @@ export async function addIntakeMessage(
   sessionId: number,
   role: IntakeMessage["role"],
   content: string,
+  options: { clientMessageId?: string | null; isQa?: boolean } = {},
 ): Promise<IntakeMessage> {
   assertSafeTextFields({ content });
   await ensureOwnedRecord("intake_sessions", userId, sessionId);
+  const clientMessageId = options.clientMessageId?.trim() || null;
+  if (clientMessageId && role === "user") {
+    const existing = await first<IntakeMessage>(
+      `SELECT id, session_id, role, content, client_message_id, is_qa, created_at
+      FROM intake_messages
+      WHERE user_id = ? AND client_message_id = ?`,
+      [userId, clientMessageId],
+    );
+    if (existing) return existing;
+  }
+  const session = await getIntakeSession(userId, sessionId);
+  const isQa = options.isQa ?? Boolean(session?.is_qa);
   const id = await insert(
-    `INSERT INTO intake_messages (user_id, session_id, role, content, created_at)
-    VALUES (?, ?, ?, ?, ?)`,
-    [userId, sessionId, role, content, nowIso()],
+    `INSERT INTO intake_messages (
+      user_id, session_id, role, content, client_message_id, is_qa, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [userId, sessionId, role, content, clientMessageId, isQa ? 1 : 0, nowIso()],
   );
   const message = await first<IntakeMessage>(
-    `SELECT id, session_id, role, content, created_at
+    `SELECT id, session_id, role, content, client_message_id, is_qa, created_at
     FROM intake_messages WHERE id = ? AND user_id = ?`,
     [id, userId],
   );
@@ -1386,7 +1555,9 @@ export async function addIntakeMessage(
 
 type NextMovePlanRow = Omit<
   StoredNextMovePlan,
+  | "key_constraints"
   | "highest_leverage_move_today"
+  | "first_10_minute_action"
   | "first_30_minutes"
   | "next_24_hours"
   | "next_7_days"
@@ -1397,12 +1568,15 @@ type NextMovePlanRow = Omit<
   | "local_reality_scout"
   | "resources_to_seek"
   | "safety_boundary"
+  | "context_used"
   | "inferred_context_items"
   | "task_candidates"
+  | "cognitive_metadata"
   | "assumptions"
   | "follow_up_questions_if_any"
 > & {
   highest_leverage_move_json: string;
+  first_10_minute_action_json?: string | null;
   first_30_minutes_json: string;
   next_24_hours_json: string;
   next_7_days_json: string;
@@ -1413,10 +1587,17 @@ type NextMovePlanRow = Omit<
   local_reality_scout_json?: string | null;
   resources_to_seek_json: string;
   safety_boundary_json?: string | null;
+  context_used_json?: string | null;
   inferred_context_items_json?: string | null;
   task_candidates_json?: string | null;
+  cognitive_metadata_json?: string | null;
+  generation_mode?: string | null;
+  situation_read?: string | null;
+  likely_bottleneck?: string | null;
+  key_constraints_json?: string | null;
   assumptions_json: string;
   follow_up_questions_json: string;
+  is_qa?: number;
 };
 
 function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
@@ -1432,11 +1613,19 @@ function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
     situation_id: row.situation_id,
     intake_session_id: row.intake_session_id,
     model: row.model,
+    generation_mode: "operator_plan",
     mode: row.mode,
+    situation_read: row.situation_read || row.situation_summary,
+    likely_bottleneck: row.likely_bottleneck || row.core_bottleneck,
+    key_constraints: parseJson(row.key_constraints_json, []),
     situation_summary: row.situation_summary,
     core_bottleneck: row.core_bottleneck,
     highest_leverage_move_today: parseJson(row.highest_leverage_move_json, defaultMove),
     why_this_move: row.why_this_move,
+    first_10_minute_action: parseJson(
+      row.first_10_minute_action_json,
+      defaultFirst10MinuteAction,
+    ),
     first_30_minutes: parseJson(row.first_30_minutes_json, []),
     next_24_hours: parseJson(row.next_24_hours_json, []),
     next_7_days: parseJson(row.next_7_days_json, []),
@@ -1460,18 +1649,23 @@ function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
     resources_to_seek: parseJson(row.resources_to_seek_json, []),
     when_to_get_human_help: row.when_to_get_human_help,
     safety_boundary: parseJson(row.safety_boundary_json, defaultSafetyBoundary),
+    context_used: parseJson(row.context_used_json, defaultContextUsed),
     inferred_context_items: parseJson(
       row.inferred_context_items_json,
       defaultInferredContextItems,
     ),
-    task_candidates: parseJson(
-      row.task_candidates_json,
-      defaultTaskCandidates,
+    task_candidates: normalizePlanTaskCandidates(
+      parseJson(row.task_candidates_json, defaultTaskCandidates),
     ),
     confidence_level: row.confidence_level,
     assumptions: parseJson(row.assumptions_json, []),
     follow_up_questions_if_any: parseJson(row.follow_up_questions_json, []),
+    cognitive_metadata: parseJson(
+      row.cognitive_metadata_json,
+      defaultCognitiveMetadata,
+    ),
     raw_json: row.raw_json,
+    is_qa: rowBoolean(row.is_qa),
     created_at: row.created_at,
   };
 }
@@ -1482,30 +1676,68 @@ export async function createNextMovePlan(
   sessionId: number | null,
   plan: NextMovePlanInput,
   model: string,
+  options: {
+    clientGenerationId?: string | null;
+    cognitiveMetadata?: CognitiveMetadata | null;
+    isQa?: boolean;
+  } = {},
 ): Promise<StoredNextMovePlan> {
   await ensureOwnedRecord("situations", userId, situationId);
   await ensureOwnedRecord("intake_sessions", userId, sessionId);
+  const situation = await getSituation(userId, situationId);
+  const isQa = options.isQa ?? Boolean(situation?.is_qa);
+  const compatiblePlan = plan as Partial<NextMovePlanInput> & NextMovePlanInput;
+  const generationMode = compatiblePlan.generation_mode ?? "operator_plan";
+  const situationRead = compatiblePlan.situation_read ?? plan.situation_summary;
+  const likelyBottleneck = compatiblePlan.likely_bottleneck ?? plan.core_bottleneck;
+  const keyConstraints =
+    compatiblePlan.key_constraints?.length
+      ? compatiblePlan.key_constraints
+      : plan.recommendation_basis.slice(0, 3).map((basis) => basis.signal);
+  const first10MinuteAction =
+    compatiblePlan.first_10_minute_action ??
+    plan.first_30_minutes[0] ??
+    defaultFirst10MinuteAction;
+  const contextUsed =
+    compatiblePlan.context_used?.length
+      ? compatiblePlan.context_used
+      : plan.inferred_context_items.slice(0, 6).map((item) => ({
+          id: null,
+          label: item.label,
+          value: item.value,
+          category: "other" as const,
+          sensitivity: item.sensitivity,
+          source: "inferred" as const,
+          persistence: item.persistence,
+        }));
   const id = await insert(
     `INSERT INTO next_move_plans (
-      user_id, situation_id, intake_session_id, model, mode, situation_summary, core_bottleneck,
-      highest_leverage_move_json, why_this_move, first_30_minutes_json,
+      user_id, situation_id, intake_session_id, model, generation_mode, mode,
+      situation_read, likely_bottleneck, key_constraints_json,
+      situation_summary, core_bottleneck,
+      highest_leverage_move_json, why_this_move, first_10_minute_action_json, first_30_minutes_json,
       next_24_hours_json, next_7_days_json, what_not_to_do_json, likely_trap,
       recommendation_basis_json, restraint_guidance_json, friction_pattern,
       operator_insight_json, local_reality_scout_json, resources_to_seek_json, when_to_get_human_help,
-      safety_boundary_json, inferred_context_items_json, task_candidates_json,
+      safety_boundary_json, context_used_json, inferred_context_items_json, task_candidates_json,
       confidence_level, assumptions_json,
-      follow_up_questions_json, raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      follow_up_questions_json, cognitive_metadata_json, raw_json, client_generation_id, is_qa, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       situationId,
       sessionId,
       model,
+      generationMode,
       plan.mode,
+      situationRead,
+      likelyBottleneck,
+      JSON.stringify(keyConstraints),
       plan.situation_summary,
       plan.core_bottleneck,
       JSON.stringify(plan.highest_leverage_move_today),
       plan.why_this_move,
+      JSON.stringify(first10MinuteAction),
       JSON.stringify(plan.first_30_minutes),
       JSON.stringify(plan.next_24_hours),
       JSON.stringify(plan.next_7_days),
@@ -1519,12 +1751,16 @@ export async function createNextMovePlan(
       JSON.stringify(plan.resources_to_seek),
       plan.when_to_get_human_help,
       JSON.stringify(plan.safety_boundary),
+      JSON.stringify(contextUsed),
       JSON.stringify(plan.inferred_context_items),
       JSON.stringify(plan.task_candidates),
       plan.confidence_level,
       JSON.stringify(plan.assumptions),
       JSON.stringify(plan.follow_up_questions_if_any),
+      options.cognitiveMetadata ? JSON.stringify(options.cognitiveMetadata) : null,
       JSON.stringify(plan),
+      options.clientGenerationId ?? null,
+      isQa ? 1 : 0,
       nowIso(),
     ],
   );
@@ -1547,10 +1783,12 @@ export async function getNextMovePlan(
 export async function getLatestNextMovePlan(
   userId: number,
   situationId?: number,
+  { isQa = false }: { isQa?: boolean } = {},
 ): Promise<StoredNextMovePlan | null> {
   const row = await first<Parameters<typeof rowToNextMovePlan>[0]>(
     `SELECT * FROM next_move_plans
     WHERE user_id = ?
+    ${qaClause("next_move_plans", isQa)}
     ${situationId ? "AND situation_id = ?" : ""}
     ORDER BY created_at DESC
     LIMIT 1`,
@@ -1563,10 +1801,12 @@ export async function listNextMovePlans(
   userId: number,
   limit = 20,
   situationId?: number,
+  { isQa = false }: { isQa?: boolean } = {},
 ): Promise<StoredNextMovePlan[]> {
   const rows = await all<Parameters<typeof rowToNextMovePlan>[0]>(
     `SELECT * FROM next_move_plans
     WHERE user_id = ?
+    ${qaClause("next_move_plans", isQa)}
     ${situationId ? "AND situation_id = ?" : ""}
     ORDER BY created_at DESC
     LIMIT ?`,
@@ -1578,6 +1818,7 @@ export async function listNextMovePlans(
 export async function listTasksForSituation(
   userId: number,
   situationId: number,
+  { isQa = false }: { isQa?: boolean } = {},
 ): Promise<Task[]> {
   const rows = await all<Task & UserScopedRow>(
     `SELECT
@@ -1597,6 +1838,7 @@ export async function listTasksForSituation(
       ON situations.id = tasks.situation_id
       AND situations.user_id = tasks.user_id
     WHERE tasks.user_id = ? AND tasks.situation_id = ?
+      ${qaClause("tasks", isQa)}
     ORDER BY
       CASE tasks.status WHEN 'open' THEN 1 WHEN 'ignored' THEN 2 ELSE 3 END,
       tasks.importance DESC,
@@ -1606,10 +1848,23 @@ export async function listTasksForSituation(
   return rankTasks(withoutUserIds(rows) as Task[]);
 }
 
+export type TaskConversionResult = {
+  created: boolean;
+  alreadyExisted: boolean;
+  items: Array<{ task: Task; globalRank: number }>;
+};
+
+function globalRankItems(globalTasks: Task[], planTasks: Task[]) {
+  const planTaskIds = new Set(planTasks.map((task) => task.id));
+  return globalTasks
+    .map((task, index) => ({ task, globalRank: index + 1 }))
+    .filter((item) => planTaskIds.has(item.task.id));
+}
+
 export async function createTasksFromNextMovePlan(
   userId: number,
   planId: number,
-): Promise<Task[]> {
+): Promise<TaskConversionResult> {
   const existing = await all<Task & UserScopedRow>(
     `SELECT
       tasks.*,
@@ -1631,10 +1886,25 @@ export async function createTasksFromNextMovePlan(
     ORDER BY created_at ASC`,
     [userId, planId],
   );
-  if (existing.length > 0) return rankTasks(withoutUserIds(existing) as Task[]);
+  const existingTasks = rankTasks(withoutUserIds(existing) as Task[]);
 
   const plan = await getNextMovePlan(userId, planId);
   if (!plan) throw new Error("Plan not found.");
+  const isQa = Boolean(plan.is_qa);
+
+  if (existingTasks.length > 0) {
+    const globalTasks = await listTasks(userId, { isQa });
+    await attachTaskIdsToOutcomeForPlan(
+      userId,
+      planId,
+      existingTasks.map((task) => task.id),
+    );
+    return {
+      created: false,
+      alreadyExisted: true,
+      items: globalRankItems(globalTasks, existingTasks),
+    };
+  }
 
   const now = nowIso();
   const taskRows =
@@ -1680,8 +1950,8 @@ export async function createTasksFromNextMovePlan(
       `INSERT INTO tasks (
         user_id, title, life_area_id, project_id, situation_id, source_next_move_plan_id,
         source_plan_section, status, importance, effort, friction_type, due_date,
-        notes, created_at, updated_at
-      ) VALUES (?, ?, NULL, NULL, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
+        notes, is_qa, created_at, updated_at
+      ) VALUES (?, ?, NULL, NULL, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
         task.title,
@@ -1693,11 +1963,444 @@ export async function createTasksFromNextMovePlan(
         task.friction_type,
         task.due_date,
         task.details,
+        isQa ? 1 : 0,
         now,
         now,
       ],
     );
   }
 
-  return createTasksFromNextMovePlan(userId, planId);
+  const created = await all<Task & UserScopedRow>(
+    `SELECT
+      tasks.*,
+      life_areas.name AS life_area_name,
+      projects.name AS project_name,
+      situations.title AS situation_title,
+      situations.urgency AS situation_urgency
+    FROM tasks
+    LEFT JOIN life_areas
+      ON life_areas.id = tasks.life_area_id
+      AND life_areas.user_id = tasks.user_id
+    LEFT JOIN projects
+      ON projects.id = tasks.project_id
+      AND projects.user_id = tasks.user_id
+    LEFT JOIN situations
+      ON situations.id = tasks.situation_id
+      AND situations.user_id = tasks.user_id
+    WHERE tasks.user_id = ? AND source_next_move_plan_id = ?
+    ORDER BY created_at ASC`,
+    [userId, planId],
+  );
+  const createdTasks = rankTasks(withoutUserIds(created) as Task[]);
+  const globalTasks = await listTasks(userId, { isQa });
+  await attachTaskIdsToOutcomeForPlan(
+    userId,
+    planId,
+    createdTasks.map((task) => task.id),
+  );
+  return {
+    created: true,
+    alreadyExisted: false,
+    items: globalRankItems(globalTasks, createdTasks),
+  };
+}
+
+type OutcomeRecordRow = Omit<
+  OutcomeRecord,
+  "task_ids_created" | "is_qa"
+> &
+  UserScopedRow & {
+    task_ids_created_json: string;
+    is_qa?: number;
+  };
+
+function rowToOutcomeRecord(row: OutcomeRecordRow): OutcomeRecord {
+  const safeRow = withoutUserId(row);
+  const { task_ids_created_json, ...record } = safeRow;
+  return {
+    ...record,
+    task_ids_created: parseJson(task_ids_created_json, []),
+    is_qa: rowBoolean(row.is_qa),
+  };
+}
+
+export async function createOutcomeRecord(
+  userId: number,
+  input: {
+    source_message_id?: number | null;
+    conversation_id?: string | null;
+    next_move_plan_id?: number | null;
+    detected_state: string;
+    intervention_type: string;
+    recommended_action?: string | null;
+    task_ids_created?: number[];
+    user_outcome?: OutcomeValue;
+    evidence?: string;
+    followup_at?: string | null;
+    notes?: string;
+    is_qa?: boolean;
+  },
+): Promise<OutcomeRecord> {
+  await ensureOwnedRecord("intake_messages", userId, input.source_message_id ?? null);
+  await ensureOwnedRecord(
+    "next_move_plans",
+    userId,
+    input.next_move_plan_id ?? null,
+  );
+  const now = nowIso();
+  const id = randomUUID();
+  await run(
+    `INSERT INTO outcome_records (
+      id, user_id, source_message_id, conversation_id, next_move_plan_id,
+      detected_state, intervention_type, recommended_action, task_ids_created_json,
+      user_outcome, evidence, followup_at, notes, is_qa, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      userId,
+      input.source_message_id ?? null,
+      input.conversation_id ?? null,
+      input.next_move_plan_id ?? null,
+      input.detected_state,
+      input.intervention_type,
+      input.recommended_action ?? null,
+      JSON.stringify(input.task_ids_created ?? []),
+      input.user_outcome ?? "unknown",
+      input.evidence ?? "",
+      input.followup_at ?? null,
+      input.notes ?? "",
+      input.is_qa ? 1 : 0,
+      now,
+      now,
+    ],
+  );
+  const created = await getOutcomeRecord(userId, id);
+  if (!created) throw new Error("Created outcome record could not be loaded.");
+  return created;
+}
+
+export async function getOutcomeRecord(
+  userId: number,
+  id: string,
+): Promise<OutcomeRecord | null> {
+  const row = await first<OutcomeRecordRow>(
+    "SELECT * FROM outcome_records WHERE id = ? AND user_id = ?",
+    [id, userId],
+  );
+  return row ? rowToOutcomeRecord(row) : null;
+}
+
+export async function listRecentUnresolvedOutcomeRecords(
+  userId: number,
+  { limit = 5, isQa = false }: { limit?: number; isQa?: boolean } = {},
+): Promise<OutcomeRecord[]> {
+  const rows = await all<OutcomeRecordRow>(
+    `SELECT * FROM outcome_records
+    WHERE user_id = ?
+      AND user_outcome IN ('unknown', 'needs_followup')
+      ${qaClause("outcome_records", isQa)}
+    ORDER BY created_at DESC
+    LIMIT ?`,
+    [userId, limit],
+  );
+  return rows.map(rowToOutcomeRecord);
+}
+
+export async function updateOutcomeRecord(
+  userId: number,
+  id: string,
+  input: {
+    user_outcome?: OutcomeValue;
+    evidence?: string;
+    followup_at?: string | null;
+    notes?: string;
+    task_ids_created?: number[];
+  },
+): Promise<OutcomeRecord | null> {
+  const existing = await getOutcomeRecord(userId, id);
+  if (!existing) return null;
+  await run(
+    `UPDATE outcome_records SET
+      user_outcome = ?,
+      evidence = ?,
+      followup_at = ?,
+      notes = ?,
+      task_ids_created_json = ?,
+      updated_at = ?
+    WHERE id = ? AND user_id = ?`,
+    [
+      input.user_outcome ?? existing.user_outcome,
+      input.evidence ?? existing.evidence,
+      input.followup_at === undefined ? existing.followup_at : input.followup_at,
+      input.notes ?? existing.notes,
+      JSON.stringify(input.task_ids_created ?? existing.task_ids_created),
+      nowIso(),
+      id,
+      userId,
+    ],
+  );
+  return getOutcomeRecord(userId, id);
+}
+
+export async function updateOutcomeForNextMovePlan(
+  userId: number,
+  planId: number,
+  input: {
+    user_outcome: OutcomeValue;
+    evidence: string;
+    notes?: string;
+  },
+) {
+  const row = await first<OutcomeRecordRow>(
+    `SELECT * FROM outcome_records
+    WHERE user_id = ? AND next_move_plan_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1`,
+    [userId, planId],
+  );
+  if (!row) return null;
+  return updateOutcomeRecord(userId, row.id, input);
+}
+
+export async function attachTaskIdsToOutcomeForPlan(
+  userId: number,
+  planId: number,
+  taskIds: number[],
+) {
+  if (taskIds.length === 0) return null;
+  const row = await first<OutcomeRecordRow>(
+    `SELECT * FROM outcome_records
+    WHERE user_id = ? AND next_move_plan_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1`,
+    [userId, planId],
+  );
+  if (!row) return null;
+  const existing = rowToOutcomeRecord(row);
+  const merged = Array.from(new Set([...existing.task_ids_created, ...taskIds]));
+  return updateOutcomeRecord(userId, existing.id, { task_ids_created: merged });
+}
+
+type GenerationEventRow = Omit<
+  GenerationEvent,
+  "is_qa" | "response_rewritten" | "web_search_used"
+> &
+  UserScopedRow & {
+    is_qa?: number;
+    response_rewritten?: number;
+    web_search_used?: number;
+  };
+
+function rowToGenerationEvent(row: GenerationEventRow) {
+  return {
+    ...withoutUserId(row),
+    response_rewritten: rowBoolean(row.response_rewritten),
+    web_search_used: rowBoolean(row.web_search_used),
+    is_qa: rowBoolean(row.is_qa),
+  } as GenerationEvent;
+}
+
+export async function startGenerationEvent(
+  userId: number,
+  input: {
+    client_generation_id: string;
+    generation_type: GenerationType;
+    situation_id?: number | null;
+    retry_count?: number;
+    is_qa?: boolean;
+  },
+): Promise<GenerationEvent> {
+  const now = nowIso();
+  await run(
+    `INSERT INTO generation_events (
+      user_id, client_generation_id, situation_id, generation_type, started_at,
+      status, retry_count, is_qa, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
+    ON CONFLICT(user_id, client_generation_id) DO UPDATE SET
+      status = 'running',
+      started_at = excluded.started_at,
+      completed_at = NULL,
+      duration_ms = NULL,
+      state_detected = NULL,
+      intervention_type = NULL,
+      model_used_by_stage_json = NULL,
+      prompt_tokens_by_stage_json = NULL,
+      completion_tokens_by_stage_json = NULL,
+      evaluator_score = NULL,
+      response_rewritten = 0,
+      tasks_created_count = 0,
+      memory_items_used = 0,
+      web_search_used = 0,
+      cognitive_metadata_json = NULL,
+      retry_count = excluded.retry_count,
+      error_category = NULL,
+      updated_at = excluded.updated_at`,
+    [
+      userId,
+      input.client_generation_id,
+      input.situation_id ?? null,
+      input.generation_type,
+      now,
+      input.retry_count ?? 0,
+      input.is_qa ? 1 : 0,
+      now,
+      now,
+    ],
+  );
+  const event = await getGenerationEvent(userId, input.client_generation_id);
+  if (!event) throw new Error("Generation event could not be loaded.");
+  return event;
+}
+
+export async function getGenerationEvent(
+  userId: number,
+  clientGenerationId: string,
+): Promise<GenerationEvent | null> {
+  const row = await first<GenerationEventRow>(
+    "SELECT * FROM generation_events WHERE user_id = ? AND client_generation_id = ?",
+    [userId, clientGenerationId],
+  );
+  return row ? rowToGenerationEvent(row) : null;
+}
+
+export async function completeGenerationEvent(
+  userId: number,
+  clientGenerationId: string,
+  input: {
+    status: Exclude<GenerationStatus, "running">;
+    model?: string | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    estimatedCost?: number | null;
+    stateDetected?: string | null;
+    interventionType?: string | null;
+    modelUsedByStage?: Record<string, string> | null;
+    promptTokensByStage?: Record<string, number> | null;
+    completionTokensByStage?: Record<string, number> | null;
+    evaluatorScore?: number | null;
+    responseRewritten?: boolean | null;
+    tasksCreatedCount?: number | null;
+    memoryItemsUsed?: number | null;
+    webSearchUsed?: boolean | null;
+    cognitiveMetadata?: CognitiveMetadata | null;
+    errorCategory?: string | null;
+  },
+) {
+  const existing = await getGenerationEvent(userId, clientGenerationId);
+  const now = nowIso();
+  const startedAt = existing?.started_at ? Date.parse(existing.started_at) : Date.now();
+  const durationMs = Math.max(0, Date.parse(now) - startedAt);
+  await run(
+    `UPDATE generation_events SET
+      completed_at = ?,
+      duration_ms = ?,
+      status = ?,
+      model = COALESCE(?, model),
+      input_tokens = COALESCE(?, input_tokens),
+      output_tokens = COALESCE(?, output_tokens),
+      estimated_cost = COALESCE(?, estimated_cost),
+      state_detected = COALESCE(?, state_detected),
+      intervention_type = COALESCE(?, intervention_type),
+      model_used_by_stage_json = COALESCE(?, model_used_by_stage_json),
+      prompt_tokens_by_stage_json = COALESCE(?, prompt_tokens_by_stage_json),
+      completion_tokens_by_stage_json = COALESCE(?, completion_tokens_by_stage_json),
+      evaluator_score = COALESCE(?, evaluator_score),
+      response_rewritten = COALESCE(?, response_rewritten),
+      tasks_created_count = COALESCE(?, tasks_created_count),
+      memory_items_used = COALESCE(?, memory_items_used),
+      web_search_used = COALESCE(?, web_search_used),
+      cognitive_metadata_json = COALESCE(?, cognitive_metadata_json),
+      error_category = ?,
+      updated_at = ?
+    WHERE user_id = ? AND client_generation_id = ?`,
+    [
+      now,
+      durationMs,
+      input.status,
+      input.model ?? null,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
+      input.estimatedCost ?? null,
+      input.stateDetected ?? null,
+      input.interventionType ?? null,
+      input.modelUsedByStage ? JSON.stringify(input.modelUsedByStage) : null,
+      input.promptTokensByStage ? JSON.stringify(input.promptTokensByStage) : null,
+      input.completionTokensByStage
+        ? JSON.stringify(input.completionTokensByStage)
+        : null,
+      input.evaluatorScore ?? null,
+      typeof input.responseRewritten === "boolean"
+        ? input.responseRewritten
+          ? 1
+          : 0
+        : null,
+      input.tasksCreatedCount ?? null,
+      input.memoryItemsUsed ?? null,
+      typeof input.webSearchUsed === "boolean" ? (input.webSearchUsed ? 1 : 0) : null,
+      input.cognitiveMetadata ? JSON.stringify(input.cognitiveMetadata) : null,
+      input.errorCategory ?? null,
+      now,
+      userId,
+      clientGenerationId,
+    ],
+  );
+}
+
+export async function cancelGenerationEvent(
+  userId: number,
+  clientGenerationId: string,
+) {
+  await completeGenerationEvent(userId, clientGenerationId, {
+    status: "canceled",
+    errorCategory: "client_canceled",
+  });
+}
+
+export async function markRunningGenerationAsRetry(
+  userId: number,
+  generationType: GenerationType,
+  situationId: number | null,
+) {
+  await run(
+    `UPDATE generation_events SET
+      status = 'retry',
+      completed_at = ?,
+      updated_at = ?
+    WHERE user_id = ?
+      AND generation_type = ?
+      AND status = 'running'
+      AND ${situationId === null ? "situation_id IS NULL" : "situation_id = ?"}`,
+    situationId === null
+      ? [nowIso(), nowIso(), userId, generationType]
+      : [nowIso(), nowIso(), userId, generationType, situationId],
+  );
+}
+
+export async function isGenerationAbandoned(
+  userId: number,
+  clientGenerationId: string,
+) {
+  const event = await getGenerationEvent(userId, clientGenerationId);
+  return (
+    event?.status === "canceled" ||
+    event?.status === "timeout" ||
+    event?.status === "retry"
+  );
+}
+
+export async function clearQaData(userId: number) {
+  await run("DELETE FROM outcome_records WHERE user_id = ? AND is_qa = 1", [
+    userId,
+  ]);
+  await run("DELETE FROM tasks WHERE user_id = ? AND is_qa = 1", [userId]);
+  await run("DELETE FROM inferred_context_items WHERE user_id = ? AND is_qa = 1", [
+    userId,
+  ]);
+  await run("DELETE FROM next_move_plans WHERE user_id = ? AND is_qa = 1", [userId]);
+  await run("DELETE FROM intake_messages WHERE user_id = ? AND is_qa = 1", [userId]);
+  await run("DELETE FROM intake_sessions WHERE user_id = ? AND is_qa = 1", [userId]);
+  await run("DELETE FROM situations WHERE user_id = ? AND is_qa = 1", [userId]);
+  await run("DELETE FROM generation_events WHERE user_id = ? AND is_qa = 1", [
+    userId,
+  ]);
 }

@@ -1,3 +1,5 @@
+import type { CognitiveMetadata, OutcomeValue } from "./cognitive-schemas";
+
 export const PRIORITY_LEVELS = ["low", "medium", "high"] as const;
 export const PROJECT_STATUSES = ["active", "paused", "someday", "done"] as const;
 export const TASK_STATUSES = ["open", "done", "ignored"] as const;
@@ -261,6 +263,44 @@ export const PLAN_TASK_CANDIDATE_TYPES = [
   "follow_up",
   "supporting",
 ] as const;
+export const CONTEXT_USED_CATEGORIES = [
+  "location",
+  "money",
+  "time",
+  "energy",
+  "career",
+  "education_credentials",
+  "access_connections",
+  "support_network",
+  "relationship_social",
+  "housing",
+  "safety",
+  "preference",
+  "goal",
+  "other",
+] as const;
+export const CONTEXT_USED_SOURCES = [
+  "saved_memory",
+  "session_intake",
+  "situation",
+  "inferred",
+  "manual",
+] as const;
+export const GENERATION_TYPES = [
+  "intake",
+  "classification",
+  "operator_plan",
+  "task_generation",
+  "memory_extraction",
+] as const;
+export const GENERATION_STATUSES = [
+  "running",
+  "success",
+  "timeout",
+  "canceled",
+  "retry",
+  "error",
+] as const;
 
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
@@ -305,6 +345,10 @@ export type InferredContextSource =
   (typeof INFERRED_CONTEXT_SOURCES)[number];
 export type PlanTaskCandidateType =
   (typeof PLAN_TASK_CANDIDATE_TYPES)[number];
+export type ContextUsedCategory = (typeof CONTEXT_USED_CATEGORIES)[number];
+export type ContextUsedSource = (typeof CONTEXT_USED_SOURCES)[number];
+export type GenerationType = (typeof GENERATION_TYPES)[number];
+export type GenerationStatus = (typeof GENERATION_STATUSES)[number];
 
 type PersistedConstraint<T> = {
   value?: T;
@@ -426,6 +470,7 @@ export type Task = {
   situation_urgency?: SituationUrgency | null;
   rank_score?: number;
   rank_reason?: string;
+  global_rank?: number;
   status: TaskStatus;
   importance: number;
   effort: number;
@@ -433,8 +478,15 @@ export type Task = {
   friction_note: string;
   due_date: string | null;
   notes: string;
+  is_qa?: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type TaskConversionResponse = {
+  created: boolean;
+  alreadyExisted: boolean;
+  items: Array<{ task: Task; globalRank: number }>;
 };
 
 export type InferredContextItem = {
@@ -449,6 +501,7 @@ export type InferredContextItem = {
   situation_title?: string | null;
   intake_session_id: number | null;
   next_move_plan_id: number | null;
+  is_qa?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -544,9 +597,11 @@ export type StoredPlan = DailyPlan & {
 export type Situation = {
   id: number;
   title: string;
+  description: string;
   category: string;
   status: SituationStatus;
   urgency: SituationUrgency;
+  is_qa?: boolean;
   latest_plan_id?: number | null;
   latest_plan_mode?: NextMoveMode | null;
   latest_plan_move?: string | null;
@@ -561,6 +616,7 @@ export type IntakeSession = {
   is_complete: boolean;
   summary_so_far: string;
   context_constraints: ContextConstraints;
+  is_qa?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -570,6 +626,8 @@ export type IntakeMessage = {
   session_id: number;
   role: "user" | "assistant";
   content: string;
+  client_message_id?: string | null;
+  is_qa?: boolean;
   created_at: string;
 };
 
@@ -593,9 +651,27 @@ export type GeneratedInferredContextItem = {
   source: InferredContextSource;
 };
 
+export type ContextUsedItem = {
+  id: number | null;
+  label: string;
+  value: string;
+  category: ContextUsedCategory;
+  sensitivity: ConstraintSensitivity;
+  source: ContextUsedSource;
+  persistence: InferredContextPersistence;
+};
+
 export type PlanTaskCandidate = {
   title: string;
   details: string;
+  description: string;
+  estimated_minutes: number;
+  friction_level: "low" | "medium" | "high";
+  leverage: "low" | "medium" | "high";
+  why_now: string;
+  success_condition: string;
+  category: string;
+  source_message_id: string | null;
   candidate_type: PlanTaskCandidateType;
   importance: number;
   effort: number;
@@ -612,11 +688,16 @@ export type HighestLeverageMove = {
 };
 
 export type NextMovePlan = {
+  generation_mode: "operator_plan";
   mode: NextMoveMode;
+  situation_read: string;
+  likely_bottleneck: string;
+  key_constraints: string[];
   situation_summary: string;
   core_bottleneck: string;
   highest_leverage_move_today: HighestLeverageMove;
   why_this_move: string;
+  first_10_minute_action: NextMoveStep;
   first_30_minutes: NextMoveStep[];
   next_24_hours: NextMoveStep[];
   next_7_days: NextMoveStep[];
@@ -630,6 +711,7 @@ export type NextMovePlan = {
   resources_to_seek: NextMoveResource[];
   when_to_get_human_help: string;
   safety_boundary: SafetyBoundary;
+  context_used: ContextUsedItem[];
   inferred_context_items: GeneratedInferredContextItem[];
   task_candidates: PlanTaskCandidate[];
   confidence_level: ConfidenceLevel;
@@ -642,13 +724,66 @@ export type StoredNextMovePlan = NextMovePlan & {
   situation_id: number;
   intake_session_id: number | null;
   model: string;
+  cognitive_metadata: CognitiveMetadata | null;
   raw_json: string;
+  is_qa?: boolean;
   created_at: string;
+};
+
+export type GenerationEvent = {
+  id: number;
+  user_id?: number;
+  client_generation_id: string;
+  situation_id: number | null;
+  generation_type: GenerationType;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  status: GenerationStatus;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  estimated_cost: number | null;
+  state_detected?: string | null;
+  intervention_type?: string | null;
+  model_used_by_stage_json?: string | null;
+  prompt_tokens_by_stage_json?: string | null;
+  completion_tokens_by_stage_json?: string | null;
+  evaluator_score?: number | null;
+  response_rewritten?: boolean;
+  tasks_created_count?: number | null;
+  memory_items_used?: number | null;
+  web_search_used?: boolean;
+  cognitive_metadata_json?: string | null;
+  retry_count: number;
+  error_category: string | null;
+  is_qa: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OutcomeRecord = {
+  id: string;
+  source_message_id: number | null;
+  conversation_id: string | null;
+  next_move_plan_id: number | null;
+  detected_state: string;
+  intervention_type: string;
+  recommended_action: string | null;
+  task_ids_created: number[];
+  user_outcome: OutcomeValue;
+  evidence: string;
+  followup_at: string | null;
+  notes: string;
+  is_qa?: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AppConfig = {
   hasOpenAiKey: boolean;
   model: string;
+  modelRouting?: Record<string, string>;
   webSearchEnabled: boolean;
   webSearchContextSize: "low" | "medium" | "high";
 };

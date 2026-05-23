@@ -37,7 +37,11 @@ test("social connection prompt includes consent, boundaries, non-manipulation, a
 
 test("next move plan schema still requires structured insight fields", () => {
   const parsed = nextMovePlanSchema.safeParse({
+    generation_mode: "operator_plan",
     mode: "growth",
+    situation_read: "User is trying to change careers without a proof asset.",
+    likely_bottleneck: "No proof asset yet.",
+    key_constraints: ["Needs proof before more outreach."],
     situation_summary: "User is trying to change careers.",
     core_bottleneck: "No proof asset yet.",
     highest_leverage_move_today: {
@@ -47,6 +51,10 @@ test("next move plan schema still requires structured insight fields", () => {
       success_condition: "A rough proof asset exists.",
     },
     why_this_move: "It creates hiring signal.",
+    first_10_minute_action: {
+      title: "Name the proof asset",
+      details: "Write the one artifact the target role would find credible.",
+    },
     first_30_minutes: [{ title: "Outline", details: "Pick one target proof asset." }],
     next_24_hours: [{ title: "Draft", details: "Create a rough first version." }],
     next_7_days: [{ title: "Share", details: "Use it in five targeted messages." }],
@@ -86,6 +94,17 @@ test("next move plan schema still requires structured insight fields", () => {
       do_not_rely_on_ai_for: "Do not rely on FlowPath for legal or financial decisions.",
       urgent_support_guidance: "If there is immediate danger, use emergency support.",
     },
+    context_used: [
+      {
+        id: null,
+        label: "Career proof gap",
+        value: "Needs a concrete proof asset before more generic applications.",
+        category: "career",
+        sensitivity: "low",
+        source: "situation",
+        persistence: "session_only",
+      },
+    ],
     inferred_context_items: [
       {
         label: "Needs proof asset",
@@ -100,6 +119,14 @@ test("next move plan schema still requires structured insight fields", () => {
       {
         title: "Outline proof asset",
         details: "Choose one target proof asset and write the outline.",
+        description: "Choose one target proof asset and write the outline.",
+        estimated_minutes: 30,
+        friction_level: "low",
+        leverage: "high",
+        why_now: "It creates proof before more applications.",
+        success_condition: "The proof asset outline exists.",
+        category: "work_career",
+        source_message_id: null,
         candidate_type: "immediate_next_action",
         importance: 5,
         effort: 1,

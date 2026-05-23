@@ -5,6 +5,7 @@ import {
   getOpenAIWebSearchContextSize,
   isOpenAIWebSearchEnabled,
 } from "@/lib/flowpath-ai";
+import { getModelRoutingConfig } from "@/lib/model-routing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ export async function GET() {
     return dataResponse({
       hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
       model: process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
+      modelRouting: getModelRoutingConfig(),
       webSearchEnabled: isOpenAIWebSearchEnabled(),
       webSearchContextSize: getOpenAIWebSearchContextSize(),
     });

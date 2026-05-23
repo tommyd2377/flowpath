@@ -1,9 +1,13 @@
 "use client";
 
-import { CheckSquare, Clock, ShieldAlert, Target } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, CheckSquare, Clock, Info, ShieldAlert, Target, ThumbsDown, ThumbsUp } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
-import type { StoredNextMovePlan, Task } from "@/lib/types";
+import { apiFetch } from "@/lib/client-api";
+import { readClientQaMode } from "@/lib/qa-mode";
+import type { StoredNextMovePlan, Task, TaskConversionResponse } from "@/lib/types";
 import { Button, Card, EmptyState } from "./ui";
 
 export function modeLabel(mode: string) {
@@ -15,12 +19,18 @@ export function NextMovePlanCard({
   fallbackTask,
   onConvert,
   converting,
+  tasksAdded,
+  taskConfirmation,
 }: {
   plan: StoredNextMovePlan | null;
   fallbackTask?: Task | null;
   onConvert?: () => void;
   converting?: boolean;
+  tasksAdded?: boolean;
+  taskConfirmation?: TaskConversionResponse | null;
 }) {
+  const showCognitiveDebug = useCognitiveDebugVisible();
+
   if (!plan) {
     if (fallbackTask) {
       return (
@@ -82,6 +92,16 @@ export function NextMovePlanCard({
         </div>
       </div>
 
+      <SuggestedNextAction plan={plan} />
+
+      <TaskAction
+        onConvert={onConvert}
+        converting={converting}
+        tasksAdded={tasksAdded}
+      />
+
+      {taskConfirmation ? <TaskConfirmation result={taskConfirmation} /> : null}
+
       <div className="grid gap-3 text-sm sm:grid-cols-2">
         <Brief title="Current reality" value={plan.situation_summary} />
         <Brief title="Core bottleneck" value={plan.core_bottleneck} />
@@ -112,12 +132,21 @@ export function NextMovePlanCard({
       <div className="grid gap-4">
         <StepGroup
           icon={<Clock className="h-4 w-4" />}
+          title="First 10 minutes"
+          steps={[plan.first_10_minute_action]}
+        />
+        <StepGroup
+          icon={<Clock className="h-4 w-4" />}
           title="First 30 minutes"
           steps={plan.first_30_minutes}
         />
         <StepGroup title="Progress in 24 hours" steps={plan.next_24_hours} />
         <StepGroup title="Progress in 7 days" steps={plan.next_7_days} />
       </div>
+
+      <ContextUsedBlock plan={plan} />
+
+      {showCognitiveDebug ? <WhyThisResponseBlock plan={plan} /> : null}
 
       <div className="grid gap-3 text-sm sm:grid-cols-2">
         <ListBlock
@@ -183,15 +212,268 @@ export function NextMovePlanCard({
         </div>
       ) : null}
 
-      {onConvert ? (
-        <div>
-          <Button type="button" onClick={onConvert} disabled={converting}>
-            <CheckSquare className="h-4 w-4" />
-            {converting ? "Creating tasks..." : "Add ranked tasks from this plan"}
-          </Button>
+      <TaskAction
+        onConvert={onConvert}
+        converting={converting}
+        tasksAdded={tasksAdded}
+      />
+
+      <OutcomeFeedback planId={plan.id} />
+    </Card>
+  );
+}
+
+function useCognitiveDebugVisible() {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    function refresh() {
+      setEnabled(
+        process.env.NODE_ENV !== "production" ||
+          process.env.NEXT_PUBLIC_FLOWPATH_COGNITIVE_DEBUG === "true" ||
+          readClientQaMode(),
+      );
+    }
+
+    refresh();
+    window.addEventListener("flowpath-qa-mode-change", refresh);
+    return () => window.removeEventListener("flowpath-qa-mode-change", refresh);
+  }, []);
+
+  return enabled;
+}
+
+function SuggestedNextAction({ plan }: { plan: StoredNextMovePlan }) {
+  const firstTask = plan.task_candidates[0];
+  return (
+    <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.1)] p-3 text-sm text-blue-50">
+      <div className="mb-1 flex items-center gap-2 font-medium text-white">
+        <Target className="h-4 w-4" />
+        Suggested next action
+      </div>
+      <div className="font-medium">
+        {firstTask?.title ?? plan.first_10_minute_action.title}
+      </div>
+      <p className="mt-1 text-blue-100">
+        {firstTask?.success_condition
+          ? `${firstTask.description || firstTask.details} Success: ${firstTask.success_condition}`
+          : plan.first_10_minute_action.details}
+      </p>
+      {firstTask ? (
+        <div className="mt-2 flex flex-wrap gap-2 text-xs text-blue-100">
+          <Badge>{firstTask.estimated_minutes} min</Badge>
+          <Badge>{firstTask.leverage} leverage</Badge>
+          <Badge>{firstTask.friction_level} friction</Badge>
         </div>
       ) : null}
-    </Card>
+    </div>
+  );
+}
+
+function WhyThisResponseBlock({ plan }: { plan: StoredNextMovePlan }) {
+  const metadata = plan.cognitive_metadata;
+  if (!metadata) return null;
+
+  return (
+    <details className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
+      <summary className="flex cursor-pointer items-center gap-2 font-medium text-white">
+        <Info className="h-4 w-4 text-[var(--azure-light)]" />
+        Why this response?
+      </summary>
+      <div className="mt-3 grid gap-2 text-slate-300 sm:grid-cols-2">
+        <Brief
+          title="Detected mode"
+          value={metadata.state_detection.primary_state.replaceAll("_", " ")}
+        />
+        <Brief
+          title="Intervention"
+          value={metadata.intervention.intervention_type.replaceAll("_", " ")}
+        />
+        <Brief
+          title="Evaluator"
+          value={
+            metadata.evaluator
+              ? `${Math.round(metadata.evaluator.score * 100)}%${metadata.response_rewritten ? " · rewritten once" : ""}`
+              : "Not evaluated"
+          }
+        />
+        <Brief
+          title="Used context"
+          value={`${metadata.memory_selection.selected_memories.length} selected item${
+            metadata.memory_selection.selected_memories.length === 1 ? "" : "s"
+          }`}
+        />
+        <Brief
+          title="Web search"
+          value={`${metadata.web_search_used ? "Used" : "Not used"}: ${metadata.web_search_reason}`}
+        />
+      </div>
+    </details>
+  );
+}
+
+function OutcomeFeedback({ planId }: { planId: number }) {
+  const [message, setMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(userOutcome: "improved" | "acted" | "rejected", evidence: string) {
+    setSaving(true);
+    setMessage(null);
+    try {
+      await apiFetch(`/api/next-move-plans/${planId}/outcome`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_outcome: userOutcome,
+          evidence,
+          notes: "Manual lightweight feedback from the plan card.",
+        }),
+      });
+      setMessage("Feedback saved.");
+    } catch {
+      setMessage("Could not save feedback.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
+      <div className="mb-2 font-medium text-white">Outcome follow-up</div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => submit("improved", "Manual feedback: this helped.")}
+          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+        >
+          <ThumbsUp className="h-4 w-4" />
+          Helped
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => submit("acted", "Manual feedback: I did it.")}
+          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          Did it
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => submit("rejected", "Manual feedback: not useful.")}
+          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+        >
+          <ThumbsDown className="h-4 w-4" />
+          Not useful
+        </button>
+      </div>
+      {message ? <div className="mt-2 text-xs text-slate-400">{message}</div> : null}
+    </div>
+  );
+}
+
+function TaskAction({
+  onConvert,
+  converting,
+  tasksAdded,
+}: {
+  onConvert?: () => void;
+  converting?: boolean;
+  tasksAdded?: boolean;
+}) {
+  if (tasksAdded) {
+    return (
+      <div>
+        <Link href="/tasks">
+          <Button type="button" variant="secondary">
+            <CheckSquare className="h-4 w-4" />
+            View ranked tasks
+          </Button>
+        </Link>
+      </div>
+    );
+  }
+
+  if (!onConvert) return null;
+
+  return (
+    <div>
+      <Button type="button" onClick={onConvert} disabled={converting}>
+        <CheckSquare className="h-4 w-4" />
+        {converting ? "Creating tasks..." : "Create ranked tasks from this plan"}
+      </Button>
+    </div>
+  );
+}
+
+function TaskConfirmation({ result }: { result: TaskConversionResponse }) {
+  return (
+    <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.12)] p-3 text-sm text-blue-100">
+      <div className="font-medium text-white">
+        {result.alreadyExisted
+          ? "These tasks were already added. No duplicates created."
+          : `Added ${result.items.length} ranked tasks`}
+      </div>
+      <div className="mt-2 grid gap-1">
+        {result.items.map((item) => (
+          <div key={item.task.id} className="text-blue-50">
+            #{item.globalRank} {item.task.title}
+          </div>
+        ))}
+      </div>
+      <Link
+        href="/tasks"
+        className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)] hover:text-white"
+      >
+        View ranked tasks
+      </Link>
+    </div>
+  );
+}
+
+function ContextUsedBlock({ plan }: { plan: StoredNextMovePlan }) {
+  const items =
+    plan.context_used.length > 0
+      ? plan.context_used
+      : plan.inferred_context_items.map((item) => ({
+          id: null,
+          label: item.label,
+          value: item.value,
+          category: "other" as const,
+          sensitivity: item.sensitivity,
+          source: "inferred" as const,
+          persistence: item.persistence,
+        }));
+
+  if (items.length === 0) return null;
+
+  return (
+    <details className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
+      <summary className="cursor-pointer font-medium text-white">
+        Context FlowPath used
+      </summary>
+      <div className="mt-3 grid gap-2">
+        {items.map((item) => (
+          <div key={`${item.label}-${item.value}`} className="rounded-md bg-slate-950 p-3">
+            <div className="flex flex-wrap gap-2">
+              <Badge>{item.category.replaceAll("_", " ")}</Badge>
+              <Badge>{item.sensitivity} sensitivity</Badge>
+              <Badge>{item.source.replaceAll("_", " ")}</Badge>
+              <Badge>{item.persistence.replaceAll("_", " ")}</Badge>
+            </div>
+            <div className="mt-2 font-medium text-white">{item.label}</div>
+            <p className="text-slate-300">{item.value}</p>
+          </div>
+        ))}
+      </div>
+      <Link
+        href="/memory"
+        className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)] hover:text-white"
+      >
+        Edit or delete context in Memory
+      </Link>
+    </details>
   );
 }
 
@@ -296,6 +578,14 @@ function ListBlock({ title, items }: { title: string; items: string[] }) {
         {items.length ? items.map((item) => <li key={item}>{item}</li>) : <li>None listed.</li>}
       </ul>
     </div>
+  );
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
+      {children}
+    </span>
   );
 }
 

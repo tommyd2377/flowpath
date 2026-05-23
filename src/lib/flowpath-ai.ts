@@ -5,7 +5,20 @@ import type {
 } from "openai/resources/responses/responses";
 
 import { dailyPlanSchema, interviewerOutputSchema, nextMovePlanSchema } from "./schemas";
+import {
+  buildCognitiveMetadata,
+  buildRevisionInstruction,
+  evaluateNextMovePlan,
+  normalizePlanForIntervention,
+  type CognitivePlanContext,
+} from "./cognitive-operating-layer";
 import { DEFAULT_APP_TIMEZONE } from "./env";
+import {
+  estimateModelCostDollars,
+  getModelForRole,
+  type StageUsage,
+} from "./model-routing";
+import { classifySituationDomain } from "./situation-routing";
 import type {
   CheckIn,
   DailyPlan,
@@ -22,7 +35,8 @@ import type {
 } from "./types";
 import { todayIsoDate } from "./time";
 
-export const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+export { DEFAULT_OPENAI_MODEL } from "./model-routing";
+
 export const DEFAULT_WEB_SEARCH_CONTEXT_SIZE = "medium";
 export const DAILY_PLAN_MAX_OUTPUT_TOKENS = 8000;
 export const INTERVIEW_MAX_OUTPUT_TOKENS = 3000;
@@ -47,7 +61,9 @@ const systemPrompt = `You are FlowPath, a practical AI prioritization strategist
 
 const interviewerSystemPrompt = `You are FlowPath's intake interviewer. Your job is to understand the user's current situation well enough to help identify their next best move. Ask one clear question at a time. Focus on goals, constraints, resources, urgency, what has been tried, what is being avoided, and what would create real-world progress. Before asking, review the full situation, profile, structured context constraints, and message history so you do not ask for facts the user already provided. If the next move will depend on local, regional, or current real-world information and location is missing, ask for the least precise useful location exactly once. For substance-use situations, ask about the substance and immediate safety or withdrawal risk exactly once when it affects triage. Never repeat location or substance questions once answered; move to constraints, resources, safety, or readiness. Do not overwhelm the user. Do not give the full plan yet unless the user asks. If the situation appears high-stakes, gather enough information to triage safely and recommend appropriate human help. When there is enough context for a useful plan, set current_stage to ready_to_generate and is_complete to true. In that complete state, do not ask whether the user wants a plan; put a short transition in question, such as "I have enough context to generate a plan." Your tone is calm, direct, practical, and humane. ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction}`;
 
-const strategistSystemPrompt = `You are FlowPath, a practical AI mentor for people without a mentor. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a generic productivity coach. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction} Your output should help the user act in the real world today.`;
+const operatorPlanInstruction = `FlowPath is generating an operator plan. Do not write generic advice. The user needs the next move that actually changes the situation. Analyze the situation like a successful domain operator advising someone they care about who lacks access, context, or hidden knowledge. Identify the real bottleneck, not just the obvious problem. Name the naive path most people would take, the higher-leverage operator path, and the wasted motion to avoid. Use the user's constraints: time, money, location, energy, access, credentials, safety, deadlines, support, prior attempts, and current tradeoffs when available. Ask no more questions if there is enough signal to produce a useful plan. Produce one next move for the next 24-48 hours, one first 10-minute action, and 2-3 concrete task candidates. Include assumptions, confidence, and professional/safety boundaries where relevant. Do not overclaim certainty. Do not pretend to have secret access, guaranteed outcomes, credentials, or personal connections. Prefer practical sequencing over motivational language. If the situation is high stakes, stabilize first and route to human/professional support where appropriate. If the situation is vague, make a reasonable plan based on available signal and list assumptions instead of forcing endless intake.`;
+
+const strategistSystemPrompt = `You are FlowPath, a guided next-move engine. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a chatbot, generic productivity coach, therapy, legal advice, medical care, financial advice, social services, or emergency help. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${operatorPlanInstruction} ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction} Your output should help the user act in the real world today.`;
 
 export function isOpenAIWebSearchEnabled() {
   const value = process.env.OPENAI_WEB_SEARCH_ENABLED?.trim().toLowerCase();
@@ -242,6 +258,55 @@ function inferredContextItemJsonSchema() {
   };
 }
 
+function contextUsedItemJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "label",
+      "value",
+      "category",
+      "sensitivity",
+      "source",
+      "persistence",
+    ],
+    properties: {
+      id: { type: ["integer", "null"] },
+      label: { type: "string" },
+      value: { type: "string" },
+      category: {
+        type: "string",
+        enum: [
+          "location",
+          "money",
+          "time",
+          "energy",
+          "career",
+          "education_credentials",
+          "access_connections",
+          "support_network",
+          "relationship_social",
+          "housing",
+          "safety",
+          "preference",
+          "goal",
+          "other",
+        ],
+      },
+      sensitivity: { type: "string", enum: ["low", "moderate", "high"] },
+      source: {
+        type: "string",
+        enum: ["saved_memory", "session_intake", "situation", "inferred", "manual"],
+      },
+      persistence: {
+        type: "string",
+        enum: ["session_only", "proposed_memory", "saved_memory"],
+      },
+    },
+  };
+}
+
 function taskCandidateJsonSchema() {
   return {
     type: "object",
@@ -249,6 +314,14 @@ function taskCandidateJsonSchema() {
     required: [
       "title",
       "details",
+      "description",
+      "estimated_minutes",
+      "friction_level",
+      "leverage",
+      "why_now",
+      "success_condition",
+      "category",
+      "source_message_id",
       "candidate_type",
       "importance",
       "effort",
@@ -259,6 +332,14 @@ function taskCandidateJsonSchema() {
     properties: {
       title: { type: "string" },
       details: { type: "string" },
+      description: { type: "string" },
+      estimated_minutes: { type: "integer", minimum: 1, maximum: 480 },
+      friction_level: { type: "string", enum: ["low", "medium", "high"] },
+      leverage: { type: "string", enum: ["low", "medium", "high"] },
+      why_now: { type: "string" },
+      success_condition: { type: "string" },
+      category: { type: "string" },
+      source_message_id: { type: ["string", "null"] },
       candidate_type: {
         type: "string",
         enum: ["immediate_next_action", "follow_up", "supporting"],
@@ -382,12 +463,23 @@ export type StrategistContext = {
 export type AiUsageMetadata = {
   inputTokens?: number;
   outputTokens?: number;
+  estimatedCostCents?: number;
 };
 
 function responseUsageMetadata(usage: ResponseUsage | undefined): AiUsageMetadata {
   return {
     inputTokens: usage?.input_tokens,
     outputTokens: usage?.output_tokens,
+  };
+}
+
+function combineUsage(...items: AiUsageMetadata[]): AiUsageMetadata {
+  return {
+    inputTokens: items.reduce((total, item) => total + (item.inputTokens ?? 0), 0),
+    outputTokens: items.reduce((total, item) => total + (item.outputTokens ?? 0), 0),
+    estimatedCostCents: items.some((item) => item.estimatedCostCents != null)
+      ? items.reduce((total, item) => total + (item.estimatedCostCents ?? 0), 0)
+      : undefined,
   };
 }
 
@@ -423,6 +515,14 @@ function extractOutputText(response: unknown) {
         .filter(Boolean);
     })
     .join("\n");
+}
+
+function responseUsedWebSearch(response: unknown) {
+  try {
+    return JSON.stringify(response).includes("web_search_call");
+  } catch {
+    return false;
+  }
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -593,12 +693,29 @@ function trimTaskCandidates(value: unknown) {
   if (!Array.isArray(value)) return value;
   return value.map((candidate) =>
     isJsonRecord(candidate)
-      ? trimGeneratedRecordStrings(candidate, {
-          title: 180,
-          details: 2000,
-          rank_reason: 900,
+            ? trimGeneratedRecordStrings(candidate, {
+                title: 180,
+                details: 2000,
+                description: 2000,
+                why_now: 900,
+                success_condition: 900,
+                category: 120,
+                source_message_id: 120,
+                rank_reason: 900,
+              })
+            : candidate,
+  );
+}
+
+function trimContextUsedItems(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) =>
+    isJsonRecord(item)
+      ? trimGeneratedRecordStrings(item, {
+          label: 160,
+          value: 1000,
         })
-      : candidate,
+      : item,
   );
 }
 
@@ -615,6 +732,8 @@ function trimNextMovePlanOutput(value: unknown) {
   if (!isJsonRecord(value)) return value;
   return {
     ...trimGeneratedRecordStrings(value, {
+      situation_read: 2500,
+      likely_bottleneck: 1800,
       situation_summary: 2500,
       core_bottleneck: 1800,
       why_this_move: 2000,
@@ -625,6 +744,8 @@ function trimNextMovePlanOutput(value: unknown) {
     highest_leverage_move_today: trimHighestLeverageMove(
       value.highest_leverage_move_today,
     ),
+    key_constraints: trimGeneratedStringArray(value.key_constraints, 500),
+    first_10_minute_action: trimNextMoveStep(value.first_10_minute_action),
     first_30_minutes: trimNextMoveSteps(value.first_30_minutes),
     next_24_hours: trimNextMoveSteps(value.next_24_hours),
     next_7_days: trimNextMoveSteps(value.next_7_days),
@@ -635,6 +756,7 @@ function trimNextMovePlanOutput(value: unknown) {
     local_reality_scout: trimLocalRealityScout(value.local_reality_scout),
     resources_to_seek: trimNextMoveResources(value.resources_to_seek),
     safety_boundary: trimSafetyBoundary(value.safety_boundary),
+    context_used: trimContextUsedItems(value.context_used),
     inferred_context_items: trimInferredContextItems(value.inferred_context_items),
     task_candidates: trimTaskCandidates(value.task_candidates),
     assumptions: trimGeneratedStringArray(value.assumptions, 500),
@@ -658,7 +780,7 @@ export async function generateFlowPathPlan(
     throw new Error("Missing OPENAI_API_KEY.");
   }
 
-  const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const model = getModelForRole("generator_model");
   const openai = new OpenAI({ apiKey });
   const tools = getOpenAIWebSearchTools(options);
   const include = getOpenAIWebSearchInclude(options);
@@ -767,11 +889,16 @@ const nextMovePlanJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
+    "generation_mode",
     "mode",
+    "situation_read",
+    "likely_bottleneck",
+    "key_constraints",
     "situation_summary",
     "core_bottleneck",
     "highest_leverage_move_today",
     "why_this_move",
+    "first_10_minute_action",
     "first_30_minutes",
     "next_24_hours",
     "next_7_days",
@@ -785,6 +912,7 @@ const nextMovePlanJsonSchema = {
     "resources_to_seek",
     "when_to_get_human_help",
     "safety_boundary",
+    "context_used",
     "inferred_context_items",
     "task_candidates",
     "confidence_level",
@@ -792,9 +920,18 @@ const nextMovePlanJsonSchema = {
     "follow_up_questions_if_any",
   ],
   properties: {
+    generation_mode: { type: "string", enum: ["operator_plan"] },
     mode: {
       type: "string",
       enum: ["growth", "stability", "crisis_triage", "maintenance"],
+    },
+    situation_read: { type: "string" },
+    likely_bottleneck: { type: "string" },
+    key_constraints: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: { type: "string" },
     },
     situation_summary: { type: "string" },
     core_bottleneck: { type: "string" },
@@ -810,6 +947,7 @@ const nextMovePlanJsonSchema = {
       },
     },
     why_this_move: { type: "string" },
+    first_10_minute_action: nextMoveStepJsonSchema(),
     first_30_minutes: {
       type: "array",
       minItems: 1,
@@ -861,6 +999,12 @@ const nextMovePlanJsonSchema = {
     },
     when_to_get_human_help: { type: "string" },
     safety_boundary: safetyBoundaryJsonSchema(),
+    context_used: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: contextUsedItemJsonSchema(),
+    },
     inferred_context_items: {
       type: "array",
       maxItems: 8,
@@ -868,7 +1012,6 @@ const nextMovePlanJsonSchema = {
     },
     task_candidates: {
       type: "array",
-      minItems: 1,
       maxItems: 3,
       items: taskCandidateJsonSchema(),
     },
@@ -908,6 +1051,7 @@ async function createStructuredResponse({
   include,
   maxToolCalls,
   maxOutputTokens,
+  model: requestedModel,
 }: {
   system: string;
   user: unknown;
@@ -918,11 +1062,12 @@ async function createStructuredResponse({
   include?: ResponseCreateParamsNonStreaming["include"];
   maxToolCalls?: number;
   maxOutputTokens: number;
+  model?: string;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY.");
 
-  const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const model = requestedModel || getModelForRole("generator_model");
   const openai = new OpenAI({ apiKey });
   const response = await openai.responses.create({
     model,
@@ -953,10 +1098,19 @@ async function createStructuredResponse({
 
   const outputText = extractOutputText(response);
   if (!outputText) throw new Error("The model returned an empty response.");
-  return { outputText, model, usage: responseUsageMetadata(response.usage) };
+  return {
+    outputText,
+    model,
+    usage: responseUsageMetadata(response.usage),
+    usedWebSearch: responseUsedWebSearch(response),
+  };
 }
 
-export async function generateInterviewQuestion(context: InterviewerContext) {
+export async function generateInterviewQuestion(
+  context: InterviewerContext,
+  options: { cognitiveContext?: CognitivePlanContext } = {},
+) {
+  const route = classifySituationDomain(context.situation);
   const { outputText, model, usage } = await createStructuredResponse({
     system: interviewerSystemPrompt,
     name: "flowpath_interviewer_turn",
@@ -964,9 +1118,20 @@ export async function generateInterviewQuestion(context: InterviewerContext) {
     schema: interviewerJsonSchema,
     user: {
       instruction:
-        "Ask exactly one next question unless enough information has been gathered. If enough information has been gathered, mark is_complete true, set current_stage to ready_to_generate, and write a short transition statement instead of asking for another answer. Fill inferred_context_items only with practical broad constraints that were actually stated or strongly implied; use source intake, proposed_memory for useful reusable broad context, and session_only for sensitive details.",
+        "Ask exactly one next question unless enough information has been gathered. Ask 1-3 intake questions normally; ask more only when a missing answer materially changes safety or recommendation quality. If enough information has been gathered, mark is_complete true, set current_stage to ready_to_generate, and write a short transition statement instead of asking for another answer. Ask domain-appropriate questions only. If domain confidence is low, ask a broad neutral next-move question instead of a narrow category question. Fill inferred_context_items only with practical broad constraints that were actually stated or strongly implied; use source intake, proposed_memory for useful reusable broad context, and session_only for sensitive details.",
       privacy_note:
         "When asking for missing context, ask only for constraints that materially change the recommendation. Prefer broad ranges/options and explain why the constraint matters.",
+      detected_domain: route,
+      cognitive_operating_layer: options.cognitiveContext
+        ? {
+            state_detection: options.cognitiveContext.stateDetection,
+            intervention: options.cognitiveContext.intervention,
+            selected_memory: options.cognitiveContext.memorySelection,
+            repeated_topic: options.cognitiveContext.repeatedTopic,
+            instruction:
+              "Use these cognitive routing hints to avoid redundant questions, handle rumination/anxiety carefully, and keep the next intake turn compact. Do not expose raw metadata to the user.",
+          }
+        : null,
       stages: [
         "understanding_goals",
         "understanding_constraints",
@@ -1001,49 +1166,223 @@ export async function generateInterviewQuestion(context: InterviewerContext) {
 
 export async function generateNextMovePlan(
   context: StrategistContext,
-  options: { allowWebSearch?: boolean } = {},
+  options: {
+    allowWebSearch?: boolean;
+    cognitiveContext?: CognitivePlanContext;
+    sourceMessageId?: string | null;
+  } = {},
 ): Promise<{
   plan: NextMovePlan;
   model: string;
   usage: AiUsageMetadata;
+  cognitiveMetadata?: ReturnType<typeof buildCognitiveMetadata>;
 }> {
-  const tools = getOpenAIWebSearchTools(options);
-  const include = getOpenAIWebSearchInclude(options);
-  const { outputText, model, usage } = await createStructuredResponse({
+  const route = classifySituationDomain(context.situation);
+  const cognitiveContext = options.cognitiveContext;
+  const allowWebSearch =
+    options.allowWebSearch !== false &&
+    (cognitiveContext?.webSearchDecision.should_use_web_search ?? true);
+  const tools = getOpenAIWebSearchTools({ allowWebSearch });
+  const include = getOpenAIWebSearchInclude({ allowWebSearch });
+  const generationModel = cognitiveContext?.useEscalationModel
+    ? getModelForRole("escalation_model")
+    : getModelForRole("generator_model");
+
+  const baseInstruction = [
+    "Generate an operator_plan the user can act on today. Be careful and practical for high-stakes situations. Do not overclaim certainty.",
+    "The generated plan must include generation_mode operator_plan, situation_read, likely_bottleneck, key_constraints, first_10_minute_action, context_used, task_candidates, assumptions, and confidence_level.",
+    "Use the detected domain and confidence below. Ask domain-appropriate questions only in follow_up_questions_if_any, and do not let stale or previous-situation categories shape this plan.",
+    "Use every prior intake answer; do not ask follow-up questions for details already present in the situation, selected context, session summary, or messages.",
+    cognitiveContext
+      ? `Follow the intervention selector: ${cognitiveContext.intervention.intervention_type}, ${cognitiveContext.intervention.response_length} response length, ${cognitiveContext.intervention.tone} tone.`
+      : "",
+    cognitiveContext
+      ? `Task candidates must respect should_create_tasks=${cognitiveContext.intervention.should_create_tasks} and max_tasks=${cognitiveContext.intervention.max_tasks}.`
+      : "Fill task_candidates with at most three concrete actions.",
+    cognitiveContext
+      ? `Must include: ${cognitiveContext.intervention.must_include.join("; ") || "none"}. Must avoid: ${cognitiveContext.intervention.must_avoid.join("; ") || "none"}.`
+      : "",
+    cognitiveContext?.repeatedTopic
+      ? "The user appears to be circling a repeated topic. Do not give a longer version of the same answer; name the stable conclusion and convert uncertainty into one experiment."
+      : "",
+    "If web search is available, use it only when the web_search_decision below says current/local/volatile facts matter. If web_search_decision says not to search, do not search.",
+    "Use at most three web searches. If web search is not needed, do not use it.",
+    "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
+    "Fill the structured insight fields with mentor-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
+    "Make that insight constraint-aware: account for actual constraints, access level, runway, proof/track record, transportation, deadlines, credibility signals, local/legal/professional boundaries, and whether a human/professional handoff is needed.",
+    "Use friction_pattern to name the likely source of resistance in plain language without blame.",
+    "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
+    "Fill safety_boundary with the practical limits of AI help, the professional-help signal, and urgent support guidance.",
+    "Fill context_used with compact, broad, non-sensitive context that shaped the answer. Generalize sensitive details. Use source situation, session_intake, saved_memory, inferred, or manual; use persistence session_only, proposed_memory, or saved_memory.",
+    "Fill inferred_context_items with reviewable memories or constraints from this plan. Use source plan. Do not mark sensitive details saved_memory; use proposed_memory only for broad reusable memories and session_only for high-sensitivity details.",
+    "Each task candidate must include the existing task fields plus description, estimated_minutes, friction_level, leverage, why_now, success_condition, category, and source_message_id.",
+    "For resources_to_seek, include a verified URL, phone number, or practical search target when web search verifies one. Leave contact_or_url empty unless you can provide a reliable official or well-established resource.",
+    "If local specificity matters but location is missing, ask for city plus region/country in follow_up_questions_if_any and give a non-local fallback only when useful.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const buildUserPayload = (extra: Record<string, unknown> = {}) => ({
+    date: todayIsoDate(),
+    instruction: baseInstruction,
+    context,
+    detected_domain: route,
+    cognitive_operating_layer: cognitiveContext
+      ? {
+          state_detection: cognitiveContext.stateDetection,
+          intervention: cognitiveContext.intervention,
+          selected_memory: cognitiveContext.memorySelection,
+          web_search_decision: cognitiveContext.webSearchDecision,
+          repeated_topic: cognitiveContext.repeatedTopic,
+          success_criteria: cognitiveContext.intervention.success_criteria,
+          escalation_model_selected: cognitiveContext.useEscalationModel,
+        }
+      : null,
+    ...extra,
+  });
+
+  const parsePlan = (outputText: string) =>
+    normalizePlanForIntervention(
+      nextMovePlanSchema.parse(trimNextMovePlanOutput(JSON.parse(outputText))),
+      cognitiveContext ?? {
+        stateDetection: {
+          primary_state: "execution_mode",
+          secondary_states: [],
+          confidence: 0.5,
+          user_intent: context.situation.title,
+          emotional_temperature: "low",
+          action_readiness: "high",
+          risk_flags: [],
+          needs_web_search: false,
+          needs_memory: true,
+          needs_task_creation: true,
+          needs_escalation: false,
+          recommended_intervention: "concise_execution_plan",
+          reasoning_summary: "Fallback context for legacy plan generation.",
+        },
+        intervention: {
+          intervention_type: "concise_execution_plan",
+          response_length: "medium",
+          tone: "direct",
+          should_create_tasks: true,
+          max_tasks: 3,
+          should_ask_question: false,
+          question_if_needed: null,
+          must_include: [],
+          must_avoid: [],
+          success_criteria: ["Produce a concrete next move."],
+        },
+        memorySelection: {
+          selected_memories: [],
+          excluded_memory_reasoning: "",
+          context_budget_used: 0,
+        },
+        webSearchDecision: {
+          should_use_web_search: false,
+          reason: "",
+          triggers: [],
+          blocked_by_policy: false,
+        },
+        repeatedTopic: false,
+        useEscalationModel: false,
+      },
+      options.sourceMessageId ?? null,
+    );
+
+  const first = await createStructuredResponse({
     system: strategistSystemPrompt,
     name: "flowpath_next_move_plan",
     description: "A practical next best move plan for a user's current situation.",
     schema: nextMovePlanJsonSchema,
-    user: {
-      date: todayIsoDate(),
-      instruction:
-        [
-          "Generate a leverage-focused plan the user can act on today. Be careful and practical for high-stakes situations. Do not overclaim certainty.",
-          "Use every prior intake answer; do not ask follow-up questions for details already present in the situation, profile, session summary, or messages.",
-          "If web search is available, use it selectively for current or local facts the model may not know. For local resources, opportunities, programs, rules, or logistics, search with the user's city, region/state/province/county, country, and timezone when available.",
-          "Use at most three web searches. If web search is not needed, do not use it.",
-          "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
-          "Fill the structured insight fields with mentor-style judgment: the likely naive outsider path, the higher-leverage path a successful domain insider would recommend to someone they care about, and the wasted motion to avoid.",
-          "Make that insight constraint-aware: account for actual constraints, access level, runway, proof/track record, transportation, deadlines, credibility signals, local/legal/professional boundaries, and whether a human/professional handoff is needed.",
-          "Use friction_pattern to name the likely source of resistance in plain language without blame.",
-          "Fill local_reality_scout only with verified current or local findings, or ask for the missing city/region/country when local specificity would change the plan.",
-          "Fill safety_boundary with the practical limits of AI help, the professional-help signal, and urgent support guidance.",
-          "Fill inferred_context_items with reviewable memories or constraints from this plan. Use source plan. Do not mark sensitive details saved_memory; use proposed_memory only for broad reusable memories and session_only for high-sensitivity details.",
-          "Fill task_candidates with at most three concrete actions: immediate_next_action, follow_up, and supporting. Make each small enough to act on, include effort/importance/friction, and explain why it should rank where it does.",
-          "For resources_to_seek, include a verified URL, phone number, or practical search target when web search verifies one. Leave contact_or_url empty unless you can provide a reliable official or well-established resource.",
-          "If local specificity matters but location is missing, ask for city plus region/country in follow_up_questions_if_any and give a non-local fallback only when useful.",
-        ].join(" "),
-      context,
-    },
+    user: buildUserPayload(),
     tools,
     include,
     maxToolCalls: tools ? 3 : undefined,
     maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
+    model: generationModel,
   });
 
+  let plan = parsePlan(first.outputText);
+  let evaluator = cognitiveContext ? evaluateNextMovePlan(plan, cognitiveContext) : null;
+  let responseRewritten = false;
+  let revision:
+    | Awaited<ReturnType<typeof createStructuredResponse>>
+    | null = null;
+
+  if (cognitiveContext && evaluator && !evaluator.passes) {
+    responseRewritten = true;
+    const revisionModel =
+      evaluator.unsafe_or_overconfident || evaluator.score < 0.55
+        ? getModelForRole("escalation_model")
+        : generationModel;
+    revision = await createStructuredResponse({
+      system: strategistSystemPrompt,
+      name: "flowpath_next_move_plan_revision",
+      description: "A revised practical next best move plan for a user's current situation.",
+      schema: nextMovePlanJsonSchema,
+      user: buildUserPayload({
+        prior_plan: plan,
+        evaluator,
+        revision_instruction: buildRevisionInstruction(evaluator),
+      }),
+      tools,
+      include,
+      maxToolCalls: tools ? 2 : undefined,
+      maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
+      model: revisionModel,
+    });
+    plan = parsePlan(revision.outputText);
+    evaluator = evaluateNextMovePlan(plan, cognitiveContext);
+  }
+
+  const usage = revision ? combineUsage(first.usage, revision.usage) : first.usage;
+  const modelUsedByStage: Record<string, string> = {
+    generator: first.model,
+  };
+  const promptTokensByStage: Record<string, number> = {
+    generator: first.usage.inputTokens ?? 0,
+  };
+  const completionTokensByStage: Record<string, number> = {
+    generator: first.usage.outputTokens ?? 0,
+  };
+  const costInput: Record<string, StageUsage | undefined> = {
+    generator: {
+      model: first.model,
+      inputTokens: first.usage.inputTokens,
+      outputTokens: first.usage.outputTokens,
+    },
+  };
+
+  if (revision) {
+    modelUsedByStage.revision = revision.model;
+    promptTokensByStage.revision = revision.usage.inputTokens ?? 0;
+    completionTokensByStage.revision = revision.usage.outputTokens ?? 0;
+    costInput.revision = {
+      model: revision.model,
+      inputTokens: revision.usage.inputTokens,
+      outputTokens: revision.usage.outputTokens,
+    };
+  }
+
+  const totalEstimatedCost = estimateModelCostDollars(costInput);
+  const webSearchUsed = first.usedWebSearch || Boolean(revision?.usedWebSearch);
+  const cognitiveMetadata =
+    cognitiveContext &&
+    buildCognitiveMetadata({
+      context: cognitiveContext,
+      evaluator,
+      responseRewritten,
+      modelUsedByStage,
+      promptTokensByStage,
+      completionTokensByStage,
+      totalEstimatedCost,
+      webSearchUsed,
+    });
+
   return {
-    plan: nextMovePlanSchema.parse(trimNextMovePlanOutput(JSON.parse(outputText))),
-    model,
+    plan,
+    model: responseRewritten && revision ? revision.model : first.model,
     usage,
+    cognitiveMetadata: cognitiveMetadata || undefined,
   };
 }

@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, CheckCircle2, CheckSquare, MessageSquare, Plus, Sparkles } from "lucide-react";
 
-import { apiFetch } from "@/lib/client-api";
+import { ApiClientError, apiFetch } from "@/lib/client-api";
+import {
+  INTAKE_ANSWER_MAX,
+  SITUATION_DESCRIPTION_MAX,
+  SITUATION_TITLE_MAX,
+} from "@/lib/schemas";
 import type {
   ContextConstraints,
   BillingSummary,
@@ -14,16 +19,20 @@ import type {
   SituationUrgency,
   StoredNextMovePlan,
   Task,
+  TaskConversionResponse,
 } from "@/lib/types";
 import { ContextConstraintsEditor } from "./context-constraints-editor";
 import {
   GenerationStatus,
+  intakeGenerationStages,
   nextMoveGenerationStages,
+  taskGenerationStages,
 } from "./generation-status";
 import { NextMovePlanCard } from "./next-move-plan-card";
 import {
   Button,
   Card,
+  CharacterCount,
   EmptyState,
   Field,
   Notice,
@@ -41,6 +50,13 @@ type SituationDetail = {
   tasks: Task[];
 };
 
+type ActiveGeneration = {
+  id: string;
+  type: "intake" | "plan" | "tasks";
+  startedAt: number;
+  retryCount: number;
+};
+
 const templates = [
   ["work_career", "Work / Career"],
   ["money_stability", "Money / Stability"],
@@ -54,18 +70,32 @@ const templates = [
 export function NextMoveFlow() {
   const [situations, setSituations] = useState<Situation[]>([]);
   const [detail, setDetail] = useState<SituationDetail | null>(null);
+  const [description, setDescription] = useState("");
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("custom");
   const [urgency, setUrgency] = useState<SituationUrgency>("medium");
   const [answer, setAnswer] = useState("");
+  const [lastAnswerAttempt, setLastAnswerAttempt] = useState<{
+    content: string;
+    clientMessageId: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [converting, setConverting] = useState(false);
+  const [activeGeneration, setActiveGeneration] = useState<ActiveGeneration | null>(null);
+  const [taskConfirmation, setTaskConfirmation] =
+    useState<TaskConversionResponse | null>(null);
   const [savingConstraints, setSavingConstraints] = useState(false);
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const detailRequestRef = useRef(0);
+  const generationRef = useRef<{
+    id: string;
+    controller: AbortController;
+    type: ActiveGeneration["type"];
+  } | null>(null);
 
   const activeSituations = useMemo(
     () => situations.filter((situation) => situation.status === "active"),
@@ -79,7 +109,15 @@ export function NextMoveFlow() {
   }, []);
 
   const loadDetail = useCallback(async (id: number) => {
-    setDetail(await apiFetch<SituationDetail>(`/api/situations/${id}`));
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    setError(null);
+    const nextDetail = await apiFetch<SituationDetail>(`/api/situations/${id}`);
+    if (detailRequestRef.current === requestId) {
+      setDetail(nextDetail);
+      setAnswer("");
+      setLastAnswerAttempt(null);
+    }
   }, []);
 
   const loadBillingSummary = useCallback(async () => {
@@ -111,6 +149,47 @@ export function NextMoveFlow() {
     void Promise.resolve().then(loadBillingSummary);
   }, [loadBillingSummary]);
 
+  function formatError(error: unknown, fallback: string) {
+    if (error instanceof ApiClientError && typeof error.details === "string") {
+      return error.details || error.message;
+    }
+    return error instanceof Error ? error.message : fallback;
+  }
+
+  function startGeneration(type: ActiveGeneration["type"], retryCount = 0) {
+    const controller = new AbortController();
+    const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const active = { id, type, startedAt: Date.now(), retryCount };
+    generationRef.current = { id, controller, type };
+    setActiveGeneration(active);
+    return { id, controller, active };
+  }
+
+  async function markGenerationCanceled(id: string) {
+    await apiFetch(`/api/generations/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }).catch(() => {});
+  }
+
+  async function cancelActiveGeneration() {
+    const active = generationRef.current;
+    if (!active) return;
+    active.controller.abort();
+    await markGenerationCanceled(active.id);
+    generationRef.current = null;
+    setActiveGeneration(null);
+    setWorking(false);
+    setGenerating(false);
+    setConverting(false);
+    setMessage("Generation canceled. No completed result was added.");
+  }
+
+  function handleGenerationTimeout() {
+    // Let the in-flight request continue; the status panel already exposes
+    // explicit retry/cancel controls once a generation takes too long.
+  }
+
   async function createSituation(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setWorking(true);
@@ -119,17 +198,19 @@ export function NextMoveFlow() {
     try {
       const created = await apiFetch<{ situation: Situation }>("/api/situations", {
         method: "POST",
-        body: JSON.stringify({ title, category, urgency }),
+        body: JSON.stringify({ title, description, category, urgency }),
       });
+      setDescription("");
       setTitle("");
       setCategory("custom");
       setUrgency("medium");
+      setTaskConfirmation(null);
       await loadSituations();
       await loadDetail(created.situation.id);
       setMessage("Situation started. Answer one question at a time.");
     } catch (createError) {
       setError(
-        createError instanceof Error ? createError.message : "Could not start situation.",
+        formatError(createError, "Could not start situation."),
       );
     } finally {
       setWorking(false);
@@ -139,38 +220,65 @@ export function NextMoveFlow() {
   async function submitAnswer(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!detail) return;
+    await submitAnswerAttempt(answer, undefined);
+  }
+
+  async function submitAnswerAttempt(
+    content: string,
+    retry?: { clientMessageId: string; retryCount: number },
+  ) {
+    if (!detail) return;
+    const clientMessageId =
+      retry?.clientMessageId ?? `answer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const { id, controller } = startGeneration("intake", retry?.retryCount ?? 0);
+    setLastAnswerAttempt({ content, clientMessageId });
     setWorking(true);
     setError(null);
     setMessage(null);
     try {
       await apiFetch(`/api/situations/${detail.situation.id}/messages`, {
         method: "POST",
-        body: JSON.stringify({ content: answer }),
+        signal: controller.signal,
+        body: JSON.stringify({
+          content,
+          client_message_id: clientMessageId,
+          client_generation_id: id,
+          retry_count: retry?.retryCount ?? 0,
+        }),
       });
       setAnswer("");
+      setLastAnswerAttempt(null);
       await loadDetail(detail.situation.id);
     } catch (submitError) {
-      setError(
-        submitError instanceof Error ? submitError.message : "Could not continue intake.",
-      );
+      if (controller.signal.aborted) return;
+      setError(formatError(submitError, "Could not continue intake."));
     } finally {
+      if (generationRef.current?.id === id) {
+        generationRef.current = null;
+        setActiveGeneration(null);
+      }
       setWorking(false);
     }
   }
 
-  async function generatePlan() {
+  async function generatePlan(retryCount = 0) {
     if (!detail) return;
     if (isNextMovePlanQuotaExhausted) {
       setError(nextMovePlanQuotaMessage);
       return;
     }
+    const { id, controller } = startGeneration("plan", retryCount);
     setGenerating(true);
     setError(null);
     setMessage(null);
     try {
       await apiFetch<StoredNextMovePlan>(
         `/api/situations/${detail.situation.id}/generate-plan`,
-        { method: "POST", body: JSON.stringify({}) },
+        {
+          method: "POST",
+          signal: controller.signal,
+          body: JSON.stringify({ client_generation_id: id, retry_count: retryCount }),
+        },
       );
       await loadDetail(detail.situation.id);
       await loadSituations();
@@ -178,33 +286,44 @@ export function NextMoveFlow() {
       setMessage("Next Move Plan generated.");
     } catch (generateError) {
       await loadBillingSummary();
-      setError(
-        generateError instanceof Error
-          ? generateError.message
-          : "Could not generate next move plan.",
-      );
+      if (controller.signal.aborted) return;
+      setError(formatError(generateError, "Could not generate next move plan."));
     } finally {
+      if (generationRef.current?.id === id) {
+        generationRef.current = null;
+        setActiveGeneration(null);
+      }
       setGenerating(false);
     }
   }
 
   async function convertPlan() {
     if (!detail?.latestPlan) return;
+    const { id, controller } = startGeneration("tasks");
     setConverting(true);
     setError(null);
     setMessage(null);
     try {
-      await apiFetch<Task[]>(`/api/next-move-plans/${detail.latestPlan.id}/tasks`, {
+      const result = await apiFetch<TaskConversionResponse>(`/api/next-move-plans/${detail.latestPlan.id}/tasks`, {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({}),
       });
+      setTaskConfirmation(result);
       await loadDetail(detail.situation.id);
-      setMessage("Plan steps are now tasks.");
-    } catch (convertError) {
-      setError(
-        convertError instanceof Error ? convertError.message : "Could not create tasks.",
+      setMessage(
+        result.alreadyExisted
+          ? "These tasks were already added. No duplicates created."
+          : `Added ${result.items.length} ranked tasks.`,
       );
+    } catch (convertError) {
+      if (controller.signal.aborted) return;
+      setError(formatError(convertError, "Could not create tasks."));
     } finally {
+      if (generationRef.current?.id === id) {
+        generationRef.current = null;
+        setActiveGeneration(null);
+      }
       setConverting(false);
     }
   }
@@ -292,12 +411,31 @@ export function NextMoveFlow() {
             <form className="grid gap-4" onSubmit={createSituation}>
               <Field label="What is going on?">
                 <TextArea
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
+                  value={description}
+                  maxLength={SITUATION_DESCRIPTION_MAX}
+                  onChange={(event) => setDescription(event.target.value)}
                   required
                   placeholder="Example: I have been applying to jobs for months and nothing is happening."
                 />
+                <CharacterCount value={description} max={SITUATION_DESCRIPTION_MAX} />
               </Field>
+              <details className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                  Optional short title
+                </summary>
+                <div className="mt-3">
+                  <Field label="Short title">
+                    <TextArea
+                      value={title}
+                      maxLength={SITUATION_TITLE_MAX}
+                      onChange={(event) => setTitle(event.target.value)}
+                      placeholder="Example: Job search stuck"
+                      className="min-h-20"
+                    />
+                    <CharacterCount value={title} max={SITUATION_TITLE_MAX} />
+                  </Field>
+                </div>
+              </details>
               <details className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
                 <summary className="cursor-pointer text-sm font-medium text-slate-200">
                   Optional urgency
@@ -337,7 +475,10 @@ export function NextMoveFlow() {
                   <button
                     key={situation.id}
                     type="button"
-                    onClick={() => loadDetail(situation.id)}
+                    onClick={() => {
+                      setTaskConfirmation(null);
+                      void loadDetail(situation.id);
+                    }}
                     className={`rounded-md border px-3 py-2 text-left text-sm transition ${
                       detail?.situation.id === situation.id
                         ? "border-[var(--azure)] bg-[rgba(0,120,212,0.16)] text-white"
@@ -367,6 +508,12 @@ export function NextMoveFlow() {
                     <h2 className="mt-1 text-2xl font-semibold">
                       {detail.situation.title}
                     </h2>
+                    {detail.situation.description &&
+                    detail.situation.description !== detail.situation.title ? (
+                      <p className="mt-2 text-sm text-slate-300">
+                        {detail.situation.description}
+                      </p>
+                    ) : null}
                     <p className="mt-2 text-sm text-slate-400">
                       Progress: {stageLabel(detail.session.current_stage)}
                     </p>
@@ -405,7 +552,7 @@ export function NextMoveFlow() {
                     </div>
                     <Button
                       type="button"
-                      onClick={generatePlan}
+                      onClick={() => generatePlan()}
                       disabled={generating || isNextMovePlanQuotaExhausted}
                     >
                       <Sparkles className="h-4 w-4" />
@@ -420,18 +567,27 @@ export function NextMoveFlow() {
                     {isNextMovePlanQuotaExhausted ? (
                       <QuotaNotice message={nextMovePlanQuotaMessage} />
                     ) : null}
-                    {generating ? (
-                      <GenerationStatus stages={nextMoveGenerationStages} />
+                    {generating && activeGeneration?.type === "plan" ? (
+                      <GenerationStatus
+                        stages={nextMoveGenerationStages}
+                        startedAt={activeGeneration.startedAt}
+                        onRetry={() => generatePlan(activeGeneration.retryCount + 1)}
+                        onCancel={cancelActiveGeneration}
+                        onEdit={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                        onTimeout={handleGenerationTimeout}
+                      />
                     ) : null}
                   </div>
                 ) : (
                   <form className="grid gap-3" onSubmit={submitAnswer}>
                     <TextArea
                       value={answer}
+                      maxLength={INTAKE_ANSWER_MAX}
                       onChange={(event) => setAnswer(event.target.value)}
                       placeholder="Answer in plain language. Bullet points are fine."
                       required
                     />
+                    <CharacterCount value={answer} max={INTAKE_ANSWER_MAX} />
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Button type="submit" disabled={working}>
                         {working ? "Thinking..." : "Send answer"}
@@ -439,7 +595,7 @@ export function NextMoveFlow() {
                       <Button
                         type="button"
                         variant="secondary"
-                        onClick={generatePlan}
+                        onClick={() => generatePlan()}
                         disabled={generating || isNextMovePlanQuotaExhausted}
                       >
                         <Sparkles className="h-4 w-4" />
@@ -447,14 +603,36 @@ export function NextMoveFlow() {
                           ? "Next Move limit reached"
                           : generating
                             ? "Generating plan..."
-                            : "Generate plan now"}
+                            : "I’ve given enough context / Generate now"}
                       </Button>
                     </div>
                     {isNextMovePlanQuotaExhausted ? (
                       <QuotaNotice message={nextMovePlanQuotaMessage} />
                     ) : null}
-                    {generating ? (
-                      <GenerationStatus stages={nextMoveGenerationStages} />
+                    {working && activeGeneration?.type === "intake" ? (
+                      <GenerationStatus
+                        stages={intakeGenerationStages}
+                        startedAt={activeGeneration.startedAt}
+                        onRetry={() =>
+                          lastAnswerAttempt &&
+                          submitAnswerAttempt(lastAnswerAttempt.content, {
+                            clientMessageId: lastAnswerAttempt.clientMessageId,
+                            retryCount: activeGeneration.retryCount + 1,
+                          })
+                        }
+                        onCancel={cancelActiveGeneration}
+                        onTimeout={handleGenerationTimeout}
+                      />
+                    ) : null}
+                    {generating && activeGeneration?.type === "plan" ? (
+                      <GenerationStatus
+                        stages={nextMoveGenerationStages}
+                        startedAt={activeGeneration.startedAt}
+                        onRetry={() => generatePlan(activeGeneration.retryCount + 1)}
+                        onCancel={cancelActiveGeneration}
+                        onEdit={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                        onTimeout={handleGenerationTimeout}
+                      />
                     ) : null}
                   </form>
                 )}
@@ -485,6 +663,17 @@ export function NextMoveFlow() {
 
               <RelatedTasksCard tasks={detail.tasks} />
 
+              {converting && activeGeneration?.type === "tasks" ? (
+                <GenerationStatus
+                  stages={taskGenerationStages}
+                  startedAt={activeGeneration.startedAt}
+                  softWarningSeconds={10}
+                  hardTimeoutSeconds={45}
+                  onCancel={cancelActiveGeneration}
+                  onTimeout={handleGenerationTimeout}
+                />
+              ) : null}
+
               <NextMovePlanCard
                 plan={detail.latestPlan}
                 fallbackTask={detail.tasks[0] ?? null}
@@ -492,6 +681,8 @@ export function NextMoveFlow() {
                   detail.latestPlan && !latestPlanHasTasks ? convertPlan : undefined
                 }
                 converting={converting}
+                tasksAdded={latestPlanHasTasks}
+                taskConfirmation={taskConfirmation}
               />
             </>
           ) : (

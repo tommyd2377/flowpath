@@ -62,17 +62,38 @@ export function Field({
   label,
   children,
   hint,
+  error,
 }: {
   label: string;
   children: ReactNode;
   hint?: string;
+  error?: string | null;
 }) {
   return (
     <label className="grid gap-2 text-sm font-medium text-slate-200">
       <span>{label}</span>
       {children}
       {hint ? <span className="text-xs font-normal text-slate-400">{hint}</span> : null}
+      {error ? <span className="text-xs font-normal text-red-200">{error}</span> : null}
     </label>
+  );
+}
+
+export function CharacterCount({
+  value,
+  max,
+}: {
+  value: string;
+  max: number;
+}) {
+  const overLimit = value.length > max;
+  return (
+    <div
+      className={`text-xs ${overLimit ? "text-red-200" : "text-slate-500"}`}
+      aria-live="polite"
+    >
+      {value.length}/{max}
+    </div>
   );
 }
 

@@ -12,6 +12,7 @@ import type {
   Situation,
   StoredNextMovePlan,
   Task,
+  TaskConversionResponse,
 } from "@/lib/types";
 import {
   GenerationStatus,
@@ -36,6 +37,8 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [converting, setConverting] = useState(false);
+  const [taskConfirmation, setTaskConfirmation] =
+    useState<TaskConversionResponse | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -111,12 +114,17 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch<Task[]>(`/api/next-move-plans/${detail.latestPlan.id}/tasks`, {
+      const result = await apiFetch<TaskConversionResponse>(`/api/next-move-plans/${detail.latestPlan.id}/tasks`, {
         method: "POST",
         body: JSON.stringify({}),
       });
+      setTaskConfirmation(result);
       await load();
-      setMessage("Plan steps are now tasks.");
+      setMessage(
+        result.alreadyExisted
+          ? "These tasks were already added. No duplicates created."
+          : `Added ${result.items.length} ranked tasks.`,
+      );
     } catch (convertError) {
       setError(
         convertError instanceof Error ? convertError.message : "Could not create tasks.",
@@ -180,6 +188,10 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           {detail.situation.status}
           {detail.latestPlan ? ` · ${modeLabel(detail.latestPlan.mode)} mode` : ""}
         </p>
+        {detail.situation.description &&
+        detail.situation.description !== detail.situation.title ? (
+          <p>{detail.situation.description}</p>
+        ) : null}
       </PageHeader>
 
       {message ? <div className="mb-4"><Notice tone="success">{message}</Notice></div> : null}
@@ -303,6 +315,8 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           fallbackTask={detail.tasks[0] ?? null}
           onConvert={detail.latestPlan ? convertPlan : undefined}
           converting={converting}
+          tasksAdded={latestPlanHasTasks}
+          taskConfirmation={taskConfirmation}
         />
       </div>
     </div>

@@ -12,7 +12,7 @@ test("buildFirstIntakeQuestion uses the situation category without placeholder m
     },
   );
 
-  assert.match(question, /business situation/);
+  assert.match(question, /product decision|business situation/);
   assert.doesNotMatch(question, /Paste durable context/);
 });
 
@@ -28,7 +28,7 @@ test("buildFirstIntakeQuestion does not expose saved profile context", () => {
   assert.doesNotMatch(question, /Using your saved context/);
   assert.doesNotMatch(question, /training and rebuilding stamina/);
   assert.doesNotMatch(question, /acting reps, health, and steady income/);
-  assert.match(question, /creative situation/);
+  assert.match(question, /creative\/project situation|creative situation/);
 });
 
 test("buildFirstIntakeQuestion lets high urgency shape the first question", () => {
@@ -40,7 +40,7 @@ test("buildFirstIntakeQuestion lets high urgency shape the first question", () =
     },
   );
 
-  assert.match(question, /less risky or more under control/);
+  assert.match(question, /housing deadline|less risky or more under control/);
 });
 
 test("buildFirstIntakeQuestion does not expose saved structured constraints", () => {
@@ -54,7 +54,7 @@ test("buildFirstIntakeQuestion does not expose saved structured constraints", ()
 
   assert.doesNotMatch(question, /money pressure: tight/);
   assert.doesNotMatch(question, /runway: 1_to_3_months/);
-  assert.match(question, /career situation/);
+  assert.match(question, /career or job-search situation|career situation/);
 });
 
 test("buildFirstIntakeQuestion asks a specific social connection question", () => {

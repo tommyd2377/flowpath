@@ -14,6 +14,7 @@ import {
   MapPinned,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { QaModeBanner } from "./qa-mode-banner";
 
 const links = [
   { href: "/", label: "Today", icon: Compass },
@@ -35,6 +36,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-20 border-b border-slate-800 bg-[#02040a]/95 backdrop-blur">
+        <QaModeBanner />
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4">
             <Link href="/" className="flex items-center gap-3">

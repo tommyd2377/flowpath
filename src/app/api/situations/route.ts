@@ -1,6 +1,7 @@
 import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
 import { buildFirstIntakeQuestion } from "@/lib/intake";
+import { isQaRequest } from "@/lib/qa-mode";
 import {
   addIntakeMessage,
   createSituation,
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
     const user = await requireUser();
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status") || undefined;
-    return dataResponse(await listSituations(user.id, status));
+    return dataResponse(await listSituations(user.id, status, { isQa: isQaRequest(request) }));
   } catch (error) {
     return errorResponse(error, "Could not load situations.");
   }
@@ -26,14 +27,16 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
+    const isQa = isQaRequest(request);
     const input = situationInputSchema.parse(await readJson(request));
-    const situation = await createSituation(user.id, input);
+    const situation = await createSituation(user.id, input, { isQa });
     const session = await getOrCreateIntakeSession(user.id, situation.id);
     const messages = await addIntakeMessage(
       user.id,
       session.id,
       "assistant",
       buildFirstIntakeQuestion(situation),
+      { isQa },
     );
     return dataResponse({ situation, session, messages: [messages] }, 201);
   } catch (error) {
