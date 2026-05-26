@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { comparativeScenarioFixtures } from "./scenario-fixtures";
 import {
+  buildFirstIntakePlan,
   buildDomainAppropriateFirstQuestion,
   classifySituationDomain,
 } from "./situation-routing";
@@ -32,7 +33,7 @@ test("open loops fixture does not trigger a money-specific first question", () =
   });
 
   assert.doesNotMatch(question, /money situation/i);
-  assert.match(question, /simpler|protected|health, work, money, and relationships/i);
+  assert.match(question, /pressure|avoiding|highest payoff|triaged first/i);
 });
 
 test("money and housing fixtures use domain-specific safe questions", () => {
@@ -48,7 +49,7 @@ test("money and housing fixtures use domain-specific safe questions", () => {
       category: "money_stability",
       urgency: "medium",
     }),
-    /money, income, or runway/i,
+    /financial decision|amount|timeline|downside risk|budget choice/i,
   );
   assert.match(
     buildDomainAppropriateFirstQuestion({
@@ -57,6 +58,21 @@ test("money and housing fixtures use domain-specific safe questions", () => {
       category: "housing",
       urgency: "medium",
     }),
-    /housing deadline|risk level/i,
+    /rent or housing decision|timeline|document|landlord/i,
   );
+});
+
+test("first intake planner exposes subtype and genericity metadata", () => {
+  const result = buildFirstIntakePlan({
+    title: "I'm trying to decide if I should ask my doctor for a generic prescription for Propecia.",
+    description: "",
+    category: "health_recovery",
+    urgency: "low",
+  });
+
+  assert.equal(result.domain, "health");
+  assert.equal(result.subtype, "routine_medication_discussion");
+  assert.equal(result.questionPurpose, "clarify_decision");
+  assert.notEqual(result.genericityRisk, "high");
+  assert.match(result.missingInfoTarget, /medication decision/i);
 });

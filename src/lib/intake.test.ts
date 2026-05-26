@@ -1,91 +1,220 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildFirstIntakeQuestion } from "./intake";
+import { buildFirstIntakePlan, buildFirstIntakeQuestion } from "./intake";
+import { interviewerOutputSchema } from "./schemas";
+import type { SituationRoutingContext } from "./situation-routing";
 
-test("buildFirstIntakeQuestion uses the situation category without placeholder memory", () => {
-  const question = buildFirstIntakeQuestion(
+function plan(input: Partial<SituationRoutingContext> & { title: string }) {
+  return buildFirstIntakePlan({
+    description: "",
+    category: "custom",
+    urgency: "medium",
+    ...input,
+  });
+}
+
+function assertUsableFirstQuestion(
+  input: Partial<SituationRoutingContext> & { title: string },
+  expected: {
+    subtype: string;
+    purpose: string;
+    reflects: RegExp;
+    avoids?: RegExp;
+  },
+) {
+  const result = plan(input);
+  assert.equal(result.subtype, expected.subtype);
+  assert.equal(result.questionPurpose, expected.purpose);
+  assert.notEqual(result.genericityRisk, "high");
+  assert.match(result.question, expected.reflects);
+  if (expected.avoids) assert.doesNotMatch(result.question, expected.avoids);
+  return result;
+}
+
+test("routine medication decision asks about the decision concern, not recovery", () => {
+  const result = assertUsableFirstQuestion(
     {
-      title: "I am trying to build a business",
+      title:
+        "I'm trying to decide if I should ask my doctor for a generic prescription for Propecia.",
+      category: "health_recovery",
+      urgency: "low",
+    },
+    {
+      subtype: "routine_medication_discussion",
+      purpose: "clarify_decision",
+      reflects: /Propecia|finasteride|doctor/i,
+      avoids: /body-respecting|stabilizing|24-72 hours/i,
+    },
+  );
+
+  assert.match(result.question, /side effects|cost|works/i);
+});
+
+test("symptom triage asks for current symptom details", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I've had a weird rash and dizziness since yesterday.",
+      category: "health_recovery",
+      urgency: "medium",
+    },
+    {
+      subtype: "symptom_triage",
+      purpose: "clarify_current_state",
+      reflects: /symptom|how long|severe|suddenly/i,
+    },
+  );
+});
+
+test("fitness recovery can use physical recovery framing", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I'm rebuilding running stamina after an injury.",
+      category: "health_recovery",
+      urgency: "medium",
+    },
+    {
+      subtype: "fitness_or_physical_recovery",
+      purpose: "clarify_current_state",
+      reflects: /recover|rebuild|pain|reinjury|consistency/i,
+    },
+  );
+});
+
+test("product pricing decision asks about the pricing tradeoff", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I'm trying to decide whether to make FlowPath free or charge early users.",
       category: "business",
       urgency: "medium",
     },
-  );
-
-  assert.match(question, /product decision|business situation/);
-  assert.doesNotMatch(question, /Paste durable context/);
-});
-
-test("buildFirstIntakeQuestion does not expose saved profile context", () => {
-  const question = buildFirstIntakeQuestion(
     {
-      title: "Get momentum on acting",
-      category: "creative",
-      urgency: "medium",
+      subtype: "product_strategy",
+      purpose: "clarify_tradeoff",
+      reflects: /FlowPath|free-versus-charging|API\/token costs|early users/i,
     },
   );
-
-  assert.doesNotMatch(question, /Using your saved context/);
-  assert.doesNotMatch(question, /training and rebuilding stamina/);
-  assert.doesNotMatch(question, /acting reps, health, and steady income/);
-  assert.match(question, /creative\/project situation|creative situation/);
 });
 
-test("buildFirstIntakeQuestion lets high urgency shape the first question", () => {
-  const question = buildFirstIntakeQuestion(
+test("coding implementation blocker asks for system-specific constraints", () => {
+  assertUsableFirstQuestion(
     {
-      title: "Apartment problem",
+      title: "I need help fixing a Next.js API route implementation bug.",
+      category: "work_career",
+      urgency: "medium",
+    },
+    {
+      subtype: "coding_implementation",
+      purpose: "clarify_constraint",
+      reflects: /implementation blocker|file|route|error|design constraint/i,
+    },
+  );
+});
+
+test("creative character revision asks about the character arc", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I need to revise Amanda's arc in Lovelacers.",
+      category: "creative_project",
+      urgency: "medium",
+    },
+    {
+      subtype: "character_psychology",
+      purpose: "clarify_creative_bottleneck",
+      reflects: /Amanda|Lovelacers|arc|want|moral turn|emotional payoff/i,
+    },
+  );
+});
+
+test("dating and social plans ask about the specific next action", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I'm deciding whether to text someone from a dating app and ask to meet.",
+      category: "relationships_connection",
+      urgency: "medium",
+    },
+    {
+      subtype: "dating_decision",
+      purpose: "clarify_decision",
+      reflects: /dating decision|message|meet|boundary|safer next step/i,
+    },
+  );
+});
+
+test("suspicious financial charge asks for transaction facts", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I think I found a suspicious E-Trade charge.",
+      category: "money_stability",
+      urgency: "high",
+    },
+    {
+      subtype: "suspicious_charge",
+      purpose: "clarify_risk_or_safety",
+      reflects: /E-Trade charge|amount|merchant|date|pending|posted/i,
+    },
+  );
+});
+
+test("housing and benefits decisions ask about concrete process risk", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "I need to decide what to do about a rent assistance benefits letter.",
       category: "housing",
       urgency: "high",
     },
-  );
-
-  assert.match(question, /housing deadline|less risky or more under control/);
-});
-
-test("buildFirstIntakeQuestion does not expose saved structured constraints", () => {
-  const question = buildFirstIntakeQuestion(
     {
-      title: "Career move",
-      category: "career",
-      urgency: "medium",
+      subtype: "benefits_or_assistance",
+      purpose: "clarify_risk_or_safety",
+      reflects: /benefits|assistance|eligibility|deadline|document|amount/i,
     },
   );
-
-  assert.doesNotMatch(question, /money pressure: tight/);
-  assert.doesNotMatch(question, /runway: 1_to_3_months/);
-  assert.match(question, /career or job-search situation|career situation/);
 });
 
-test("buildFirstIntakeQuestion asks a specific social connection question", () => {
-  const question = buildFirstIntakeQuestion(
+test("too many open loops asks for the pressure point", () => {
+  assertUsableFirstQuestion(
     {
-      title: "I feel lonely and isolated",
-      category: "social",
+      title: "I have too many app ideas and don't know what to work on today.",
+      category: "overwhelm",
       urgency: "medium",
     },
-  );
-
-  assert.match(question, /Which feels closest right now/);
-  assert.match(question, /not enough people in your life/);
-  assert.match(question, /people around you but not enough closeness/);
-});
-
-test("buildFirstIntakeQuestion frames dating and sexual connection around consent and safety", () => {
-  const question = buildFirstIntakeQuestion(
     {
-      title: "I want sexual connection safely and respectfully",
-      category: "sexual_connection",
-      urgency: "medium",
+      subtype: "too_many_tasks",
+      purpose: "clarify_priority",
+      reflects: /app idea|pressure|avoiding|highest payoff/i,
     },
   );
-
-  assert.match(question, /what kind of connection/i);
-  assert.match(question, /consent, boundary, or safety constraints/i);
-  assert.doesNotMatch(question, /sexual history/i);
 });
 
-test("buildFirstIntakeQuestion routes crisis and immediate danger copy", () => {
+test("simple factual or logistical questions avoid heavy intake", () => {
+  assertUsableFirstQuestion(
+    {
+      title: "What time does the DMV close today?",
+      category: "something_else",
+      urgency: "low",
+    },
+    {
+      subtype: "factual_question",
+      purpose: "clarify_goal",
+      reflects: /fact|current|local information/i,
+    },
+  );
+});
+
+test("first question string API still returns the planned question", () => {
+  const situation = {
+    title: "I'm trying to decide whether to make FlowPath free or charge early users.",
+    category: "business",
+    urgency: "medium" as const,
+  };
+
+  assert.equal(
+    buildFirstIntakeQuestion(situation),
+    buildFirstIntakePlan(situation).question,
+  );
+});
+
+test("crisis and immediate danger routing still works", () => {
   assert.match(
     buildFirstIntakeQuestion(
       {
@@ -106,4 +235,18 @@ test("buildFirstIntakeQuestion routes crisis and immediate danger copy", () => {
     ),
     /call 911 or your local emergency number/i,
   );
+});
+
+test("follow-up interviewer schema remains structured for model-generated turns", () => {
+  const parsed = interviewerOutputSchema.parse({
+    question: "What constraint matters most?",
+    current_stage: "understanding_constraints",
+    is_complete: false,
+    summary_so_far: "The user is deciding what to do next.",
+    recommended_urgency: null,
+    recommended_mode: null,
+    inferred_context_items: [],
+  });
+
+  assert.equal(parsed.question, "What constraint matters most?");
 });

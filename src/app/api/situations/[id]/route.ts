@@ -7,6 +7,7 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { buildFirstIntakePlan } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   deleteSituation,
@@ -38,7 +39,15 @@ async function situationDetail(userId: number, id: number, isQa = false) {
     listNextMovePlans(userId, 10, id, { isQa }),
     listTasksForSituation(userId, id, { isQa }),
   ]);
-  return { situation, session, messages, latestPlan, plans, tasks };
+  return {
+    situation,
+    session,
+    messages,
+    latestPlan,
+    plans,
+    tasks,
+    firstIntakePlanner: buildFirstIntakePlan(situation),
+  };
 }
 
 export async function GET(request: Request, context: Context) {

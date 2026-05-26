@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, CheckCircle2, CheckSquare, MessageSquare, Plus, Sparkles } from "lucide-react";
+import { ArrowRight, CheckCircle2, CheckSquare, Info, MessageSquare, Plus, Sparkles } from "lucide-react";
 
 import { ApiClientError, apiFetch } from "@/lib/client-api";
+import { readClientQaMode } from "@/lib/qa-mode";
 import {
   INTAKE_ANSWER_MAX,
   SITUATION_DESCRIPTION_MAX,
   SITUATION_TITLE_MAX,
 } from "@/lib/schemas";
+import type { FirstIntakePlan } from "@/lib/situation-routing";
 import type {
   ContextConstraints,
   BillingSummary,
@@ -48,6 +50,7 @@ type SituationDetail = {
   latestPlan: StoredNextMovePlan | null;
   plans: StoredNextMovePlan[];
   tasks: Task[];
+  firstIntakePlanner?: FirstIntakePlan;
 };
 
 type ActiveGeneration = {
@@ -90,6 +93,7 @@ export function NextMoveFlow() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [debugVisible, setDebugVisible] = useState(false);
   const detailRequestRef = useRef(0);
   const generationRef = useRef<{
     id: string;
@@ -148,6 +152,21 @@ export function NextMoveFlow() {
   useEffect(() => {
     void Promise.resolve().then(loadBillingSummary);
   }, [loadBillingSummary]);
+
+  useEffect(() => {
+    function refreshDebugVisible() {
+      setDebugVisible(
+        process.env.NODE_ENV !== "production" ||
+          process.env.NEXT_PUBLIC_FLOWPATH_COGNITIVE_DEBUG === "true" ||
+          readClientQaMode(),
+      );
+    }
+
+    refreshDebugVisible();
+    window.addEventListener("flowpath-qa-mode-change", refreshDebugVisible);
+    return () =>
+      window.removeEventListener("flowpath-qa-mode-change", refreshDebugVisible);
+  }, []);
 
   function formatError(error: unknown, fallback: string) {
     if (error instanceof ApiClientError && typeof error.details === "string") {
@@ -541,6 +560,9 @@ export function NextMoveFlow() {
                     <p className="text-slate-100">{lastAssistant.content}</p>
                   </div>
                 ) : null}
+                {debugVisible && detail.firstIntakePlanner ? (
+                  <FirstIntakePlannerDebug plan={detail.firstIntakePlanner} />
+                ) : null}
                 {isReadyToGenerate ? (
                   <div className="grid gap-3">
                     <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.12)] p-4 text-sm text-blue-100">
@@ -707,6 +729,36 @@ function QuotaNotice({ message }: { message: string }) {
         </Link>
       </div>
     </Notice>
+  );
+}
+
+function FirstIntakePlannerDebug({ plan }: { plan: FirstIntakePlan }) {
+  return (
+    <details className="mb-4 rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
+      <summary className="flex cursor-pointer items-center gap-2 font-medium text-white">
+        <Info className="h-4 w-4 text-[var(--azure-light)]" />
+        First intake planner
+      </summary>
+      <div className="mt-3 grid gap-2 text-slate-300 sm:grid-cols-2">
+        <DebugBrief title="Domain" value={plan.domain} />
+        <DebugBrief title="Subtype" value={plan.subtype.replaceAll("_", " ")} />
+        <DebugBrief
+          title="Purpose"
+          value={plan.questionPurpose.replaceAll("_", " ")}
+        />
+        <DebugBrief title="Missing info" value={plan.missingInfoTarget} />
+        <DebugBrief title="Genericity" value={plan.genericityRisk} />
+      </div>
+    </details>
+  );
+}
+
+function DebugBrief({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/55 p-2">
+      <div className="text-xs uppercase text-slate-500">{title}</div>
+      <div className="mt-1 text-slate-200">{value}</div>
+    </div>
   );
 }
 
