@@ -100,6 +100,7 @@ export function NextMoveFlow() {
     controller: AbortController;
     type: ActiveGeneration["type"];
   } | null>(null);
+  const latestGenerationIdRef = useRef<string | null>(null);
 
   const activeSituations = useMemo(
     () => situations.filter((situation) => situation.status === "active"),
@@ -180,6 +181,7 @@ export function NextMoveFlow() {
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const active = { id, type, startedAt: Date.now(), retryCount };
     generationRef.current = { id, controller, type };
+    latestGenerationIdRef.current = id;
     setActiveGeneration(active);
     return { id, controller, active };
   }
@@ -265,11 +267,13 @@ export function NextMoveFlow() {
           retry_count: retry?.retryCount ?? 0,
         }),
       });
+      if (latestGenerationIdRef.current !== id) return;
       setAnswer("");
       setLastAnswerAttempt(null);
       await loadDetail(detail.situation.id);
     } catch (submitError) {
       if (controller.signal.aborted) return;
+      if (latestGenerationIdRef.current !== id) return;
       setError(formatError(submitError, "Could not continue intake."));
     } finally {
       if (generationRef.current?.id === id) {
@@ -299,6 +303,7 @@ export function NextMoveFlow() {
           body: JSON.stringify({ client_generation_id: id, retry_count: retryCount }),
         },
       );
+      if (latestGenerationIdRef.current !== id) return;
       await loadDetail(detail.situation.id);
       await loadSituations();
       await loadBillingSummary();
@@ -306,6 +311,7 @@ export function NextMoveFlow() {
     } catch (generateError) {
       await loadBillingSummary();
       if (controller.signal.aborted) return;
+      if (latestGenerationIdRef.current !== id) return;
       setError(formatError(generateError, "Could not generate next move plan."));
     } finally {
       if (generationRef.current?.id === id) {
@@ -328,6 +334,7 @@ export function NextMoveFlow() {
         signal: controller.signal,
         body: JSON.stringify({}),
       });
+      if (latestGenerationIdRef.current !== id) return;
       setTaskConfirmation(result);
       await loadDetail(detail.situation.id);
       setMessage(
@@ -337,6 +344,7 @@ export function NextMoveFlow() {
       );
     } catch (convertError) {
       if (controller.signal.aborted) return;
+      if (latestGenerationIdRef.current !== id) return;
       setError(formatError(convertError, "Could not create tasks."));
     } finally {
       if (generationRef.current?.id === id) {
@@ -593,6 +601,8 @@ export function NextMoveFlow() {
                       <GenerationStatus
                         stages={nextMoveGenerationStages}
                         startedAt={activeGeneration.startedAt}
+                        softWarningSeconds={45}
+                        hardTimeoutSeconds={180}
                         onRetry={() => generatePlan(activeGeneration.retryCount + 1)}
                         onCancel={cancelActiveGeneration}
                         onEdit={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -650,6 +660,8 @@ export function NextMoveFlow() {
                       <GenerationStatus
                         stages={nextMoveGenerationStages}
                         startedAt={activeGeneration.startedAt}
+                        softWarningSeconds={45}
+                        hardTimeoutSeconds={180}
                         onRetry={() => generatePlan(activeGeneration.retryCount + 1)}
                         onCancel={cancelActiveGeneration}
                         onEdit={() => window.scrollTo({ top: 0, behavior: "smooth" })}

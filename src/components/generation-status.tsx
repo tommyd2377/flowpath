@@ -39,8 +39,9 @@ const generationStageDurationsMs = [6000, 8000, 10000, 18000, 18000, 16000];
 export function GenerationStatus({
   stages = nextMoveGenerationStages,
   startedAt,
-  softWarningSeconds = 20,
-  hardTimeoutSeconds = 90,
+  softWarningSeconds = 30,
+  hardTimeoutSeconds = 120,
+  hardTimeoutIsFailure = false,
   onContinue,
   onRetry,
   onCancel,
@@ -51,6 +52,7 @@ export function GenerationStatus({
   startedAt?: number;
   softWarningSeconds?: number;
   hardTimeoutSeconds?: number;
+  hardTimeoutIsFailure?: boolean;
   onContinue?: () => void;
   onRetry?: () => void;
   onCancel?: () => void;
@@ -88,6 +90,14 @@ export function GenerationStatus({
 
   const showSoftWarning =
     elapsedSeconds >= softWarningSeconds && !dismissedWarning && !didTimeout;
+  const showTimeoutNotice =
+    didTimeout && (hardTimeoutIsFailure || !dismissedWarning);
+  const timeoutTone = hardTimeoutIsFailure
+    ? "border-red-900/70 bg-red-950/30 text-red-100"
+    : "border-amber-900/70 bg-amber-950/30 text-amber-100";
+  const timeoutButtonTone = hardTimeoutIsFailure
+    ? "border-red-700 text-red-50 hover:bg-red-900/40"
+    : "border-amber-700 text-amber-50 hover:bg-amber-900/40";
 
   return (
     <div
@@ -106,7 +116,13 @@ export function GenerationStatus({
           />
           <span className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--azure-light)]" />
         </span>
-        <span>{didTimeout ? "This took too long." : message}</span>
+        <span>
+          {didTimeout
+            ? hardTimeoutIsFailure
+              ? "This took too long."
+              : "Still waiting for the model."
+            : message}
+        </span>
         {elapsedSeconds >= 4 ? (
           <span className="text-slate-500">Still working... {elapsedSeconds}s</span>
         ) : null}
@@ -126,15 +142,6 @@ export function GenerationStatus({
             >
               Continue waiting
             </button>
-            {onRetry ? (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="rounded-md border border-amber-700 px-2 py-1 text-xs font-medium text-amber-50 hover:bg-amber-900/40"
-              >
-                Retry
-              </button>
-            ) : null}
             {onCancel ? (
               <button
                 type="button"
@@ -148,18 +155,31 @@ export function GenerationStatus({
         </div>
       ) : null}
 
-      {didTimeout ? (
-        <div className="grid gap-2 rounded-md border border-red-900/70 bg-red-950/30 p-3 text-red-100">
+      {showTimeoutNotice ? (
+        <div className={`grid gap-2 rounded-md border p-3 ${timeoutTone}`}>
           <div>
-            FlowPath did not get a complete response. You can retry, cancel, or
-            edit the situation and try again.
+            {hardTimeoutIsFailure
+              ? "FlowPath did not get a complete response. You can retry, cancel, or edit the situation and try again."
+              : "FlowPath is still waiting for a complete response. You can keep waiting, cancel, or edit the situation and try again."}
           </div>
           <div className="flex flex-wrap gap-2">
-            {onRetry ? (
+            {!hardTimeoutIsFailure ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissedWarning(true);
+                  onContinue?.();
+                }}
+                className={`rounded-md border px-2 py-1 text-xs font-medium ${timeoutButtonTone}`}
+              >
+                Continue waiting
+              </button>
+            ) : null}
+            {hardTimeoutIsFailure && onRetry ? (
               <button
                 type="button"
                 onClick={onRetry}
-                className="rounded-md border border-red-700 px-2 py-1 text-xs font-medium text-red-50 hover:bg-red-900/40"
+                className={`rounded-md border px-2 py-1 text-xs font-medium ${timeoutButtonTone}`}
               >
                 Retry
               </button>
@@ -168,7 +188,7 @@ export function GenerationStatus({
               <button
                 type="button"
                 onClick={onEdit}
-                className="rounded-md border border-red-700 px-2 py-1 text-xs font-medium text-red-50 hover:bg-red-900/40"
+                className={`rounded-md border px-2 py-1 text-xs font-medium ${timeoutButtonTone}`}
               >
                 Edit situation
               </button>
@@ -177,7 +197,7 @@ export function GenerationStatus({
               <button
                 type="button"
                 onClick={onCancel}
-                className="rounded-md border border-red-700 px-2 py-1 text-xs font-medium text-red-50 hover:bg-red-900/40"
+                className={`rounded-md border px-2 py-1 text-xs font-medium ${timeoutButtonTone}`}
               >
                 Cancel
               </button>
