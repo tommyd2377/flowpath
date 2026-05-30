@@ -1,6 +1,12 @@
 import type { Task, TaskFrictionType, SituationUrgency } from "./types";
 import { todayIsoDate } from "./time";
 
+export type TaskRankingOutcomeContext = {
+  userPrefersShorterTasks?: boolean;
+  editedTasksDownCount?: number;
+  ignoredPlanIds?: number[];
+};
+
 const urgencyScore: Record<SituationUrgency, number> = {
   crisis: 40,
   high: 25,
@@ -64,7 +70,27 @@ function stabilityScore(task: Task) {
   return 0;
 }
 
-function rankReason(task: Task, today: string) {
+function outcomeScore(task: Task, context?: TaskRankingOutcomeContext) {
+  let score = 0;
+  const estimated = task.estimated_minutes ?? null;
+  if (context?.userPrefersShorterTasks && estimated != null) {
+    if (estimated <= 25) score += 7;
+    else if (estimated >= 60) score -= 8;
+  }
+  if ((context?.editedTasksDownCount ?? 0) > 0 && estimated != null) {
+    if (estimated <= 20) score += 4;
+    else if (estimated >= 90) score -= 5;
+  }
+  if (
+    task.source_next_move_plan_id &&
+    context?.ignoredPlanIds?.includes(task.source_next_move_plan_id)
+  ) {
+    score -= 12;
+  }
+  return score;
+}
+
+function rankReason(task: Task, today: string, context?: TaskRankingOutcomeContext) {
   const reasons: string[] = [];
   if (task.importance >= 5) reasons.push("highest importance");
   else if (task.importance >= 4) reasons.push("high importance");
@@ -85,11 +111,22 @@ function rankReason(task: Task, today: string) {
   if ((task.friction_type ?? "none") !== "none") {
     reasons.push(`friction: ${task.friction_type.replaceAll("_", " ")}`);
   }
+  if (
+    context?.userPrefersShorterTasks &&
+    task.estimated_minutes != null &&
+    task.estimated_minutes <= 25
+  ) {
+    reasons.push("fits shorter-action follow-through pattern");
+  }
 
   return reasons.slice(0, 3).join("; ") || "best balance of importance, urgency, and effort";
 }
 
-export function scoreTask(task: Task, today = todayIsoDate()) {
+export function scoreTask(
+  task: Task,
+  today = todayIsoDate(),
+  context?: TaskRankingOutcomeContext,
+) {
   const urgency = task.situation_urgency
     ? urgencyScore[task.situation_urgency]
     : 0;
@@ -101,16 +138,21 @@ export function scoreTask(task: Task, today = todayIsoDate()) {
     unblockerScore(task) +
     stabilityScore(task) -
     task.effort * 4 -
-    frictionPenalty[task.friction_type ?? "none"]
+    frictionPenalty[task.friction_type ?? "none"] +
+    outcomeScore(task, context)
   );
 }
 
-export function rankTasks(tasks: Task[], today = todayIsoDate()): Task[] {
+export function rankTasks(
+  tasks: Task[],
+  today = todayIsoDate(),
+  context?: TaskRankingOutcomeContext,
+): Task[] {
   return tasks
     .map((task) => ({
       ...task,
-      rank_score: scoreTask(task, today),
-      rank_reason: rankReason(task, today),
+      rank_score: scoreTask(task, today, context),
+      rank_reason: rankReason(task, today, context),
     }))
     .sort((first, second) => {
       const firstStatus = first.status === "open" ? 0 : first.status === "ignored" ? 1 : 2;

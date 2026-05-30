@@ -9,7 +9,8 @@ export const nextMoveGenerationStages = [
   "Finding the bottleneck...",
   "Building the operator path...",
   "Preparing task candidates...",
-  "Still working. Current or local plans can take about a minute...",
+  "Still working. Current, local, or high-stakes plans can take two to three minutes...",
+  "Almost there. FlowPath will save the plan when it returns...",
 ] as const;
 
 export const intakeGenerationStages = [

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Archive, CheckCircle2, Plus } from "lucide-react";
+import { Archive, CheckCircle2, Plus, Trash2 } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import type { Situation } from "@/lib/types";
@@ -14,6 +14,7 @@ export function SituationsView() {
   const [status, setStatus] = useState("active");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -50,6 +51,35 @@ export function SituationsView() {
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "Could not update situation.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteSituation(situation: Situation) {
+    if (confirmingDeleteId !== situation.id) {
+      setConfirmingDeleteId(situation.id);
+      setMessage(null);
+      setError(null);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiFetch<void>(`/api/situations/${situation.id}`, {
+        method: "DELETE",
+      });
+      setConfirmingDeleteId(null);
+      setMessage("Situation deleted.");
+      await load();
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Could not delete situation.",
       );
     } finally {
       setSaving(false);
@@ -122,7 +152,7 @@ export function SituationsView() {
                     Latest move: {situation.latest_plan_move || "No plan generated yet."}
                   </p>
                 </Link>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2 sm:justify-end">
                   {situation.status === "active" ? (
                     <>
                       <Button
@@ -145,6 +175,37 @@ export function SituationsView() {
                       </Button>
                     </>
                   ) : null}
+                  {confirmingDeleteId === situation.id ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={saving}
+                        onClick={() => setConfirmingDeleteId(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="danger"
+                        disabled={saving}
+                        onClick={() => deleteSituation(situation)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete now
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={saving}
+                      onClick={() => deleteSituation(situation)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </Button>
+                  )}
                 </div>
               </div>
             </Card>

@@ -13,12 +13,15 @@ import type {
   HighestLeverageMove,
   InferredContextItem,
   InferredContextPersistence,
+  InterventionEffectivenessSummary,
   IntakeMessage,
   IntakeSession,
   LifeArea,
   LocalRealityScout,
   OperatorInsight,
   OutcomeRecord,
+  OutcomeHarnessDashboardSummary,
+  OutcomeHarnessEvent,
   PlanTaskCandidate,
   Profile,
   Project,
@@ -31,6 +34,15 @@ import type {
   Task,
 } from "./types";
 import type { CognitiveMetadata, OutcomeValue } from "./cognitive-schemas";
+import {
+  buildEffectivenessAdvisoryText,
+  outcomeHarnessEventInputSchema,
+  scoreEffectivenessSummary,
+  taskEditDiffSchema,
+  type HistoricalEffectivenessContext,
+  type OutcomeHarnessEventInput,
+  type OutcomeHarnessEventType,
+} from "./outcome-harness";
 import type {
   CheckInInput,
   InferredContextItemInput,
@@ -45,6 +57,7 @@ import type {
   TaskInput,
 } from "./schemas";
 import { rankTasks } from "./task-ranking";
+import type { TaskRankingOutcomeContext } from "./task-ranking";
 import {
   constraintsForProfile,
   mergeContextConstraints,
@@ -428,6 +441,712 @@ async function ensureOwnedRecord(table: string, userId: number, id: number | nul
     [id, userId],
   );
   if (!row) throw new Error("Referenced FlowPath record was not found.");
+}
+
+async function inferQaForHarnessRefs(
+  userId: number,
+  refs: {
+    situationId?: number | null;
+    messageId?: number | null;
+    taskId?: number | null;
+    planId?: number | null;
+  },
+  explicit?: boolean,
+) {
+  if (typeof explicit === "boolean") return explicit;
+  if (refs.planId) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM next_move_plans WHERE id = ? AND user_id = ?",
+      [refs.planId, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  if (refs.taskId) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM tasks WHERE id = ? AND user_id = ?",
+      [refs.taskId, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  if (refs.messageId) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM intake_messages WHERE id = ? AND user_id = ?",
+      [refs.messageId, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  if (refs.situationId) {
+    const row = await first<{ is_qa: number }>(
+      "SELECT is_qa FROM situations WHERE id = ? AND user_id = ?",
+      [refs.situationId, userId],
+    );
+    if (row) return rowBoolean(row.is_qa);
+  }
+  return false;
+}
+
+function normalizeHarnessMetadata(value: Record<string, unknown> | undefined) {
+  const json = JSON.stringify(value ?? {});
+  if (json.length <= 12000) return json;
+  return JSON.stringify({
+    truncated: true,
+    preview: json.slice(0, 2000),
+  });
+}
+
+function rowToOutcomeHarnessEvent(
+  row: OutcomeHarnessEvent & UserScopedRow & QaScopedRow,
+): OutcomeHarnessEvent {
+  const safeRow = withoutUserId(row);
+  return {
+    ...safeRow,
+    metadata: parseJson(row.metadata_json, {}),
+    is_qa: rowBoolean(row.is_qa),
+  } as OutcomeHarnessEvent;
+}
+
+async function planHarnessContext(userId: number, planId: number | null) {
+  if (!planId) return {};
+  const plan = await getNextMovePlan(userId, planId);
+  if (!plan) return {};
+  const situation = await getSituation(userId, plan.situation_id);
+  return {
+    situationId: plan.situation_id,
+    conversationId: String(plan.situation_id),
+    stateDetected: plan.cognitive_metadata?.state_detection.primary_state ?? null,
+    interventionType: plan.cognitive_metadata?.intervention.intervention_type ?? null,
+    domain: situation?.category ?? null,
+    modelUsed: plan.model,
+    isQa: Boolean(plan.is_qa),
+  };
+}
+
+async function refreshInterventionEffectivenessSummary(
+  userId: number,
+  {
+    domain,
+    subtype,
+    interventionType,
+    isQa,
+  }: {
+    domain: string | null | undefined;
+    subtype: string | null | undefined;
+    interventionType: string | null | undefined;
+    isQa: boolean;
+  },
+) {
+  if (!interventionType) return null;
+  const normalizedDomain = domain || "unknown";
+  const normalizedSubtype = subtype || "unknown";
+  const rows = await all<{ event_type: OutcomeHarnessEventType; count: number }>(
+    `SELECT event_type, COUNT(*) AS count
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND COALESCE(domain, 'unknown') = ?
+      AND COALESCE(subtype, 'unknown') = ?
+      AND intervention_type = ?
+    GROUP BY event_type`,
+    [userId, isQa ? 1 : 0, normalizedDomain, normalizedSubtype, interventionType],
+  );
+  const countFor = (...types: OutcomeHarnessEventType[]) =>
+    rows
+      .filter((row) => types.includes(row.event_type))
+      .reduce((sum, row) => sum + Number(row.count), 0);
+  const last = await first<{ last_used_at: string | null }>(
+    `SELECT MAX(created_at) AS last_used_at
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND COALESCE(domain, 'unknown') = ?
+      AND COALESCE(subtype, 'unknown') = ?
+      AND intervention_type = ?`,
+    [userId, isQa ? 1 : 0, normalizedDomain, normalizedSubtype, interventionType],
+  );
+  const summary = {
+    domain: normalizedDomain,
+    subtype: normalizedSubtype,
+    intervention_type: interventionType,
+    shown_count: countFor("suggested_action_shown", "plan_generated", "plan_regenerated"),
+    accepted_count: countFor("suggested_action_accepted"),
+    completed_count: countFor(
+      "suggested_action_completed",
+      "task_completed",
+      "user_reported_acted",
+    ),
+    dismissed_count: countFor(
+      "suggested_action_dismissed",
+      "task_dismissed",
+      "user_reported_deferred",
+    ),
+    not_useful_count: countFor("user_reported_not_helpful"),
+    edited_count: countFor("suggested_action_edited", "task_edited"),
+    ignored_count: countFor("suggested_action_ignored"),
+    reported_helpful_count: countFor("user_reported_helpful"),
+    reported_still_stuck_count: countFor("user_reported_still_stuck"),
+    repeated_loop_count: countFor("user_repeated_same_loop"),
+    last_used_at: last?.last_used_at ?? null,
+    is_qa: isQa,
+  };
+  const score = scoreEffectivenessSummary(summary);
+  const now = nowIso();
+  await run(
+    `INSERT INTO intervention_effectiveness_summaries (
+      user_id, domain, subtype, intervention_type, shown_count, accepted_count,
+      completed_count, dismissed_count, not_useful_count, edited_count,
+      ignored_count, reported_helpful_count, reported_still_stuck_count,
+      repeated_loop_count, last_used_at, effectiveness_score, is_qa, created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, is_qa, domain, subtype, intervention_type) DO UPDATE SET
+      shown_count = excluded.shown_count,
+      accepted_count = excluded.accepted_count,
+      completed_count = excluded.completed_count,
+      dismissed_count = excluded.dismissed_count,
+      not_useful_count = excluded.not_useful_count,
+      edited_count = excluded.edited_count,
+      ignored_count = excluded.ignored_count,
+      reported_helpful_count = excluded.reported_helpful_count,
+      reported_still_stuck_count = excluded.reported_still_stuck_count,
+      repeated_loop_count = excluded.repeated_loop_count,
+      last_used_at = excluded.last_used_at,
+      effectiveness_score = excluded.effectiveness_score,
+      updated_at = excluded.updated_at`,
+    [
+      userId,
+      summary.domain,
+      summary.subtype,
+      summary.intervention_type,
+      summary.shown_count,
+      summary.accepted_count,
+      summary.completed_count,
+      summary.dismissed_count,
+      summary.not_useful_count,
+      summary.edited_count,
+      summary.ignored_count,
+      summary.reported_helpful_count,
+      summary.reported_still_stuck_count,
+      summary.repeated_loop_count,
+      summary.last_used_at,
+      score,
+      isQa ? 1 : 0,
+      now,
+      now,
+    ],
+  );
+  return first<InterventionEffectivenessSummary>(
+    `SELECT * FROM intervention_effectiveness_summaries
+    WHERE user_id = ? AND is_qa = ? AND domain = ? AND subtype = ? AND intervention_type = ?`,
+    [userId, isQa ? 1 : 0, summary.domain, summary.subtype, summary.intervention_type],
+  );
+}
+
+export async function createOutcomeHarnessEvent(
+  userId: number,
+  rawInput: OutcomeHarnessEventInput,
+): Promise<OutcomeHarnessEvent> {
+  const input = outcomeHarnessEventInputSchema.parse(rawInput);
+  const planDefaults = await planHarnessContext(userId, input.planId ?? null);
+  const situationId = input.situationId ?? planDefaults.situationId ?? null;
+  const planId = input.planId ?? null;
+  const messageId = input.messageId ?? null;
+  const taskId = input.taskId ?? null;
+  await ensureOwnedRecord("situations", userId, situationId);
+  await ensureOwnedRecord("intake_messages", userId, messageId);
+  await ensureOwnedRecord("tasks", userId, taskId);
+  await ensureOwnedRecord("next_move_plans", userId, planId);
+
+  const isQa = await inferQaForHarnessRefs(
+    userId,
+    { situationId, messageId, taskId, planId },
+    input.isQa ?? planDefaults.isQa,
+  );
+  const id = randomUUID();
+  const now = nowIso();
+  const metadataJson = normalizeHarnessMetadata(input.metadata);
+  await run(
+    `INSERT OR IGNORE INTO outcome_harness_events (
+      id, user_id, situation_id, conversation_id, message_id, task_id, plan_id,
+      event_type, source, state_detected, intervention_type, domain, subtype,
+      question_purpose, model_used, metadata_json, dedupe_key, is_qa, created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      userId,
+      situationId,
+      input.conversationId ?? planDefaults.conversationId ?? null,
+      messageId,
+      taskId,
+      planId,
+      input.eventType,
+      input.source,
+      input.stateDetected ?? planDefaults.stateDetected ?? null,
+      input.interventionType ?? planDefaults.interventionType ?? null,
+      input.domain ?? planDefaults.domain ?? null,
+      input.subtype ?? null,
+      input.questionPurpose ?? null,
+      input.modelUsed ?? planDefaults.modelUsed ?? null,
+      metadataJson,
+      input.dedupeKey ?? null,
+      isQa ? 1 : 0,
+      now,
+      now,
+    ],
+  );
+  const row = input.dedupeKey
+    ? await first<OutcomeHarnessEvent & UserScopedRow & QaScopedRow>(
+        "SELECT * FROM outcome_harness_events WHERE user_id = ? AND dedupe_key = ?",
+        [userId, input.dedupeKey],
+      )
+    : await first<OutcomeHarnessEvent & UserScopedRow & QaScopedRow>(
+        "SELECT * FROM outcome_harness_events WHERE id = ? AND user_id = ?",
+        [id, userId],
+      );
+  if (!row) throw new Error("Outcome harness event could not be loaded.");
+  const event = rowToOutcomeHarnessEvent(row);
+  if (event.id === id || !input.dedupeKey) {
+    await refreshInterventionEffectivenessSummary(userId, {
+      domain: event.domain,
+      subtype: event.subtype,
+      interventionType: event.intervention_type,
+      isQa,
+    });
+  }
+  return event;
+}
+
+export async function listOutcomeHarnessEventsForPlan(
+  userId: number,
+  planId: number,
+): Promise<OutcomeHarnessEvent[]> {
+  await ensureOwnedRecord("next_move_plans", userId, planId);
+  const rows = await all<OutcomeHarnessEvent & UserScopedRow & QaScopedRow>(
+    `SELECT * FROM outcome_harness_events
+    WHERE user_id = ? AND plan_id = ?
+    ORDER BY created_at DESC`,
+    [userId, planId],
+  );
+  return rows.map(rowToOutcomeHarnessEvent);
+}
+
+export async function summarizeInterventionEffectiveness(
+  userId: number,
+  { isQa = false }: { isQa?: boolean } = {},
+): Promise<InterventionEffectivenessSummary[]> {
+  const rows = await all<{
+    domain: string | null;
+    subtype: string | null;
+    intervention_type: string | null;
+  }>(
+    `SELECT DISTINCT
+      COALESCE(domain, 'unknown') AS domain,
+      COALESCE(subtype, 'unknown') AS subtype,
+      intervention_type
+    FROM outcome_harness_events
+    WHERE user_id = ? AND is_qa = ? AND intervention_type IS NOT NULL`,
+    [userId, isQa ? 1 : 0],
+  );
+  for (const row of rows) {
+    await refreshInterventionEffectivenessSummary(userId, {
+      domain: row.domain,
+      subtype: row.subtype,
+      interventionType: row.intervention_type,
+      isQa,
+    });
+  }
+  return all<InterventionEffectivenessSummary>(
+    `SELECT * FROM intervention_effectiveness_summaries
+    WHERE user_id = ? AND is_qa = ?
+    ORDER BY effectiveness_score DESC, last_used_at DESC`,
+    [userId, isQa ? 1 : 0],
+  );
+}
+
+export async function getInterventionEffectivenessForContext(
+  userId: number,
+  {
+    domain,
+    subtype,
+    currentState,
+    isQa = false,
+  }: {
+    domain: string;
+    subtype: string;
+    currentState: string;
+    isQa?: boolean;
+  },
+): Promise<HistoricalEffectivenessContext> {
+  await summarizeInterventionEffectiveness(userId, { isQa });
+  const summaries = await all<InterventionEffectivenessSummary>(
+    `SELECT * FROM intervention_effectiveness_summaries
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND (domain = ? OR domain = 'unknown')
+      AND (subtype = ? OR subtype = 'unknown')
+    ORDER BY effectiveness_score DESC, last_used_at DESC
+    LIMIT 8`,
+    [userId, isQa ? 1 : 0, domain || "unknown", subtype || "unknown"],
+  );
+  const shorter = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type = 'suggested_action_accepted'
+      AND CAST(json_extract(metadata_json, '$.estimatedMinutes') AS INTEGER) BETWEEN 1 AND 25`,
+    [userId, isQa ? 1 : 0],
+  );
+  const longerDismissed = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type IN ('suggested_action_dismissed', 'user_reported_not_helpful')
+      AND CAST(json_extract(metadata_json, '$.estimatedMinutes') AS INTEGER) >= 45`,
+    [userId, isQa ? 1 : 0],
+  );
+  const editedDown = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type IN ('suggested_action_edited', 'task_edited')
+      AND CAST(json_extract(metadata_json, '$.estimatedMinutesAfter') AS INTEGER)
+        < CAST(json_extract(metadata_json, '$.estimatedMinutesBefore') AS INTEGER)`,
+    [userId, isQa ? 1 : 0],
+  );
+  const ignoredSimilar = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type = 'suggested_action_ignored'
+      AND COALESCE(domain, 'unknown') = ?`,
+    [userId, isQa ? 1 : 0, domain || "unknown"],
+  );
+  const repeatedLoop = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type = 'user_repeated_same_loop'
+      AND COALESCE(domain, 'unknown') = ?`,
+    [userId, isQa ? 1 : 0, domain || "unknown"],
+  );
+  const context: HistoricalEffectivenessContext = {
+    domain: domain || "unknown",
+    subtype: subtype || "unknown",
+    currentState,
+    summaries,
+    advisoryText: "",
+    hasMeaningfulSignal: summaries.some(
+      (item) =>
+        item.shown_count +
+          item.accepted_count +
+          item.completed_count +
+          item.dismissed_count +
+          item.not_useful_count +
+          item.edited_count >=
+        2,
+    ),
+    userPrefersShorterTasks:
+      Number(shorter?.count ?? 0) >= 2 &&
+      Number(shorter?.count ?? 0) >= Number(longerDismissed?.count ?? 0),
+    editedTasksDownCount: Number(editedDown?.count ?? 0),
+    ignoredSimilarTaskCount: Number(ignoredSimilar?.count ?? 0),
+    repeatedLoopCount: Number(repeatedLoop?.count ?? 0),
+  };
+  return {
+    ...context,
+    advisoryText: buildEffectivenessAdvisoryText(context),
+  };
+}
+
+function ignoredThresholdHours(urgency: Situation["urgency"] | null | undefined) {
+  if (urgency === "low") return 72;
+  if (urgency === "high") return 6;
+  if (urgency === "crisis") return null;
+  return 24;
+}
+
+export async function recordIgnoredSuggestedActions(
+  userId: number,
+  { isQa = false }: { isQa?: boolean } = {},
+) {
+  const candidates = await all<
+    OutcomeHarnessEvent &
+      UserScopedRow &
+      QaScopedRow & {
+        situation_urgency?: Situation["urgency"] | null;
+      }
+  >(
+    `SELECT outcome_harness_events.*, situations.urgency AS situation_urgency
+    FROM outcome_harness_events
+    LEFT JOIN situations
+      ON situations.id = outcome_harness_events.situation_id
+      AND situations.user_id = outcome_harness_events.user_id
+    WHERE outcome_harness_events.user_id = ?
+      AND outcome_harness_events.is_qa = ?
+      AND outcome_harness_events.event_type = 'suggested_action_shown'
+      AND outcome_harness_events.plan_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM outcome_harness_events terminal
+        WHERE terminal.user_id = outcome_harness_events.user_id
+          AND terminal.plan_id = outcome_harness_events.plan_id
+          AND terminal.event_type IN (
+            'suggested_action_accepted',
+            'suggested_action_completed',
+            'suggested_action_dismissed',
+            'suggested_action_ignored',
+            'user_reported_not_helpful',
+            'user_reported_acted'
+          )
+      )`,
+    [userId, isQa ? 1 : 0],
+  );
+  const now = Date.now();
+  const createdEvents: OutcomeHarnessEvent[] = [];
+  for (const candidate of candidates) {
+    const threshold = ignoredThresholdHours(candidate.situation_urgency);
+    if (threshold == null) continue;
+    const ageMs = now - Date.parse(candidate.created_at);
+    if (Number.isNaN(ageMs) || ageMs < threshold * 60 * 60 * 1000) continue;
+    createdEvents.push(
+      await createOutcomeHarnessEvent(userId, {
+        situationId: candidate.situation_id,
+        conversationId: candidate.conversation_id,
+        messageId: candidate.message_id,
+        taskId: candidate.task_id,
+        planId: candidate.plan_id,
+        eventType: "suggested_action_ignored",
+        source: "system_inference",
+        stateDetected: candidate.state_detected,
+        interventionType: candidate.intervention_type,
+        domain: candidate.domain,
+        subtype: candidate.subtype,
+        questionPurpose: candidate.question_purpose,
+        modelUsed: candidate.model_used,
+        metadata: {
+          thresholdHours: threshold,
+          originalShownAt: candidate.created_at,
+        },
+        dedupeKey: `suggested-action-ignored:${candidate.plan_id}`,
+        isQa,
+      }),
+    );
+  }
+  return createdEvents;
+}
+
+async function countHarnessEvents(
+  userId: number,
+  isQa: boolean,
+  eventTypes: OutcomeHarnessEventType[],
+) {
+  if (eventTypes.length === 0) return 0;
+  const placeholders = eventTypes.map(() => "?").join(", ");
+  const row = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM outcome_harness_events
+    WHERE user_id = ? AND is_qa = ? AND event_type IN (${placeholders})`,
+    [userId, isQa ? 1 : 0, ...eventTypes],
+  );
+  return Number(row?.count ?? 0);
+}
+
+function rate(part: number, whole: number) {
+  if (whole <= 0) return 0;
+  return Number((part / whole).toFixed(3));
+}
+
+async function averageEstimatedMinutesForEvents(
+  userId: number,
+  isQa: boolean,
+  eventTypes: OutcomeHarnessEventType[],
+) {
+  const placeholders = eventTypes.map(() => "?").join(", ");
+  const row = await first<{ average_minutes: number | null }>(
+    `SELECT AVG(CAST(json_extract(metadata_json, '$.estimatedMinutes') AS INTEGER)) AS average_minutes
+    FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type IN (${placeholders})
+      AND json_extract(metadata_json, '$.estimatedMinutes') IS NOT NULL`,
+    [userId, isQa ? 1 : 0, ...eventTypes],
+  );
+  return row?.average_minutes == null
+    ? null
+    : Number(Number(row.average_minutes).toFixed(1));
+}
+
+export async function getOutcomeHarnessDashboardSummary(
+  userId: number,
+  { isQa = false }: { isQa?: boolean } = {},
+): Promise<OutcomeHarnessDashboardSummary> {
+  await recordIgnoredSuggestedActions(userId, { isQa });
+  const summaries = await summarizeInterventionEffectiveness(userId, { isQa });
+  const shown = await countHarnessEvents(userId, isQa, ["suggested_action_shown"]);
+  const accepted = await countHarnessEvents(userId, isQa, [
+    "suggested_action_accepted",
+  ]);
+  const edited = await countHarnessEvents(userId, isQa, [
+    "suggested_action_edited",
+    "task_edited",
+  ]);
+  const completed = await countHarnessEvents(userId, isQa, [
+    "suggested_action_completed",
+    "task_completed",
+    "user_reported_acted",
+  ]);
+  const dismissed = await countHarnessEvents(userId, isQa, [
+    "suggested_action_dismissed",
+    "task_dismissed",
+  ]);
+  const notUseful = await countHarnessEvents(userId, isQa, [
+    "user_reported_not_helpful",
+  ]);
+  const ignored = await countHarnessEvents(userId, isQa, [
+    "suggested_action_ignored",
+  ]);
+  const firstIntakeShown = await countHarnessEvents(userId, isQa, [
+    "first_intake_question_shown",
+  ]);
+  const firstIntakeAnswered = await countHarnessEvents(userId, isQa, [
+    "intake_question_answered",
+  ]);
+  const firstIntakeSkipped = await countHarnessEvents(userId, isQa, [
+    "intake_skipped_generate_now",
+  ]);
+  const firstIntakeAbandoned = await countHarnessEvents(userId, isQa, [
+    "first_intake_abandoned",
+    "created_new_situation_before_answering",
+  ]);
+  const generationTotals = await first<{
+    total: number;
+    rewrites: number;
+    escalations: number;
+  }>(
+    `SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN response_rewritten = 1 THEN 1 ELSE 0 END) AS rewrites,
+      SUM(CASE WHEN model_used_by_stage_json LIKE '%escalation%' THEN 1 ELSE 0 END) AS escalations
+    FROM generation_events
+    WHERE user_id = ? AND is_qa = ?`,
+    [userId, isQa ? 1 : 0],
+  );
+  const poorAcceptanceContexts = await all<{
+    domain: string;
+    subtype: string;
+    shown: number;
+    accepted: number;
+  }>(
+    `SELECT
+      COALESCE(domain, 'unknown') AS domain,
+      COALESCE(subtype, 'unknown') AS subtype,
+      SUM(CASE WHEN event_type = 'suggested_action_shown' THEN 1 ELSE 0 END) AS shown,
+      SUM(CASE WHEN event_type = 'suggested_action_accepted' THEN 1 ELSE 0 END) AS accepted
+    FROM outcome_harness_events
+    WHERE user_id = ? AND is_qa = ?
+    GROUP BY COALESCE(domain, 'unknown'), COALESCE(subtype, 'unknown')
+    HAVING shown >= 2 AND accepted < shown
+    ORDER BY accepted * 1.0 / shown ASC, shown DESC
+    LIMIT 8`,
+    [userId, isQa ? 1 : 0],
+  );
+  const totalGenerations = Number(generationTotals?.total ?? 0);
+  return {
+    totals: {
+      suggestedActionsShown: shown,
+      accepted,
+      edited,
+      completed,
+      dismissed,
+      notUseful,
+      ignored,
+    },
+    rates: {
+      acceptRate: rate(accepted, shown),
+      editRate: rate(edited, shown),
+      completionRate: rate(completed, shown),
+      dismissRate: rate(dismissed, shown),
+      notUsefulRate: rate(notUseful, shown),
+      ignoredRate: rate(ignored, shown),
+    },
+    strongestInterventions: summaries.slice(0, 6),
+    weakestInterventions: [...summaries]
+      .sort((a, b) => a.effectiveness_score - b.effectiveness_score)
+      .slice(0, 6),
+    firstIntake: {
+      shown: firstIntakeShown,
+      answered: firstIntakeAnswered,
+      skipped: firstIntakeSkipped,
+      abandoned: firstIntakeAbandoned,
+    },
+    evaluatorRewriteRate: rate(Number(generationTotals?.rewrites ?? 0), totalGenerations),
+    escalationRate: rate(Number(generationTotals?.escalations ?? 0), totalGenerations),
+    averageEstimatedMinutes: {
+      accepted: await averageEstimatedMinutesForEvents(userId, isQa, [
+        "suggested_action_accepted",
+      ]),
+      dismissed: await averageEstimatedMinutesForEvents(userId, isQa, [
+        "suggested_action_dismissed",
+        "user_reported_not_helpful",
+      ]),
+    },
+    poorAcceptanceContexts: poorAcceptanceContexts.map((item) => ({
+      domain: item.domain,
+      subtype: item.subtype,
+      shown: Number(item.shown),
+      accepted: Number(item.accepted),
+      acceptRate: rate(Number(item.accepted), Number(item.shown)),
+    })),
+  };
+}
+
+async function getTaskRankingOutcomeContext(
+  userId: number,
+  isQa = false,
+): Promise<TaskRankingOutcomeContext> {
+  const acceptedShort = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type = 'suggested_action_accepted'
+      AND CAST(json_extract(metadata_json, '$.estimatedMinutes') AS INTEGER) BETWEEN 1 AND 25`,
+    [userId, isQa ? 1 : 0],
+  );
+  const dismissedLong = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type IN ('suggested_action_dismissed', 'user_reported_not_helpful')
+      AND CAST(json_extract(metadata_json, '$.estimatedMinutes') AS INTEGER) >= 45`,
+    [userId, isQa ? 1 : 0],
+  );
+  const editedDown = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND event_type IN ('suggested_action_edited', 'task_edited')
+      AND CAST(json_extract(metadata_json, '$.estimatedMinutesAfter') AS INTEGER)
+        < CAST(json_extract(metadata_json, '$.estimatedMinutesBefore') AS INTEGER)`,
+    [userId, isQa ? 1 : 0],
+  );
+  const ignoredRows = await all<{ plan_id: number }>(
+    `SELECT DISTINCT plan_id FROM outcome_harness_events
+    WHERE user_id = ?
+      AND is_qa = ?
+      AND plan_id IS NOT NULL
+      AND event_type IN ('suggested_action_ignored', 'user_reported_not_helpful')`,
+    [userId, isQa ? 1 : 0],
+  );
+  return {
+    userPrefersShorterTasks:
+      Number(acceptedShort?.count ?? 0) >= 2 &&
+      Number(acceptedShort?.count ?? 0) >= Number(dismissedLong?.count ?? 0),
+    editedTasksDownCount: Number(editedDown?.count ?? 0),
+    ignoredPlanIds: ignoredRows.map((row) => Number(row.plan_id)),
+  };
 }
 
 async function getProfileById(id: number): Promise<Profile | null> {
@@ -906,7 +1625,11 @@ export async function listTasks(
       tasks.created_at DESC`,
     [userId],
   );
-  return rankTasks(withoutUserIds(rows) as Task[]);
+  return rankTasks(
+    withoutUserIds(rows) as Task[],
+    todayIsoDate(),
+    await getTaskRankingOutcomeContext(userId, isQa),
+  );
 }
 
 export async function getTask(userId: number, id: number): Promise<Task | null> {
@@ -930,7 +1653,13 @@ export async function getTask(userId: number, id: number): Promise<Task | null> 
     WHERE tasks.id = ? AND tasks.user_id = ?`,
     [id, userId],
   );
-  return row ? rankTasks([withoutUserId(row) as Task])[0] : null;
+  return row
+    ? rankTasks(
+        [withoutUserId(row) as Task],
+        todayIsoDate(),
+        await getTaskRankingOutcomeContext(userId, rowBoolean(row.is_qa)),
+      )[0]
+    : null;
 }
 
 export async function createTask(
@@ -945,9 +1674,9 @@ export async function createTask(
   const id = await insert(
     `INSERT INTO tasks (
       user_id, title, life_area_id, project_id, status, importance, effort,
-      friction_type, friction_note, due_date, notes, created_at, updated_at
+      friction_type, friction_note, estimated_minutes, due_date, notes, created_at, updated_at
       , is_qa
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       input.title,
@@ -958,6 +1687,7 @@ export async function createTask(
       input.effort,
       input.friction_type,
       input.friction_note,
+      input.estimated_minutes ?? null,
       input.due_date || null,
       input.notes,
       now,
@@ -967,6 +1697,20 @@ export async function createTask(
   );
   const created = await getTask(userId, id);
   if (!created) throw new Error("Created task could not be loaded.");
+  await createOutcomeHarnessEvent(userId, {
+    taskId: created.id,
+    situationId: created.situation_id ?? null,
+    planId: created.source_next_move_plan_id ?? null,
+    eventType: "task_created_manually",
+    source: "task_deck",
+    domain: created.situation_title ? null : null,
+    metadata: {
+      title: created.title,
+      estimatedMinutes: created.estimated_minutes ?? null,
+    },
+    dedupeKey: `task-created-manual:${created.id}`,
+    isQa,
+  });
   return created;
 }
 
@@ -976,6 +1720,8 @@ export async function updateTask(
   input: TaskInput,
 ): Promise<Task | null> {
   assertSafeTextFields(input);
+  const existing = await getTask(userId, id);
+  if (!existing) return null;
   await ensureOwnedRecord("life_areas", userId, input.life_area_id);
   await ensureOwnedRecord("projects", userId, input.project_id);
   await run(
@@ -988,6 +1734,7 @@ export async function updateTask(
       effort = ?,
       friction_type = ?,
       friction_note = ?,
+      estimated_minutes = ?,
       due_date = ?,
       notes = ?,
       updated_at = ?
@@ -1001,6 +1748,7 @@ export async function updateTask(
       input.effort,
       input.friction_type,
       input.friction_note,
+      input.estimated_minutes ?? null,
       input.due_date || null,
       input.notes,
       nowIso(),
@@ -1008,7 +1756,64 @@ export async function updateTask(
       userId,
     ],
   );
-  return getTask(userId, id);
+  const updated = await getTask(userId, id);
+  if (!updated) return null;
+  const changedFields = [
+    existing.title !== updated.title ? "title" : "",
+    existing.notes !== updated.notes ? "description" : "",
+    existing.estimated_minutes !== updated.estimated_minutes ? "estimated_minutes" : "",
+    existing.status !== updated.status ? "status" : "",
+    existing.importance !== updated.importance ? "importance" : "",
+    existing.effort !== updated.effort ? "effort" : "",
+    existing.friction_type !== updated.friction_type ? "friction_type" : "",
+    existing.friction_note !== updated.friction_note ? "friction_note" : "",
+    existing.due_date !== updated.due_date ? "due_date" : "",
+  ].filter(Boolean);
+  if (changedFields.length > 0) {
+    const diff = taskEditDiffSchema.parse({
+      originalTitle: existing.title,
+      newTitle: updated.title,
+      originalDescription: existing.notes,
+      newDescription: updated.notes,
+      changedFields,
+      estimatedMinutesBefore: existing.estimated_minutes ?? null,
+      estimatedMinutesAfter: updated.estimated_minutes ?? null,
+    });
+    await createOutcomeHarnessEvent(userId, {
+      taskId: updated.id,
+      situationId: updated.situation_id ?? null,
+      planId: updated.source_next_move_plan_id ?? null,
+      eventType: "task_edited",
+      source: "task_deck",
+      metadata: diff,
+      isQa: Boolean(updated.is_qa),
+    });
+  }
+  if (existing.status !== "done" && updated.status === "done") {
+    await createOutcomeHarnessEvent(userId, {
+      taskId: updated.id,
+      situationId: updated.situation_id ?? null,
+      planId: updated.source_next_move_plan_id ?? null,
+      eventType: "task_completed",
+      source: "task_deck",
+      metadata: { title: updated.title, estimatedMinutes: updated.estimated_minutes ?? null },
+      dedupeKey: `task-completed:${updated.id}`,
+      isQa: Boolean(updated.is_qa),
+    });
+  }
+  if (existing.status !== "ignored" && updated.status === "ignored") {
+    await createOutcomeHarnessEvent(userId, {
+      taskId: updated.id,
+      situationId: updated.situation_id ?? null,
+      planId: updated.source_next_move_plan_id ?? null,
+      eventType: "task_dismissed",
+      source: "task_deck",
+      metadata: { title: updated.title, estimatedMinutes: updated.estimated_minutes ?? null },
+      dedupeKey: `task-dismissed:${updated.id}`,
+      isQa: Boolean(updated.is_qa),
+    });
+  }
+  return updated;
 }
 
 export async function deleteTask(userId: number, id: number) {
@@ -1845,7 +2650,11 @@ export async function listTasksForSituation(
       tasks.created_at DESC`,
     [userId, situationId],
   );
-  return rankTasks(withoutUserIds(rows) as Task[]);
+  return rankTasks(
+    withoutUserIds(rows) as Task[],
+    todayIsoDate(),
+    await getTaskRankingOutcomeContext(userId, isQa),
+  );
 }
 
 export type TaskConversionResult = {
@@ -1886,7 +2695,11 @@ export async function createTasksFromNextMovePlan(
     ORDER BY created_at ASC`,
     [userId, planId],
   );
-  const existingTasks = rankTasks(withoutUserIds(existing) as Task[]);
+  const existingTasks = rankTasks(
+    withoutUserIds(existing) as Task[],
+    todayIsoDate(),
+    await getTaskRankingOutcomeContext(userId),
+  );
 
   const plan = await getNextMovePlan(userId, planId);
   if (!plan) throw new Error("Plan not found.");
@@ -1916,6 +2729,7 @@ export async function createTasksFromNextMovePlan(
           importance: candidate.importance,
           effort: candidate.effort,
           friction_type: candidate.friction_type,
+          estimated_minutes: candidate.estimated_minutes,
           due_date: candidate.due_date,
         }))
       : [
@@ -1925,6 +2739,7 @@ export async function createTasksFromNextMovePlan(
             importance: 5,
             effort: 1,
             friction_type: "none" as const,
+            estimated_minutes: 30,
             due_date: null,
           })),
           ...plan.next_24_hours.slice(0, 1).map((step) => ({
@@ -1933,6 +2748,7 @@ export async function createTasksFromNextMovePlan(
             importance: 4,
             effort: 2,
             friction_type: "none" as const,
+            estimated_minutes: 60,
             due_date: null,
           })),
           ...plan.next_7_days.slice(0, 1).map((step) => ({
@@ -1941,6 +2757,7 @@ export async function createTasksFromNextMovePlan(
             importance: 3,
             effort: 3,
             friction_type: "none" as const,
+            estimated_minutes: 90,
             due_date: null,
           })),
         ];
@@ -1949,9 +2766,9 @@ export async function createTasksFromNextMovePlan(
     await run(
       `INSERT INTO tasks (
         user_id, title, life_area_id, project_id, situation_id, source_next_move_plan_id,
-        source_plan_section, status, importance, effort, friction_type, due_date,
+        source_plan_section, status, importance, effort, friction_type, estimated_minutes, due_date,
         notes, is_qa, created_at, updated_at
-      ) VALUES (?, ?, NULL, NULL, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, NULL, NULL, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
         task.title,
@@ -1961,6 +2778,7 @@ export async function createTasksFromNextMovePlan(
         task.importance,
         task.effort,
         task.friction_type,
+        task.estimated_minutes ?? null,
         task.due_date,
         task.details,
         isQa ? 1 : 0,
@@ -1991,18 +2809,200 @@ export async function createTasksFromNextMovePlan(
     ORDER BY created_at ASC`,
     [userId, planId],
   );
-  const createdTasks = rankTasks(withoutUserIds(created) as Task[]);
+  const createdTasks = rankTasks(
+    withoutUserIds(created) as Task[],
+    todayIsoDate(),
+    await getTaskRankingOutcomeContext(userId, isQa),
+  );
   const globalTasks = await listTasks(userId, { isQa });
   await attachTaskIdsToOutcomeForPlan(
     userId,
     planId,
     createdTasks.map((task) => task.id),
   );
+  for (const task of createdTasks) {
+    await createOutcomeHarnessEvent(userId, {
+      taskId: task.id,
+      situationId: task.situation_id ?? plan.situation_id,
+      planId,
+      eventType: "task_created_from_ai",
+      source: "task_deck",
+      subtype: task.source_plan_section ?? null,
+      metadata: {
+        title: task.title,
+        estimatedMinutes: task.estimated_minutes ?? null,
+        sourcePlanSection: task.source_plan_section ?? null,
+      },
+      dedupeKey: `task-created-ai:${task.id}`,
+      isQa,
+    });
+  }
   return {
     created: true,
     alreadyExisted: false,
     items: globalRankItems(globalTasks, createdTasks),
   };
+}
+
+function suggestedActionFromPlan(plan: StoredNextMovePlan) {
+  const firstTask = plan.task_candidates[0];
+  const title = firstTask?.title || plan.first_10_minute_action.title;
+  const description =
+    firstTask?.description ||
+    firstTask?.details ||
+    plan.first_10_minute_action.details ||
+    plan.highest_leverage_move_today.description;
+  return {
+    title,
+    description,
+    estimated_minutes:
+      firstTask?.estimated_minutes ??
+      plan.highest_leverage_move_today.estimated_minutes ??
+      10,
+    importance: firstTask?.importance ?? 5,
+    effort: firstTask?.effort ?? 1,
+    friction_type: firstTask?.friction_type ?? ("none" as const),
+    rank_reason:
+      firstTask?.rank_reason ||
+      firstTask?.why_now ||
+      plan.why_this_move ||
+      "Accepted as the suggested next action.",
+  };
+}
+
+export async function getSuggestedActionTaskForPlan(
+  userId: number,
+  planId: number,
+): Promise<Task | null> {
+  const row = await first<Task & UserScopedRow>(
+    `SELECT
+      tasks.*,
+      life_areas.name AS life_area_name,
+      projects.name AS project_name,
+      situations.title AS situation_title,
+      situations.urgency AS situation_urgency
+    FROM tasks
+    LEFT JOIN life_areas
+      ON life_areas.id = tasks.life_area_id
+      AND life_areas.user_id = tasks.user_id
+    LEFT JOIN projects
+      ON projects.id = tasks.project_id
+      AND projects.user_id = tasks.user_id
+    LEFT JOIN situations
+      ON situations.id = tasks.situation_id
+      AND situations.user_id = tasks.user_id
+    WHERE tasks.user_id = ?
+      AND tasks.source_next_move_plan_id = ?
+      AND tasks.source_plan_section = 'suggested_action'
+    ORDER BY tasks.created_at ASC
+    LIMIT 1`,
+    [userId, planId],
+  );
+  return row
+    ? rankTasks(
+        [withoutUserId(row) as Task],
+        todayIsoDate(),
+        await getTaskRankingOutcomeContext(userId, rowBoolean(row.is_qa)),
+      )[0]
+    : null;
+}
+
+export async function saveSuggestedActionTask(
+  userId: number,
+  planId: number,
+  input: {
+    title?: string;
+    description?: string;
+    estimatedMinutes?: number | null;
+    status?: Task["status"];
+  } = {},
+) {
+  const plan = await getNextMovePlan(userId, planId);
+  if (!plan) throw new Error("Plan not found.");
+  const isQa = Boolean(plan.is_qa);
+  const original = suggestedActionFromPlan(plan);
+  const nextTitle = (input.title ?? original.title).trim();
+  const nextDescription = (input.description ?? original.description).trim();
+  const nextEstimatedMinutes =
+    input.estimatedMinutes === undefined
+      ? original.estimated_minutes
+      : input.estimatedMinutes;
+  assertSafeTextFields({ title: nextTitle, notes: nextDescription });
+  const existing = await getSuggestedActionTaskForPlan(userId, planId);
+  const now = nowIso();
+
+  if (existing) {
+    await run(
+      `UPDATE tasks SET
+        title = ?,
+        status = ?,
+        importance = ?,
+        effort = ?,
+        friction_type = ?,
+        estimated_minutes = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE id = ? AND user_id = ?`,
+      [
+        nextTitle,
+        input.status ?? existing.status,
+        original.importance,
+        original.effort,
+        original.friction_type,
+        nextEstimatedMinutes ?? null,
+        nextDescription,
+        now,
+        existing.id,
+        userId,
+      ],
+    );
+    const updated = await getTask(userId, existing.id);
+    if (!updated) {
+      throw new Error("Updated suggested action task could not be loaded.");
+    }
+    return { task: updated, created: false, original };
+  }
+
+  const id = await insert(
+    `INSERT INTO tasks (
+      user_id, title, life_area_id, project_id, situation_id, source_next_move_plan_id,
+      source_plan_section, status, importance, effort, friction_type, estimated_minutes,
+      notes, is_qa, created_at, updated_at
+    ) VALUES (?, ?, NULL, NULL, ?, ?, 'suggested_action', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
+      nextTitle,
+      plan.situation_id,
+      plan.id,
+      input.status ?? "open",
+      original.importance,
+      original.effort,
+      original.friction_type,
+      nextEstimatedMinutes ?? null,
+      `${nextDescription}\n\nWhy ranked: ${original.rank_reason}`,
+      isQa ? 1 : 0,
+      now,
+      now,
+    ],
+  );
+  const task = await getTask(userId, id);
+  if (!task) throw new Error("Suggested action task could not be loaded.");
+  await attachTaskIdsToOutcomeForPlan(userId, planId, [task.id]);
+  await createOutcomeHarnessEvent(userId, {
+    taskId: task.id,
+    situationId: task.situation_id ?? plan.situation_id,
+    planId,
+    eventType: "task_created_from_ai",
+    source: "suggested_action",
+    subtype: "suggested_action",
+    metadata: {
+      title: task.title,
+      estimatedMinutes: task.estimated_minutes ?? null,
+    },
+    dedupeKey: `suggested-action-task-created:${planId}`,
+    isQa,
+  });
+  return { task, created: true, original };
 }
 
 type OutcomeRecordRow = Omit<
@@ -2183,12 +3183,18 @@ export async function attachTaskIdsToOutcomeForPlan(
 
 type GenerationEventRow = Omit<
   GenerationEvent,
-  "is_qa" | "response_rewritten" | "web_search_used"
+  | "is_qa"
+  | "response_rewritten"
+  | "web_search_used"
+  | "outcome_harness_context_included"
+  | "historical_effectiveness_influenced_intervention"
 > &
   UserScopedRow & {
     is_qa?: number;
     response_rewritten?: number;
     web_search_used?: number;
+    outcome_harness_context_included?: number;
+    historical_effectiveness_influenced_intervention?: number;
   };
 
 function rowToGenerationEvent(row: GenerationEventRow) {
@@ -2196,6 +3202,12 @@ function rowToGenerationEvent(row: GenerationEventRow) {
     ...withoutUserId(row),
     response_rewritten: rowBoolean(row.response_rewritten),
     web_search_used: rowBoolean(row.web_search_used),
+    outcome_harness_context_included: rowBoolean(
+      row.outcome_harness_context_included,
+    ),
+    historical_effectiveness_influenced_intervention: rowBoolean(
+      row.historical_effectiveness_influenced_intervention,
+    ),
     is_qa: rowBoolean(row.is_qa),
   } as GenerationEvent;
 }
@@ -2231,6 +3243,8 @@ export async function startGenerationEvent(
       tasks_created_count = 0,
       memory_items_used = 0,
       web_search_used = 0,
+      outcome_harness_context_included = 0,
+      historical_effectiveness_influenced_intervention = 0,
       cognitive_metadata_json = NULL,
       retry_count = excluded.retry_count,
       error_category = NULL,
@@ -2282,6 +3296,8 @@ export async function completeGenerationEvent(
     tasksCreatedCount?: number | null;
     memoryItemsUsed?: number | null;
     webSearchUsed?: boolean | null;
+    outcomeHarnessContextIncluded?: boolean | null;
+    historicalEffectivenessInfluencedIntervention?: boolean | null;
     cognitiveMetadata?: CognitiveMetadata | null;
     errorCategory?: string | null;
   },
@@ -2309,6 +3325,8 @@ export async function completeGenerationEvent(
       tasks_created_count = COALESCE(?, tasks_created_count),
       memory_items_used = COALESCE(?, memory_items_used),
       web_search_used = COALESCE(?, web_search_used),
+      outcome_harness_context_included = COALESCE(?, outcome_harness_context_included),
+      historical_effectiveness_influenced_intervention = COALESCE(?, historical_effectiveness_influenced_intervention),
       cognitive_metadata_json = COALESCE(?, cognitive_metadata_json),
       error_category = ?,
       updated_at = ?
@@ -2337,6 +3355,16 @@ export async function completeGenerationEvent(
       input.tasksCreatedCount ?? null,
       input.memoryItemsUsed ?? null,
       typeof input.webSearchUsed === "boolean" ? (input.webSearchUsed ? 1 : 0) : null,
+      typeof input.outcomeHarnessContextIncluded === "boolean"
+        ? input.outcomeHarnessContextIncluded
+          ? 1
+          : 0
+        : null,
+      typeof input.historicalEffectivenessInfluencedIntervention === "boolean"
+        ? input.historicalEffectivenessInfluencedIntervention
+          ? 1
+          : 0
+        : null,
       input.cognitiveMetadata ? JSON.stringify(input.cognitiveMetadata) : null,
       input.errorCategory ?? null,
       now,
@@ -2389,6 +3417,13 @@ export async function isGenerationAbandoned(
 }
 
 export async function clearQaData(userId: number) {
+  await run(
+    "DELETE FROM intervention_effectiveness_summaries WHERE user_id = ? AND is_qa = 1",
+    [userId],
+  );
+  await run("DELETE FROM outcome_harness_events WHERE user_id = ? AND is_qa = 1", [
+    userId,
+  ]);
   await run("DELETE FROM outcome_records WHERE user_id = ? AND is_qa = 1", [
     userId,
   ]);

@@ -36,6 +36,7 @@ type TaskForm = {
   effort: number;
   friction_type: TaskFrictionType;
   friction_note: string;
+  estimated_minutes: number | null;
   due_date: string | null;
   notes: string;
 };
@@ -49,6 +50,7 @@ const emptyTask: TaskForm = {
   effort: 3,
   friction_type: "none",
   friction_note: "",
+  estimated_minutes: null,
   due_date: null,
   notes: "",
 };
@@ -75,6 +77,7 @@ function formFromTask(task: Task): TaskForm {
     effort: task.effort,
     friction_type: task.friction_type ?? "none",
     friction_note: task.friction_note ?? "",
+    estimated_minutes: task.estimated_minutes ?? null,
     due_date: task.due_date,
     notes: task.notes,
   };
@@ -451,10 +454,14 @@ function TaskCard({
               </Button>
             </div>
           </div>
-          <div className="grid gap-3 text-sm sm:grid-cols-5">
+          <div className="grid gap-3 text-sm sm:grid-cols-6">
             <Info title="Importance" value={`${task.importance}/5`} />
             <Info title="Effort" value={`${task.effort}/5`} />
             <Info title="Friction" value={frictionLabels[frictionType]} />
+            <Info
+              title="Estimate"
+              value={task.estimated_minutes ? `${task.estimated_minutes} min` : "None"}
+            />
             <Info title="Due date" value={task.due_date || "None"} />
             <Info title="Score" value={String(Math.round(task.rank_score ?? 0))} />
           </div>
@@ -585,6 +592,20 @@ function TaskFields({
             setForm((current) => ({
               ...current,
               due_date: event.target.value || null,
+            }))
+          }
+        />
+      </Field>
+      <Field label="Estimated minutes">
+        <TextInput
+          type="number"
+          min={1}
+          max={480}
+          value={form.estimated_minutes ?? ""}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              estimated_minutes: event.target.value ? Number(event.target.value) : null,
             }))
           }
         />

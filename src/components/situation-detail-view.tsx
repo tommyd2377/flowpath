@@ -40,6 +40,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
   const [taskConfirmation, setTaskConfirmation] =
     useState<TaskConversionResponse | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -136,10 +137,12 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
 
   async function deletePermanently() {
     if (!detail) return;
-    const confirmed = window.confirm(
-      `Permanently delete "${detail.situation.title}" and all related intake, plans, and generated tasks? This cannot be undone.`,
-    );
-    if (!confirmed) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      setMessage(null);
+      setError(null);
+      return;
+    }
 
     setDeleting(true);
     setError(null);
@@ -148,6 +151,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       await apiFetch<void>(`/api/situations/${detail.situation.id}`, {
         method: "DELETE",
       });
+      setConfirmingDelete(false);
       router.replace("/situations");
       router.refresh();
     } catch (deleteError) {
@@ -245,8 +249,22 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           disabled={deleting}
         >
           <Trash2 className="h-4 w-4" />
-          {deleting ? "Deleting..." : "Delete permanently"}
+          {deleting
+            ? "Deleting..."
+            : confirmingDelete
+              ? "Confirm delete"
+              : "Delete permanently"}
         </Button>
+        {confirmingDelete ? (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setConfirmingDelete(false)}
+            disabled={deleting}
+          >
+            Cancel delete
+          </Button>
+        ) : null}
       </div>
       {generating ? (
         <div className="mb-5">

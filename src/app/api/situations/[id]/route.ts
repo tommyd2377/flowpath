@@ -10,6 +10,7 @@ import { requireUser } from "@/lib/auth";
 import { buildFirstIntakePlan } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
+  createOutcomeHarnessEvent,
   deleteSituation,
   getLatestIntakeSession,
   getLatestNextMovePlan,
@@ -18,6 +19,7 @@ import {
   listIntakeMessages,
   listNextMovePlans,
   listTasksForSituation,
+  recordIgnoredSuggestedActions,
   updateSituation,
 } from "@/lib/repository";
 import { situationUpdateSchema } from "@/lib/schemas";
@@ -54,6 +56,7 @@ export async function GET(request: Request, context: Context) {
   try {
     const user = await requireUser();
     const { id: idParam } = await context.params;
+    await recordIgnoredSuggestedActions(user.id, { isQa: isQaRequest(request) });
     return dataResponse(
       await situationDetail(user.id, parseId(idParam), isQaRequest(request)),
     );
@@ -68,8 +71,34 @@ export async function PUT(request: Request, context: Context) {
     const { id: idParam } = await context.params;
     const id = parseId(idParam);
     const input = situationUpdateSchema.parse(await readJson(request));
+    const existingSession = await getLatestIntakeSession(user.id, id);
+    const existingMessages = existingSession
+      ? await listIntakeMessages(user.id, existingSession.id)
+      : [];
+    const hasUserAnswer = existingMessages.some((message) => message.role === "user");
+    const existingSituation = await getSituation(user.id, id);
     const situation = await updateSituation(user.id, id, input);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    if (existingSituation && !hasUserAnswer) {
+      const planner = buildFirstIntakePlan(situation);
+      await createOutcomeHarnessEvent(user.id, {
+        situationId: id,
+        conversationId: String(id),
+        eventType: "situation_edited_before_answering",
+        source: "first_intake",
+        domain: planner.domain,
+        subtype: planner.subtype,
+        questionPurpose: planner.questionPurpose,
+        metadata: {
+          originalTitle: existingSituation.title,
+          newTitle: situation.title,
+          originalDescription: existingSituation.description,
+          newDescription: situation.description,
+        },
+        dedupeKey: `situation-edited-before-answering:${id}:${situation.updated_at}`,
+        isQa: isQaRequest(request),
+      });
+    }
     return dataResponse(await situationDetail(user.id, id, isQaRequest(request)));
   } catch (error) {
     return errorResponse(error, "Could not update situation.");

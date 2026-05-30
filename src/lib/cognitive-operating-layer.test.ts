@@ -332,6 +332,126 @@ test("evaluator catches generic advice and too many rumination tasks", () => {
   assert.ok(evaluation.rewrite_instructions.length > 0);
 });
 
+test("evaluator does not require task candidates when intervention suppresses tasks", () => {
+  const legalSituation: Situation = {
+    ...baseSituation,
+    description:
+      "The probate court said an estate release was never filed and bond premiums are still accruing.",
+    category: "money_stability",
+  };
+  const context = buildCognitivePlanContext({
+    userMessage:
+      "The surrogate court confirmed the release was never filed and I need the next move.",
+    situation: legalSituation,
+    messages: [],
+    profile: baseProfile,
+    inferredContextItems: [],
+  });
+  const plan: NextMovePlan = {
+    generation_mode: "operator_plan",
+    mode: "stability",
+    situation_read:
+      "This is a legal and financial cleanup problem where the next move is to preserve facts before choosing a remedy.",
+    likely_bottleneck:
+      "The missing filing needs to be verified from court and bond records before anyone can assess responsibility or relief.",
+    key_constraints: ["Court records matter", "Bond premiums may still be accruing"],
+    situation_summary:
+      "The user learned an estate release filing may be missing and needs a careful next step.",
+    core_bottleneck: "The factual record is incomplete.",
+    highest_leverage_move_today: {
+      title: "Request the docket packet and bond ledger",
+      description:
+        "Ask the surrogate court and bonding company for the docket entries, bond copies, invoices, and any release or discharge record.",
+      estimated_minutes: 25,
+      success_condition: "A written request is sent and the exact missing records are named.",
+    },
+    why_this_move:
+      "It creates a factual record a qualified lawyer or court clerk can use without guessing.",
+    first_10_minute_action: {
+      title: "Write the records list",
+      details:
+        "List the docket numbers, estate names, bond amounts, and the specific release/discharge documents to request.",
+    },
+    first_30_minutes: [
+      {
+        title: "Send records request",
+        details: "Send the list to the court clerk and bonding company.",
+      },
+    ],
+    next_24_hours: [
+      {
+        title: "Create a dated file",
+        details: "Save every reply, invoice, docket entry, and call note in one folder.",
+      },
+    ],
+    next_7_days: [
+      {
+        title: "Book a narrow consult",
+        details: "Ask a qualified lawyer to review only the missing filing and bond exposure.",
+      },
+    ],
+    what_not_to_do: ["Do not accuse anyone before the record is complete."],
+    likely_trap: "Jumping from a clerk statement to a conclusion about fault or remedy.",
+    recommendation_basis: [
+      {
+        signal: "Court clerk said the filing is missing",
+        source: "session_intake",
+        implication: "The next step is documentary verification.",
+      },
+    ],
+    restraint_guidance: {
+      should_push: true,
+      reason: "A records request is low-risk and preserves options.",
+      minimum_viable_move: "Send one written request for the docket packet and bond records.",
+      recovery_move: "If overwhelmed, write only the estate names and docket numbers.",
+      scope_boundary: "Do not decide liability or remedy today.",
+    },
+    operator_insight: {
+      naive_path: "Try to solve the whole legal question immediately.",
+      operator_path: "Build the document packet first, then ask a narrow professional question.",
+      wasted_motion_to_avoid: "Arguing from memory instead of records.",
+    },
+    friction_pattern: "High-stakes uncertainty can pull the user into over-research.",
+    local_reality_scout: {
+      used_web_search: false,
+      location_basis: "Known county court from intake.",
+      findings: [],
+      missing_location_question: "",
+    },
+    resources_to_seek: [],
+    when_to_get_human_help:
+      "Use a qualified lawyer if the records confirm ongoing bond exposure or a missed court filing.",
+    safety_boundary: {
+      risk_level: "medium",
+      professional_help_signal: "Professional review is appropriate before deciding remedy.",
+      do_not_rely_on_ai_for: "Do not rely on FlowPath to determine liability or court strategy.",
+      urgent_support_guidance: "Use local emergency help only if an immediate safety issue appears.",
+    },
+    context_used: [
+      {
+        id: null,
+        label: "County probate record issue",
+        value: "The user reports a missing estate release filing and ongoing bond premiums.",
+        category: "money",
+        sensitivity: "moderate",
+        source: "session_intake",
+        persistence: "session_only",
+      },
+    ],
+    inferred_context_items: [],
+    task_candidates: [],
+    confidence_level: "medium",
+    assumptions: ["The clerk statement is accurate but still needs records."],
+    follow_up_questions_if_any: [],
+  };
+
+  assert.equal(context.intervention.should_create_tasks, false);
+  assert.equal(context.intervention.max_tasks, 0);
+  const evaluation = evaluateNextMovePlan(plan, context);
+  assert.equal(evaluation.missed_next_action, false);
+  assert.equal(evaluation.passes, true);
+});
+
 test("outcome inference is conservative but catches explicit follow-up language", () => {
   assert.equal(inferOutcomeFromUserMessage("I did it")?.userOutcome, "acted");
   assert.equal(inferOutcomeFromUserMessage("That didn't help")?.userOutcome, "rejected");

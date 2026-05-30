@@ -30,6 +30,42 @@ export function emptyResponse(status = 204) {
   return new NextResponse(null, { status });
 }
 
+function providerErrorResponse(error: unknown) {
+  const providerError = error as {
+    status?: number;
+    code?: string | null;
+    type?: string | null;
+    error?: { code?: string | null; type?: string | null };
+  };
+  const status = providerError?.status;
+  const code = providerError?.code ?? providerError?.error?.code;
+  const type = providerError?.type ?? providerError?.error?.type;
+
+  if (status === 429 && (code === "insufficient_quota" || type === "insufficient_quota")) {
+    return NextResponse.json(
+      {
+        error:
+          "FlowPath cannot continue because the configured OpenAI API project is out of quota or billing credits. Check the OpenAI API billing/quota settings, then try again.",
+        code: "openai_insufficient_quota",
+      },
+      { status: 503 },
+    );
+  }
+
+  if (status === 429) {
+    return NextResponse.json(
+      {
+        error:
+          "FlowPath is being rate-limited by the configured AI provider. Wait a moment, then try again.",
+        code: "provider_rate_limited",
+      },
+      { status: 503 },
+    );
+  }
+
+  return null;
+}
+
 export function errorResponse(error: unknown, fallback = "Something went wrong.") {
   if (error instanceof ApiRequestError) {
     return NextResponse.json(
@@ -67,6 +103,9 @@ export function errorResponse(error: unknown, fallback = "Something went wrong."
       { status: error.status },
     );
   }
+
+  const providerResponse = providerErrorResponse(error);
+  if (providerResponse) return providerResponse;
 
   console.error(error);
   return NextResponse.json({ error: fallback }, { status: 500 });

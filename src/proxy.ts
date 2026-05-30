@@ -1,15 +1,27 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-const isPublicRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
-const isApiRoute = createRouteMatcher(["/api(.*)"]);
+import {
+  GUEST_SESSION_COOKIE,
+  createGuestSessionId,
+  guestSessionCookieOptions,
+  normalizeGuestSessionId,
+} from "./lib/guest-session";
 
 export default clerkMiddleware(
-  async (auth, request) => {
-    if (!isPublicRoute(request) && !isApiRoute(request)) {
-      const signInUrl = new URL("/sign-in", request.url);
-      signInUrl.searchParams.set("redirect_url", request.url);
-      await auth.protect({ unauthenticatedUrl: signInUrl.toString() });
+  (_auth, request) => {
+    const response = NextResponse.next();
+    const guestSessionId = normalizeGuestSessionId(
+      request.cookies.get(GUEST_SESSION_COOKIE)?.value,
+    );
+    if (!guestSessionId) {
+      response.cookies.set(
+        GUEST_SESSION_COOKIE,
+        createGuestSessionId(),
+        guestSessionCookieOptions(),
+      );
     }
+    return response;
   },
   {
     frontendApiProxy: {

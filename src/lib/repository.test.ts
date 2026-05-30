@@ -40,6 +40,80 @@ async function applyMigrations() {
   }
 }
 
+function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
+  return {
+    mode: "growth",
+    situation_summary: "A focused situation needs one next action.",
+    core_bottleneck: "The next action needs to be concrete.",
+    highest_leverage_move_today: {
+      title,
+      description: "Take one concrete action.",
+      estimated_minutes: 20,
+      success_condition: "The action is done.",
+    },
+    why_this_move: "It creates useful progress.",
+    first_30_minutes: [{ title, details: "Do the smallest useful version." }],
+    next_24_hours: [{ title: "Review result", details: "Write what changed." }],
+    next_7_days: [{ title: "Repeat if useful", details: "Use the signal." }],
+    what_not_to_do: ["Do not expand the scope."],
+    likely_trap: "Overplanning.",
+    recommendation_basis: [
+      { signal: "Need action", source: "situation", implication: "Keep it small." },
+    ],
+    restraint_guidance: {
+      should_push: false,
+      reason: "Small action is enough.",
+      minimum_viable_move: title,
+      recovery_move: "Stop after the action.",
+      scope_boundary: "Do not add new tasks.",
+    },
+    operator_insight: {
+      naive_path: "Think more.",
+      operator_path: "Run one experiment.",
+      wasted_motion_to_avoid: "More abstraction.",
+    },
+    friction_pattern: "Scope creep.",
+    local_reality_scout: {
+      used_web_search: false,
+      location_basis: "",
+      findings: [],
+      missing_location_question: "",
+    },
+    resources_to_seek: [],
+    when_to_get_human_help: "Use appropriate human help for high-stakes issues.",
+    safety_boundary: {
+      risk_level: "low",
+      professional_help_signal: "Use human help when appropriate.",
+      do_not_rely_on_ai_for: "Do not rely on FlowPath for emergency decisions.",
+      urgent_support_guidance: "Use emergency services for immediate danger.",
+    },
+    inferred_context_items: [],
+    task_candidates: [
+      {
+        title,
+        details: "Do the smallest useful version.",
+        description: "Do the smallest useful version.",
+        estimated_minutes: 20,
+        friction_level: "low",
+        leverage: "high",
+        why_now: "It creates an outcome signal.",
+        success_condition: "The action is done.",
+        category: "test",
+        source_message_id: null,
+        candidate_type: "immediate_next_action",
+        importance: 5,
+        effort: 1,
+        friction_type: "none",
+        rank_reason: "Small and high leverage.",
+        due_date: null,
+      },
+    ],
+    confidence_level: "medium",
+    assumptions: [],
+    follow_up_questions_if_any: [],
+  };
+}
+
 before(async () => {
   db = await import("@/lib/db");
   repository = await import("./repository");
@@ -389,4 +463,108 @@ test("QA cleanup removes QA outcome records", async () => {
 
   await repository.clearQaData(1);
   assert.equal(await repository.getOutcomeRecord(1, outcome.id), null);
+});
+
+test("outcome harness events dedupe and update intervention summaries", async () => {
+  const event = await repository.createOutcomeHarnessEvent(1, {
+    eventType: "suggested_action_shown",
+    source: "suggested_action",
+    stateDetected: "execution_mode",
+    interventionType: "one_next_action",
+    domain: "work",
+    subtype: "test",
+    metadata: { estimatedMinutes: 20 },
+    dedupeKey: "repo-test-shown",
+    isQa: true,
+  });
+  const duplicate = await repository.createOutcomeHarnessEvent(1, {
+    eventType: "suggested_action_shown",
+    source: "suggested_action",
+    stateDetected: "execution_mode",
+    interventionType: "one_next_action",
+    domain: "work",
+    subtype: "test",
+    metadata: { estimatedMinutes: 20 },
+    dedupeKey: "repo-test-shown",
+    isQa: true,
+  });
+  assert.equal(duplicate.id, event.id);
+
+  await repository.createOutcomeHarnessEvent(1, {
+    eventType: "suggested_action_accepted",
+    source: "suggested_action",
+    stateDetected: "execution_mode",
+    interventionType: "one_next_action",
+    domain: "work",
+    subtype: "test",
+    metadata: { estimatedMinutes: 20 },
+    isQa: true,
+  });
+
+  const summaries = await repository.summarizeInterventionEffectiveness(1, {
+    isQa: true,
+  });
+  const matching = summaries.find(
+    (item) => item.domain === "work" && item.subtype === "test",
+  );
+  assert.equal(matching?.shown_count, 1);
+  assert.equal(matching?.accepted_count, 1);
+  assert.ok((matching?.effectiveness_score ?? 0) > 0);
+
+  const dashboard = await repository.getOutcomeHarnessDashboardSummary(1, {
+    isQa: true,
+  });
+  assert.ok(dashboard.totals.suggestedActionsShown >= 1);
+  assert.ok(dashboard.rates.acceptRate > 0);
+});
+
+test("ignored suggested actions are detected lazily without user-facing spam", async () => {
+  const situation = await repository.createSituation(
+    1,
+    {
+      title: "Outcome harness stale action",
+      category: "work_career",
+      urgency: "medium",
+    },
+    { isQa: true },
+  );
+  const storedPlan = await repository.createNextMovePlan(
+    1,
+    situation.id,
+    null,
+    minimalPlan("Try one stale action"),
+    "test-model",
+    { isQa: true },
+  );
+  await repository.createOutcomeHarnessEvent(1, {
+    situationId: situation.id,
+    conversationId: String(situation.id),
+    planId: storedPlan.id,
+    eventType: "suggested_action_shown",
+    source: "suggested_action",
+    stateDetected: "execution_mode",
+    interventionType: "one_next_action",
+    domain: "work",
+    subtype: "stale",
+    metadata: { estimatedMinutes: 20 },
+    dedupeKey: `stale-test-shown:${storedPlan.id}`,
+    isQa: true,
+  });
+  await db.run(
+    "UPDATE outcome_harness_events SET created_at = ? WHERE dedupe_key = ?",
+    [
+      "2026-05-28T00:00:00.000Z",
+      `stale-test-shown:${storedPlan.id}`,
+    ],
+  );
+
+  const ignored = await repository.recordIgnoredSuggestedActions(1, { isQa: true });
+  assert.equal(
+    ignored.some(
+      (event) =>
+        event.event_type === "suggested_action_ignored" &&
+        event.plan_id === storedPlan.id,
+    ),
+    true,
+  );
 });

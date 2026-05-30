@@ -1,4 +1,12 @@
 import type { CognitiveMetadata, OutcomeValue } from "./cognitive-schemas";
+export type {
+  HistoricalEffectivenessContext,
+  InterventionEffectivenessSummary,
+  OutcomeHarnessDashboardSummary,
+  OutcomeHarnessEvent,
+  OutcomeHarnessEventType,
+  OutcomeHarnessSource,
+} from "./outcome-harness";
 
 export const PRIORITY_LEVELS = ["low", "medium", "high"] as const;
 export const PROJECT_STATUSES = ["active", "paused", "someday", "done"] as const;
@@ -476,6 +484,7 @@ export type Task = {
   effort: number;
   friction_type: TaskFrictionType;
   friction_note: string;
+  estimated_minutes?: number | null;
   due_date: string | null;
   notes: string;
   is_qa?: boolean;
@@ -754,6 +763,8 @@ export type GenerationEvent = {
   tasks_created_count?: number | null;
   memory_items_used?: number | null;
   web_search_used?: boolean;
+  outcome_harness_context_included?: boolean;
+  historical_effectiveness_influenced_intervention?: boolean;
   cognitive_metadata_json?: string | null;
   retry_count: number;
   error_category: string | null;
@@ -801,6 +812,7 @@ export type BillingSummary = {
   plan_tier: PlanTier;
   billing_status: BillingStatus;
   internal_unlimited: boolean;
+  is_guest: boolean;
   current_period_start: string | null;
   current_period_end: string | null;
   usage_period_start: string;

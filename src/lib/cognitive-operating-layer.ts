@@ -17,6 +17,7 @@ import {
 } from "./cognitive-schemas";
 import { getModelForRole, getModelRoutingConfig } from "./model-routing";
 import type {
+  HistoricalEffectivenessContext,
   InferredContextItem,
   IntakeMessage,
   NextMovePlan,
@@ -37,6 +38,7 @@ export type CognitiveLayerInput = {
   inferredContextItems?: InferredContextItem[];
   openTasks?: Task[];
   recentPlans?: StoredNextMovePlan[];
+  historicalEffectiveness?: HistoricalEffectivenessContext | null;
   allowWebSearch?: boolean;
 };
 
@@ -46,6 +48,8 @@ export type CognitivePlanContext = {
   memorySelection: MemorySelection;
   webSearchDecision: WebSearchDecision;
   repeatedTopic: boolean;
+  repeatedLoopDetected: boolean;
+  historicalEffectiveness: HistoricalEffectivenessContext | null;
   useEscalationModel: boolean;
 };
 
@@ -162,6 +166,23 @@ export function detectRepeatedTopic(messages: IntakeMessage[] = [], currentMessa
   return recentUserMessages
     .slice(0, -1)
     .some((previous) => overlapRatio(previous, currentMessage) >= 0.62);
+}
+
+export function detectRepeatedDecisionLoop(input: CognitiveLayerInput) {
+  const repeatedTopic = detectRepeatedTopic(input.messages, input.userMessage);
+  const historicalLoop =
+    (input.historicalEffectiveness?.repeatedLoopCount ?? 0) > 0 ||
+    (input.historicalEffectiveness?.ignoredSimilarTaskCount ?? 0) > 1 ||
+    input.historicalEffectiveness?.summaries.some(
+      (summary) =>
+        summary.reported_still_stuck_count > 0 ||
+        summary.ignored_count > 1 ||
+        summary.repeated_loop_count > 0,
+    ) === true;
+  if (!input.situation || input.situation.status !== "active") {
+    return repeatedTopic && historicalLoop;
+  }
+  return repeatedTopic || historicalLoop;
 }
 
 function inferActionReadiness(text: string): StateDetection["action_readiness"] {
@@ -797,6 +818,7 @@ export function buildCognitivePlanContext(input: CognitiveLayerInput): Cognitive
   const memorySelection = selectRelevantMemory(input, stateDetection);
   const webSearchDecision = shouldUseWebSearch(input, stateDetection, intervention);
   const repeatedTopic = detectRepeatedTopic(input.messages, input.userMessage);
+  const repeatedLoopDetected = detectRepeatedDecisionLoop(input);
 
   return {
     stateDetection,
@@ -804,6 +826,8 @@ export function buildCognitivePlanContext(input: CognitiveLayerInput): Cognitive
     memorySelection,
     webSearchDecision,
     repeatedTopic,
+    repeatedLoopDetected,
+    historicalEffectiveness: input.historicalEffectiveness ?? null,
     useEscalationModel: shouldEscalateModel(input, stateDetection, intervention),
   };
 }
@@ -838,10 +862,12 @@ export function evaluateNextMovePlan(
     context.stateDetection.needs_memory &&
     context.memorySelection.selected_memories.length > 0 &&
     plan.context_used.length === 0;
+  const shouldHaveTaskCandidates =
+    context.intervention.should_create_tasks && context.intervention.max_tasks > 0;
   const missedNextAction =
     !plan.highest_leverage_move_today.title ||
     !plan.first_10_minute_action.title ||
-    plan.task_candidates.length === 0;
+    (shouldHaveTaskCandidates && plan.task_candidates.length === 0);
   const unsafeOrOverconfident =
     (["health_caution_mode", "legal_financial_caution_mode"].includes(
       context.stateDetection.primary_state,
@@ -895,7 +921,11 @@ export function evaluateNextMovePlan(
     tooLong ? "Shorten the response and keep only the highest-leverage action path." : "",
     tooAbstract ? "Rewrite task candidates as observable actions with clear success conditions." : "",
     missedMemory ? "Use the selected memory compactly without exposing unnecessary sensitive detail." : "",
-    missedNextAction ? "Add a specific first 10-minute action and one task candidate." : "",
+    missedNextAction
+      ? shouldHaveTaskCandidates
+        ? "Add a specific first 10-minute action and one task candidate."
+        : "Add a specific first 10-minute action."
+      : "",
     unsafeOrOverconfident ? "Add appropriate health/legal/financial uncertainty and human-help boundaries." : "",
     plan.task_candidates.length > context.intervention.max_tasks
       ? `Reduce task candidates to at most ${context.intervention.max_tasks}.`
@@ -1051,6 +1081,9 @@ export function buildCognitiveMetadata({
     web_search: context.webSearchDecision,
     evaluator,
     repeated_topic: context.repeatedTopic,
+    repeated_loop_detected: context.repeatedLoopDetected,
+    historical_effectiveness_advisory:
+      context.historicalEffectiveness?.advisoryText ?? "",
     web_search_used: webSearchUsed ?? context.webSearchDecision.should_use_web_search,
     web_search_reason: context.webSearchDecision.reason,
     response_rewritten: responseRewritten,
@@ -1081,6 +1114,10 @@ export function cognitiveTelemetryFromMetadata(metadata: CognitiveMetadata) {
       : 0,
     memory_items_used: metadata.memory_selection.selected_memories.length,
     web_search_used: metadata.web_search_used,
+    outcome_harness_context_included:
+      Boolean(metadata.historical_effectiveness_advisory),
+    historical_effectiveness_influenced_intervention:
+      Boolean(metadata.historical_effectiveness_advisory),
   };
 }
 

@@ -14,12 +14,15 @@ import {
 } from "@/lib/cognitive-operating-layer";
 import type { CognitiveMetadata } from "@/lib/cognitive-schemas";
 import { generateNextMovePlan } from "@/lib/flowpath-ai";
+import { buildFirstIntakePlan } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   completeGenerationEvent,
   createOutcomeRecord,
+  createOutcomeHarnessEvent,
   createNextMovePlan,
   createInferredContextItems,
+  getInterventionEffectivenessForContext,
   getLatestIntakeSession,
   getProfile,
   getSituation,
@@ -30,6 +33,7 @@ import {
   listNextMovePlans,
   listTasks,
   markRunningGenerationAsRetry,
+  recordIgnoredSuggestedActions,
   startGenerationEvent,
   updateIntakeSession,
 } from "@/lib/repository";
@@ -53,6 +57,7 @@ export async function POST(request: Request, context: Context) {
     const { id: idParam } = await context.params;
     const situationId = parseId(idParam);
     const isQa = isQaRequest(request);
+    await recordIgnoredSuggestedActions(user.id, { isQa });
     const body = await readJson(request).catch(() => ({}));
     const clientGenerationId =
       typeof body?.client_generation_id === "string" && body.client_generation_id
@@ -93,6 +98,26 @@ export async function POST(request: Request, context: Context) {
       latestUserMessage?.content ||
       situation.description ||
       situation.title;
+    const firstIntakePlanner = buildFirstIntakePlan(situation);
+    const baseCognitiveContext = buildCognitivePlanContext({
+      userMessage,
+      situation,
+      messages,
+      profile,
+      inferredContextItems,
+      openTasks,
+      recentPlans,
+      allowWebSearch: canUseWebSearchForTier(usageDecision.planTier),
+    });
+    const historicalEffectiveness = await getInterventionEffectivenessForContext(
+      user.id,
+      {
+        domain: firstIntakePlanner.domain || situation.category,
+        subtype: firstIntakePlanner.subtype,
+        currentState: baseCognitiveContext.stateDetection.primary_state,
+        isQa,
+      },
+    );
     const cognitiveContext = buildCognitivePlanContext({
       userMessage,
       situation,
@@ -101,6 +126,7 @@ export async function POST(request: Request, context: Context) {
       inferredContextItems,
       openTasks,
       recentPlans,
+      historicalEffectiveness,
       allowWebSearch: canUseWebSearchForTier(usageDecision.planTier),
     });
     const compactProfile = compactProfileForMemorySelection(
@@ -172,6 +198,158 @@ export async function POST(request: Request, context: Context) {
       model,
       { clientGenerationId, cognitiveMetadata, isQa },
     );
+    const planEventType = recentPlans.length > 0 ? "plan_regenerated" : "plan_generated";
+    await createOutcomeHarnessEvent(user.id, {
+      situationId,
+      conversationId: String(situationId),
+      messageId: latestUserMessage?.id ?? null,
+      planId: storedPlan.id,
+      eventType: planEventType,
+      source: "next_move_plan",
+      stateDetected: cognitiveContext.stateDetection.primary_state,
+      interventionType: cognitiveContext.intervention.intervention_type,
+      domain: firstIntakePlanner.domain,
+      subtype: firstIntakePlanner.subtype,
+      questionPurpose: firstIntakePlanner.questionPurpose,
+      modelUsed: model,
+      metadata: {
+        taskCandidateCount: plan.task_candidates.length,
+        outcomeHarnessContextIncluded: historicalEffectiveness.hasMeaningfulSignal,
+        historicalEffectivenessInfluencedIntervention:
+          Boolean(historicalEffectiveness.advisoryText),
+      },
+      dedupeKey: `${planEventType}:${storedPlan.id}`,
+      isQa,
+    });
+    await createOutcomeHarnessEvent(user.id, {
+      situationId,
+      conversationId: String(situationId),
+      messageId: latestUserMessage?.id ?? null,
+      planId: storedPlan.id,
+      eventType: "suggested_action_shown",
+      source: "suggested_action",
+      stateDetected: cognitiveContext.stateDetection.primary_state,
+      interventionType: cognitiveContext.intervention.intervention_type,
+      domain: firstIntakePlanner.domain,
+      subtype: firstIntakePlanner.subtype,
+      questionPurpose: firstIntakePlanner.questionPurpose,
+      modelUsed: model,
+      metadata: {
+        title:
+          plan.task_candidates[0]?.title ||
+          plan.first_10_minute_action.title ||
+          plan.highest_leverage_move_today.title,
+        estimatedMinutes:
+          plan.task_candidates[0]?.estimated_minutes ??
+          plan.highest_leverage_move_today.estimated_minutes,
+      },
+      dedupeKey: `suggested-action-shown:${storedPlan.id}`,
+      isQa,
+    });
+    if (!session?.is_complete && session?.current_stage !== "ready_to_generate") {
+      await createOutcomeHarnessEvent(user.id, {
+        situationId,
+        conversationId: String(situationId),
+        planId: storedPlan.id,
+        eventType: "intake_skipped_generate_now",
+        source: "first_intake",
+        stateDetected: cognitiveContext.stateDetection.primary_state,
+        interventionType: cognitiveContext.intervention.intervention_type,
+        domain: firstIntakePlanner.domain,
+        subtype: firstIntakePlanner.subtype,
+        questionPurpose: firstIntakePlanner.questionPurpose,
+        metadata: { currentStage: session?.current_stage ?? null },
+        dedupeKey: `intake-skipped-generate-now:${situationId}:${storedPlan.id}`,
+        isQa,
+      });
+    }
+    if (cognitiveContext.repeatedLoopDetected) {
+      await createOutcomeHarnessEvent(user.id, {
+        situationId,
+        conversationId: String(situationId),
+        messageId: latestUserMessage?.id ?? null,
+        planId: storedPlan.id,
+        eventType: "user_repeated_same_loop",
+        source: "system_inference",
+        stateDetected: cognitiveContext.stateDetection.primary_state,
+        interventionType: cognitiveContext.intervention.intervention_type,
+        domain: firstIntakePlanner.domain,
+        subtype: firstIntakePlanner.subtype,
+        questionPurpose: firstIntakePlanner.questionPurpose,
+        metadata: {
+          repeatedTopic: cognitiveContext.repeatedTopic,
+          repeatedLoopCount: historicalEffectiveness.repeatedLoopCount,
+        },
+        dedupeKey: `repeated-loop:${situationId}:${storedPlan.id}`,
+        isQa,
+      });
+    }
+    if (cognitiveMetadata?.response_rewritten) {
+      await createOutcomeHarnessEvent(user.id, {
+        situationId,
+        conversationId: String(situationId),
+        planId: storedPlan.id,
+        eventType: "evaluator_rewrite_triggered",
+        source: "system_inference",
+        stateDetected: cognitiveContext.stateDetection.primary_state,
+        interventionType: cognitiveContext.intervention.intervention_type,
+        domain: firstIntakePlanner.domain,
+        subtype: firstIntakePlanner.subtype,
+        metadata: { evaluatorScore: cognitiveMetadata.evaluator?.score ?? null },
+        dedupeKey: `evaluator-rewrite:${storedPlan.id}`,
+        isQa,
+      });
+    }
+    if (cognitiveMetadata?.web_search_used) {
+      await createOutcomeHarnessEvent(user.id, {
+        situationId,
+        conversationId: String(situationId),
+        planId: storedPlan.id,
+        eventType: "web_search_used",
+        source: "system_inference",
+        stateDetected: cognitiveContext.stateDetection.primary_state,
+        interventionType: cognitiveContext.intervention.intervention_type,
+        domain: firstIntakePlanner.domain,
+        subtype: firstIntakePlanner.subtype,
+        metadata: { reason: cognitiveMetadata.web_search_reason },
+        dedupeKey: `web-search-used:${storedPlan.id}`,
+        isQa,
+      });
+    }
+    if (cognitiveContext.memorySelection.selected_memories.length > 0) {
+      await createOutcomeHarnessEvent(user.id, {
+        situationId,
+        conversationId: String(situationId),
+        planId: storedPlan.id,
+        eventType: "memory_used",
+        source: "system_inference",
+        stateDetected: cognitiveContext.stateDetection.primary_state,
+        interventionType: cognitiveContext.intervention.intervention_type,
+        domain: firstIntakePlanner.domain,
+        subtype: firstIntakePlanner.subtype,
+        metadata: {
+          memoryItemsUsed: cognitiveContext.memorySelection.selected_memories.length,
+        },
+        dedupeKey: `memory-used:${storedPlan.id}`,
+        isQa,
+      });
+    }
+    if (cognitiveContext.useEscalationModel) {
+      await createOutcomeHarnessEvent(user.id, {
+        situationId,
+        conversationId: String(situationId),
+        planId: storedPlan.id,
+        eventType: "escalation_triggered",
+        source: "system_inference",
+        stateDetected: cognitiveContext.stateDetection.primary_state,
+        interventionType: cognitiveContext.intervention.intervention_type,
+        domain: firstIntakePlanner.domain,
+        subtype: firstIntakePlanner.subtype,
+        metadata: { model },
+        dedupeKey: `escalation-triggered:${storedPlan.id}`,
+        isQa,
+      });
+    }
     await createInferredContextItems(user.id, plan.inferred_context_items, {
       situation_id: situationId,
       intake_session_id: session?.id ?? null,
@@ -207,6 +385,9 @@ export async function POST(request: Request, context: Context) {
       tasksCreatedCount: plan.task_candidates.length,
       memoryItemsUsed: cognitiveContext.memorySelection.selected_memories.length,
       webSearchUsed: cognitiveMetadata?.web_search_used ?? false,
+      outcomeHarnessContextIncluded: historicalEffectiveness.hasMeaningfulSignal,
+      historicalEffectivenessInfluencedIntervention:
+        Boolean(historicalEffectiveness.advisoryText),
       cognitiveMetadata,
     });
 

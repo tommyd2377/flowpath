@@ -55,6 +55,14 @@ const optionalDate = z
   .nullable()
   .optional()
   .default(null);
+const optionalEstimatedMinutes = z
+  .number()
+  .int()
+  .min(1)
+  .max(480)
+  .nullable()
+  .optional()
+  .default(null);
 const persistence = z.enum(MEMORY_PERSISTENCE).optional().default("session_only");
 
 const persistedTextConstraint = (max = 1000) =>
@@ -230,6 +238,7 @@ export const taskInputSchema = z.object({
   effort: z.number().int().min(1).max(5).default(3),
   friction_type: z.enum(TASK_FRICTION_TYPES).default("none"),
   friction_note: text(1200),
+  estimated_minutes: optionalEstimatedMinutes,
   due_date: optionalDate,
   notes: text(TASK_NOTES_MAX),
 });

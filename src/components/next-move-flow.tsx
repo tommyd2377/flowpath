@@ -123,6 +123,7 @@ export function NextMoveFlow() {
       setAnswer("");
       setLastAnswerAttempt(null);
     }
+    return nextDetail;
   }, []);
 
   const loadBillingSummary = useCallback(async () => {
@@ -290,13 +291,15 @@ export function NextMoveFlow() {
       setError(nextMovePlanQuotaMessage);
       return;
     }
+    const situationId = detail.situation.id;
+    const previousPlanId = detail.latestPlan?.id ?? null;
     const { id, controller } = startGeneration("plan", retryCount);
     setGenerating(true);
     setError(null);
     setMessage(null);
     try {
       await apiFetch<StoredNextMovePlan>(
-        `/api/situations/${detail.situation.id}/generate-plan`,
+        `/api/situations/${situationId}/generate-plan`,
         {
           method: "POST",
           signal: controller.signal,
@@ -304,7 +307,7 @@ export function NextMoveFlow() {
         },
       );
       if (latestGenerationIdRef.current !== id) return;
-      await loadDetail(detail.situation.id);
+      await loadDetail(situationId);
       await loadSituations();
       await loadBillingSummary();
       setMessage("Next Move Plan generated.");
@@ -312,6 +315,19 @@ export function NextMoveFlow() {
       await loadBillingSummary();
       if (controller.signal.aborted) return;
       if (latestGenerationIdRef.current !== id) return;
+      try {
+        const reconciledDetail = await loadDetail(situationId);
+        if (
+          reconciledDetail.latestPlan &&
+          reconciledDetail.latestPlan.id !== previousPlanId
+        ) {
+          await loadSituations();
+          setMessage("Next Move Plan generated. It finished after the connection took a while.");
+          return;
+        }
+      } catch {
+        // Keep the original generation error visible if reconciliation also fails.
+      }
       setError(formatError(generateError, "Could not generate next move plan."));
     } finally {
       if (generationRef.current?.id === id) {
@@ -569,7 +585,14 @@ export function NextMoveFlow() {
                   </div>
                 ) : null}
                 {debugVisible && detail.firstIntakePlanner ? (
-                  <FirstIntakePlannerDebug plan={detail.firstIntakePlanner} />
+                  <FirstIntakePlannerDebug
+                    plan={detail.firstIntakePlanner}
+                    answered={detail.messages.some((item) => item.role === "user")}
+                    skipped={Boolean(
+                      detail.latestPlan &&
+                        !detail.messages.some((item) => item.role === "user"),
+                    )}
+                  />
                 ) : null}
                 {isReadyToGenerate ? (
                   <div className="grid gap-3">
@@ -602,7 +625,7 @@ export function NextMoveFlow() {
                         stages={nextMoveGenerationStages}
                         startedAt={activeGeneration.startedAt}
                         softWarningSeconds={45}
-                        hardTimeoutSeconds={180}
+                        hardTimeoutSeconds={240}
                         onRetry={() => generatePlan(activeGeneration.retryCount + 1)}
                         onCancel={cancelActiveGeneration}
                         onEdit={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -661,7 +684,7 @@ export function NextMoveFlow() {
                         stages={nextMoveGenerationStages}
                         startedAt={activeGeneration.startedAt}
                         softWarningSeconds={45}
-                        hardTimeoutSeconds={180}
+                        hardTimeoutSeconds={240}
                         onRetry={() => generatePlan(activeGeneration.retryCount + 1)}
                         onCancel={cancelActiveGeneration}
                         onEdit={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -744,7 +767,15 @@ function QuotaNotice({ message }: { message: string }) {
   );
 }
 
-function FirstIntakePlannerDebug({ plan }: { plan: FirstIntakePlan }) {
+function FirstIntakePlannerDebug({
+  plan,
+  answered,
+  skipped,
+}: {
+  plan: FirstIntakePlan;
+  answered: boolean;
+  skipped: boolean;
+}) {
   return (
     <details className="mb-4 rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
       <summary className="flex cursor-pointer items-center gap-2 font-medium text-white">
@@ -760,6 +791,8 @@ function FirstIntakePlannerDebug({ plan }: { plan: FirstIntakePlan }) {
         />
         <DebugBrief title="Missing info" value={plan.missingInfoTarget} />
         <DebugBrief title="Genericity" value={plan.genericityRisk} />
+        <DebugBrief title="Answered" value={answered ? "yes" : "no"} />
+        <DebugBrief title="Skipped" value={skipped ? "yes" : "no"} />
       </div>
     </details>
   );

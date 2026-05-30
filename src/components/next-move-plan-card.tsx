@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CheckCircle2, CheckSquare, Clock, Info, ShieldAlert, Target, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, CheckCircle2, CheckSquare, Clock, Info, Pencil, ShieldAlert, Target, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -243,22 +243,146 @@ function useCognitiveDebugVisible() {
   return enabled;
 }
 
+type SuggestedActionState = {
+  state: "available" | "accepted" | "dismissed" | "not_useful" | "ignored" | "completed";
+  task: Task | null;
+  original: {
+    title: string;
+    description: string;
+    estimatedMinutes: number | null;
+  };
+};
+
 function SuggestedNextAction({ plan }: { plan: StoredNextMovePlan }) {
   const firstTask = plan.task_candidates[0];
+  const defaultOriginal: SuggestedActionState["original"] = {
+    title: firstTask?.title ?? plan.first_10_minute_action.title,
+    description: firstTask?.description || firstTask?.details || plan.first_10_minute_action.details,
+    estimatedMinutes:
+      firstTask?.estimated_minutes ??
+      plan.highest_leverage_move_today.estimated_minutes ??
+      null,
+  };
+  const [state, setState] = useState<SuggestedActionState>({
+    state: "available",
+    task: null,
+    original: defaultOriginal,
+  });
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(defaultOriginal);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch<SuggestedActionState>(`/api/next-move-plans/${plan.id}/suggested-action`)
+      .then((result) => {
+        if (!active) return;
+        setState(result);
+        setForm(result.task
+          ? {
+              title: result.task.title,
+              description: result.task.notes,
+              estimatedMinutes: result.task.estimated_minutes ?? result.original.estimatedMinutes,
+            }
+          : result.original);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [plan.id]);
+
+  async function submit(action: "accept" | "edit" | "dismiss" | "complete" | "not_useful") {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const result = await apiFetch<SuggestedActionState>(
+        `/api/next-move-plans/${plan.id}/suggested-action`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            action === "edit"
+              ? {
+                  action,
+                  title: form.title,
+                  description: form.description,
+                  estimatedMinutes: form.estimatedMinutes,
+                }
+              : { action },
+          ),
+        },
+      );
+      setState(result);
+      setEditing(false);
+      setMessage(
+        action === "accept"
+          ? "Accepted."
+          : action === "edit"
+            ? "Saved."
+            : action === "complete"
+              ? "Marked done."
+              : "Feedback saved.",
+      );
+    } catch {
+      setMessage("Could not save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (["dismissed", "not_useful", "ignored"].includes(state.state)) {
+    return null;
+  }
+
   return (
     <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.1)] p-3 text-sm text-blue-50">
       <div className="mb-1 flex items-center gap-2 font-medium text-white">
         <Target className="h-4 w-4" />
         Suggested next action
       </div>
-      <div className="font-medium">
-        {firstTask?.title ?? plan.first_10_minute_action.title}
-      </div>
-      <p className="mt-1 text-blue-100">
-        {firstTask?.success_condition
-          ? `${firstTask.description || firstTask.details} Success: ${firstTask.success_condition}`
-          : plan.first_10_minute_action.details}
-      </p>
+      {editing ? (
+        <div className="grid gap-2">
+          <input
+            value={form.title}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, title: event.target.value }))
+            }
+            className="min-h-9 rounded-md border border-slate-700 bg-slate-950 px-2 text-sm text-white"
+          />
+          <textarea
+            value={form.description}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, description: event.target.value }))
+            }
+            className="min-h-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-white"
+          />
+          <input
+            type="number"
+            min={1}
+            max={480}
+            value={form.estimatedMinutes ?? ""}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                estimatedMinutes: event.target.value ? Number(event.target.value) : null,
+              }))
+            }
+            className="min-h-9 w-32 rounded-md border border-slate-700 bg-slate-950 px-2 text-sm text-white"
+          />
+        </div>
+      ) : (
+        <>
+          <div className="font-medium">
+            {state.task?.title ?? firstTask?.title ?? plan.first_10_minute_action.title}
+          </div>
+          <p className="mt-1 text-blue-100">
+            {firstTask?.success_condition
+              ? `${firstTask.description || firstTask.details} Success: ${firstTask.success_condition}`
+              : plan.first_10_minute_action.details}
+          </p>
+        </>
+      )}
       {firstTask ? (
         <div className="mt-2 flex flex-wrap gap-2 text-xs text-blue-100">
           <Badge>{firstTask.estimated_minutes} min</Badge>
@@ -266,6 +390,83 @@ function SuggestedNextAction({ plan }: { plan: StoredNextMovePlan }) {
           <Badge>{firstTask.friction_level} friction</Badge>
         </div>
       ) : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {editing ? (
+          <>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => submit("edit")}
+              className="inline-flex min-h-9 items-center gap-2 rounded-md bg-[var(--azure)] px-3 text-white"
+            >
+              <Check className="h-4 w-4" />
+              Save
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setEditing(false)}
+              className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200"
+            >
+              <X className="h-4 w-4" />
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {state.state !== "accepted" && state.state !== "completed" ? (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => submit("accept")}
+                className="inline-flex min-h-9 items-center gap-2 rounded-md bg-[var(--azure)] px-3 text-white"
+              >
+                <Check className="h-4 w-4" />
+                Accept
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setEditing(true)}
+              className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit
+            </button>
+            {state.state !== "completed" ? (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => submit("complete")}
+                className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                Mark done
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => submit("dismiss")}
+              className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+            >
+              <X className="h-4 w-4" />
+              Dismiss
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => submit("not_useful")}
+              className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+            >
+              <ThumbsDown className="h-4 w-4" />
+              Not useful
+            </button>
+          </>
+        )}
+      </div>
+      {message ? <div className="mt-2 text-xs text-blue-100">{message}</div> : null}
     </div>
   );
 }
@@ -316,7 +517,10 @@ function OutcomeFeedback({ planId }: { planId: number }) {
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function submit(userOutcome: "improved" | "acted" | "rejected", evidence: string) {
+  async function submit(
+    userOutcome: "improved" | "acted" | "rejected" | "needs_followup",
+    evidence: string,
+  ) {
     setSaving(true);
     setMessage(null);
     try {
@@ -347,7 +551,7 @@ function OutcomeFeedback({ planId }: { planId: number }) {
           className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
         >
           <ThumbsUp className="h-4 w-4" />
-          Helped
+          Helpful
         </button>
         <button
           type="button"
@@ -356,7 +560,7 @@ function OutcomeFeedback({ planId }: { planId: number }) {
           className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
         >
           <CheckCircle2 className="h-4 w-4" />
-          Did it
+          I did this
         </button>
         <button
           type="button"
@@ -365,7 +569,16 @@ function OutcomeFeedback({ planId }: { planId: number }) {
           className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
         >
           <ThumbsDown className="h-4 w-4" />
-          Not useful
+          Not helpful
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => submit("needs_followup", "Manual feedback: still stuck.")}
+          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
+        >
+          <Info className="h-4 w-4" />
+          Still stuck
         </button>
       </div>
       {message ? <div className="mt-2 text-xs text-slate-400">{message}</div> : null}

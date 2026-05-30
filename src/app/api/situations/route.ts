@@ -4,8 +4,11 @@ import { buildFirstIntakePlan } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   addIntakeMessage,
+  createOutcomeHarnessEvent,
   createSituation,
+  getLatestIntakeSession,
   getOrCreateIntakeSession,
+  listIntakeMessages,
   listSituations,
 } from "@/lib/repository";
 import { situationInputSchema } from "@/lib/schemas";
@@ -29,6 +32,7 @@ export async function POST(request: Request) {
     const user = await requireUser();
     const isQa = isQaRequest(request);
     const input = situationInputSchema.parse(await readJson(request));
+    const activeSituations = await listSituations(user.id, "active", { isQa });
     const situation = await createSituation(user.id, input, { isQa });
     const session = await getOrCreateIntakeSession(user.id, situation.id);
     const firstIntakePlanner = buildFirstIntakePlan(situation);
@@ -39,6 +43,54 @@ export async function POST(request: Request) {
       firstIntakePlanner.question,
       { isQa },
     );
+    for (const active of activeSituations.slice(0, 8)) {
+      const activeSession = await getLatestIntakeSession(user.id, active.id);
+      if (!activeSession) continue;
+      const activeMessages = await listIntakeMessages(user.id, activeSession.id);
+      const hasUserAnswer = activeMessages.some((message) => message.role === "user");
+      if (hasUserAnswer || activeMessages.length === 0) continue;
+      const activePlanner = buildFirstIntakePlan(active);
+      await createOutcomeHarnessEvent(user.id, {
+        situationId: active.id,
+        conversationId: String(active.id),
+        eventType: "created_new_situation_before_answering",
+        source: "first_intake",
+        domain: activePlanner.domain,
+        subtype: activePlanner.subtype,
+        questionPurpose: activePlanner.questionPurpose,
+        metadata: { replacementSituationId: situation.id },
+        dedupeKey: `new-situation-before-answering:${active.id}:${situation.id}`,
+        isQa,
+      });
+      await createOutcomeHarnessEvent(user.id, {
+        situationId: active.id,
+        conversationId: String(active.id),
+        eventType: "first_intake_abandoned",
+        source: "first_intake",
+        domain: activePlanner.domain,
+        subtype: activePlanner.subtype,
+        questionPurpose: activePlanner.questionPurpose,
+        metadata: { reason: "new_situation_started" },
+        dedupeKey: `first-intake-abandoned:${active.id}`,
+        isQa,
+      });
+    }
+    await createOutcomeHarnessEvent(user.id, {
+      situationId: situation.id,
+      conversationId: String(situation.id),
+      messageId: messages.id,
+      eventType: "first_intake_question_shown",
+      source: "first_intake",
+      domain: firstIntakePlanner.domain,
+      subtype: firstIntakePlanner.subtype,
+      questionPurpose: firstIntakePlanner.questionPurpose,
+      metadata: {
+        genericityRisk: firstIntakePlanner.genericityRisk,
+        missingInfoTarget: firstIntakePlanner.missingInfoTarget,
+      },
+      dedupeKey: `first-intake-question-shown:${situation.id}`,
+      isQa,
+    });
     return dataResponse(
       { situation, session, messages: [messages], firstIntakePlanner },
       201,

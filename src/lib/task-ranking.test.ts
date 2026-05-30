@@ -18,6 +18,7 @@ function task(overrides: Partial<Task>): Task {
     effort: 3,
     friction_type: "none",
     friction_note: "",
+    estimated_minutes: null,
     due_date: null,
     notes: "",
     created_at: "2026-05-16T00:00:00.000Z",
@@ -55,6 +56,56 @@ test("tasks from multiple situations are globally ranked by leverage and urgency
   assert.match(ranked[0].rank_reason ?? "", /high urgency situation/);
   assert.match(ranked[0].rank_reason ?? "", /Next Move plan/);
   assert.equal(ranked[0].situation_title, "Job search");
+});
+
+test("outcome context favors shorter accepted patterns", () => {
+  const ranked = rankTasks(
+    [
+      task({
+        id: 1,
+        title: "Large useful action",
+        importance: 4,
+        effort: 2,
+        estimated_minutes: 90,
+      }),
+      task({
+        id: 2,
+        title: "Small starter action",
+        importance: 4,
+        effort: 2,
+        estimated_minutes: 15,
+      }),
+    ],
+    "2026-05-17",
+    { userPrefersShorterTasks: true, editedTasksDownCount: 2 },
+  );
+
+  assert.equal(ranked[0].id, 2);
+  assert.match(ranked[0].rank_reason ?? "", /shorter-action/);
+});
+
+test("outcome context lowers tasks from ignored plans", () => {
+  const ranked = rankTasks(
+    [
+      task({
+        id: 1,
+        title: "Task from ignored plan",
+        importance: 5,
+        effort: 1,
+        source_next_move_plan_id: 22,
+      }),
+      task({
+        id: 2,
+        title: "Fresh task",
+        importance: 5,
+        effort: 1,
+      }),
+    ],
+    "2026-05-17",
+    { ignoredPlanIds: [22] },
+  );
+
+  assert.equal(ranked[0].id, 2);
 });
 
 test("deadline and unblocker signals can lift a task above creation order", () => {

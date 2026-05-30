@@ -2,6 +2,8 @@ import type { BillingStatus, PlanTier, UsageType } from "@/lib/types";
 
 export const BILLING_UPGRADE_MESSAGE =
   "Your free monthly FlowPath usage is used up. Upgrade to Core to keep generating Next Move plans and daily guidance.";
+export const GUEST_UPGRADE_MESSAGE =
+  "Create a free account to keep using FlowPath, or upgrade to Core for more monthly AI guidance.";
 
 export const CORE_PRICE_CENTS = 1200;
 
@@ -62,6 +64,12 @@ export const planLimits: Record<PlanTier, PlanLimits> = {
     next_move_plan: 20,
     lightweight_assist: 50,
   },
+};
+
+export const guestPlanLimits: PlanLimits = {
+  today_checkin: 1,
+  next_move_plan: 1,
+  lightweight_assist: 5,
 };
 
 export type BillingUserPlanSnapshot = {

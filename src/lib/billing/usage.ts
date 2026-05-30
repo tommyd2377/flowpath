@@ -13,7 +13,9 @@ import type {
 import {
   BILLING_UPGRADE_MESSAGE,
   CORE_PRICE_CENTS,
+  GUEST_UPGRADE_MESSAGE,
   getEffectivePlanTier,
+  guestPlanLimits,
   planLimits,
   usageTypes,
 } from "./plans";
@@ -35,10 +37,12 @@ export type BillingUser = {
   current_period_start: string | null;
   current_period_end: string | null;
   internal_unlimited: boolean;
+  is_guest: boolean;
 };
 
-type BillingUserRow = Omit<BillingUser, "internal_unlimited"> & {
+type BillingUserRow = Omit<BillingUser, "internal_unlimited" | "is_guest"> & {
   internal_unlimited: number;
+  is_guest: number;
 };
 
 type MonthlyUsageRow = {
@@ -59,12 +63,14 @@ export type UsageDecision = {
   remaining: number | null;
   periodStart: string;
   periodEnd: string;
+  upgradeMessage: string;
 };
 
 function toBillingUser(row: BillingUserRow): BillingUser {
   return {
     ...row,
     internal_unlimited: Boolean(row.internal_unlimited),
+    is_guest: Boolean(row.is_guest),
   };
 }
 
@@ -73,7 +79,7 @@ export async function getBillingUser(userId: number) {
     `SELECT
       id, email, plan_tier, billing_status, stripe_customer_id,
       stripe_subscription_id, stripe_price_id, current_period_start,
-      current_period_end, internal_unlimited
+      current_period_end, internal_unlimited, is_guest
     FROM users
     WHERE id = ?`,
     [userId],
@@ -127,11 +133,10 @@ export async function listUsageRows(userId: number, periodStart: string) {
   return byType;
 }
 
-function usageSummaryForTier(
-  planTier: PlanTier,
+function usageSummaryForLimits(
+  limits: Record<UsageType, number | null>,
   usageRows: Map<UsageType, MonthlyUsageRow>,
 ): UsageSummaryItem[] {
-  const limits = planLimits[planTier];
   return usageTypes.map((usageType) => {
     const used = usageRows.get(usageType)?.count ?? 0;
     const limit = limits[usageType];
@@ -142,6 +147,14 @@ function usageSummaryForTier(
       remaining: limit == null ? null : Math.max(limit - used, 0),
     };
   });
+}
+
+function limitsForUser(user: BillingUser, planTier: PlanTier) {
+  return user.is_guest ? guestPlanLimits : planLimits[planTier];
+}
+
+function upgradeMessageForUser(user: BillingUser) {
+  return user.is_guest ? GUEST_UPGRADE_MESSAGE : BILLING_UPGRADE_MESSAGE;
 }
 
 export async function canUseFeature(
@@ -155,7 +168,7 @@ export async function canUseFeature(
   const { periodStart, periodEnd } = getUsagePeriod();
   const usageRows = await listUsageRows(userId, periodStart);
   const used = usageRows.get(usageType)?.count ?? 0;
-  const limit = planLimits[planTier][usageType];
+  const limit = limitsForUser(user, planTier)[usageType];
   const remaining = limit == null ? null : Math.max(limit - used, 0);
 
   return {
@@ -168,6 +181,7 @@ export async function canUseFeature(
     remaining,
     periodStart,
     periodEnd,
+    upgradeMessage: upgradeMessageForUser(user),
   };
 }
 
@@ -175,7 +189,7 @@ export async function assertCanUseFeature(userId: number, usageType: UsageType) 
   const decision = await canUseFeature(userId, usageType);
   if (decision.allowed) return decision;
 
-  throw new ApiRequestError(BILLING_UPGRADE_MESSAGE, 402, "quota_exceeded", {
+  throw new ApiRequestError(decision.upgradeMessage, 402, "quota_exceeded", {
     usage_type: decision.usageType,
     plan_tier: decision.planTier,
     used: decision.used,
@@ -183,8 +197,36 @@ export async function assertCanUseFeature(userId: number, usageType: UsageType) 
     remaining: decision.remaining,
     period_start: decision.periodStart,
     period_end: decision.periodEnd,
-    upgrade_message: BILLING_UPGRADE_MESSAGE,
+    upgrade_message: decision.upgradeMessage,
   });
+}
+
+export async function canUseGuestFirstSituationIntake(
+  userId: number,
+  situationId: number,
+  { isQa = false }: { isQa?: boolean } = {},
+) {
+  const user = await getBillingUser(userId);
+  if (!user?.is_guest) return false;
+
+  const planCount = await first<{ count: number }>(
+    `SELECT COUNT(*) AS count
+    FROM next_move_plans
+    WHERE user_id = ? AND is_qa = ?`,
+    [userId, isQa ? 1 : 0],
+  );
+  if ((planCount?.count ?? 0) > 0) return false;
+
+  const firstSituation = await first<{ id: number }>(
+    `SELECT id
+    FROM situations
+    WHERE user_id = ? AND is_qa = ?
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1`,
+    [userId, isQa ? 1 : 0],
+  );
+
+  return firstSituation?.id === situationId;
 }
 
 export async function incrementUsage(
@@ -228,18 +270,20 @@ export async function getBillingSummary(userId: number): Promise<BillingSummary>
   const planTier = getEffectivePlanTier(user);
   const { periodStart, periodEnd } = getUsagePeriod();
   const usageRows = await listUsageRows(userId, periodStart);
+  const upgradeMessage = upgradeMessageForUser(user);
 
   return {
     plan_tier: planTier,
     billing_status: user.billing_status,
     internal_unlimited: planTier === "internal_unlimited",
+    is_guest: user.is_guest,
     current_period_start: user.current_period_start,
     current_period_end: user.current_period_end,
     usage_period_start: periodStart,
     usage_period_end: periodEnd,
     stripe_customer_id: user.stripe_customer_id,
-    usage: usageSummaryForTier(planTier, usageRows),
-    upgrade_message: BILLING_UPGRADE_MESSAGE,
+    usage: usageSummaryForLimits(limitsForUser(user, planTier), usageRows),
+    upgrade_message: upgradeMessage,
     core_price_cents: CORE_PRICE_CENTS,
   };
 }

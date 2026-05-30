@@ -164,6 +164,8 @@ export const cognitiveMetadataSchema = z.object({
   web_search: webSearchDecisionSchema,
   evaluator: responseEvaluatorSchema.nullable(),
   repeated_topic: z.boolean(),
+  repeated_loop_detected: z.boolean().optional().default(false),
+  historical_effectiveness_advisory: z.string().trim().max(1200).optional().default(""),
   web_search_used: z.boolean(),
   web_search_reason: z.string().trim().max(700),
   response_rewritten: z.boolean(),

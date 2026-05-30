@@ -6,6 +6,8 @@
   --azure: #0078d4;
   --azure-light: #6cb8f6;
   --azure-deep: #004578;
+  --panel-strong: #101827;
+  --blue-bright: #60a5fa;
 }
 
 @theme inline {
@@ -31,4 +33,50 @@ textarea {
 ::selection {
   background: var(--azure);
   color: #ffffff;
+}
+
+.personalFooter {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding-top: 34px;
+  padding-bottom: 18px;
+  color: #d9e2f0;
+  text-align: center;
+}
+
+.personalFooter p {
+  margin: 0;
+  background: linear-gradient(90deg, #7db8ef, #3b82f6, #a78bfa);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.personalFooterLinks {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.personalFooterLinks a {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: #eef4ff;
+  background: var(--panel-strong);
+  border: 1px solid #32405e;
+  border-radius: 8px;
+}
+
+.personalFooterLinks a:hover {
+  color: #fff;
+  border-color: var(--blue-bright);
+}
+
+.madeInNyc {
+  color: #c8d2e1;
 }

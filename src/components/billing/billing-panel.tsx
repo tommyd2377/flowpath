@@ -1,7 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { BadgeCheck, CreditCard, ExternalLink, Sparkles } from "lucide-react";
+import {
+  BadgeCheck,
+  CreditCard,
+  ExternalLink,
+  Sparkles,
+  UserPlus,
+} from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import type { BillingSummary, UsageType } from "@/lib/types";
@@ -96,9 +103,11 @@ export function BillingPanel() {
     }
   }
 
-  const showUpgrade = summary?.plan_tier === "free";
+  const showCreateAccount = Boolean(summary?.is_guest);
+  const showUpgrade = summary?.plan_tier === "free" && !summary.is_guest;
   const showManageBilling =
-    summary?.plan_tier === "core" || Boolean(summary?.stripe_customer_id);
+    !summary?.is_guest &&
+    (summary?.plan_tier === "core" || Boolean(summary?.stripe_customer_id));
 
   return (
     <div>
@@ -125,10 +134,12 @@ export function BillingPanel() {
                   Current plan
                 </div>
                 <h2 className="mt-1 text-3xl font-semibold">
-                  {planLabels[summary.plan_tier]}
+                  {summary.is_guest ? "Guest" : planLabels[summary.plan_tier]}
                 </h2>
                 <p className="mt-2 text-sm text-slate-400">
-                  Billing status: {summary.billing_status.replaceAll("_", " ")}
+                  {summary.is_guest
+                    ? "Sign in to save this workspace and unlock the full free tier."
+                    : `Billing status: ${summary.billing_status.replaceAll("_", " ")}`}
                 </p>
               </div>
               {summary.internal_unlimited ? (
@@ -140,6 +151,15 @@ export function BillingPanel() {
             </div>
 
             <div className="mt-5 grid gap-3">
+              {showCreateAccount ? (
+                <Link
+                  href="/sign-up"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[var(--azure)] px-3 text-sm font-medium text-white transition hover:bg-[#106ebe]"
+                >
+                  <UserPlus className="h-4 w-4" />
+                  Create free account
+                </Link>
+              ) : null}
               {showUpgrade ? (
                 <Button
                   type="button"
@@ -165,7 +185,12 @@ export function BillingPanel() {
               ) : null}
             </div>
 
-            {summary.plan_tier === "free" ? (
+            {summary.is_guest ? (
+              <div className="mt-5 rounded-lg border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">
+                Guest mode includes one full situation intake and one Next Move
+                plan. Create a free account to keep going after that.
+              </div>
+            ) : summary.plan_tier === "free" ? (
               <div className="mt-5 rounded-lg border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">
                 Core is ${Math.round(summary.core_price_cents / 100)}/month for early
                 traction: 20 Next Move plans, 31 Today check-ins, and 50 lightweight

@@ -18,6 +18,8 @@ async function createSchema() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     clerk_user_id TEXT UNIQUE,
     email TEXT UNIQUE,
+    guest_session_id TEXT UNIQUE,
+    is_guest INTEGER NOT NULL DEFAULT 0,
     role TEXT NOT NULL DEFAULT 'user',
     plan_tier TEXT NOT NULL DEFAULT 'free',
     billing_status TEXT NOT NULL DEFAULT 'none',
@@ -50,6 +52,25 @@ async function createSchema() {
     created_at TEXT NOT NULL,
     processed_at TEXT NOT NULL
   )`);
+  await db.run(`CREATE TABLE situations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'custom',
+    status TEXT NOT NULL DEFAULT 'active',
+    urgency TEXT NOT NULL DEFAULT 'medium',
+    is_qa INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  await db.run(`CREATE TABLE next_move_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    situation_id INTEGER NOT NULL REFERENCES situations(id) ON DELETE CASCADE,
+    is_qa INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  )`);
 }
 
 async function insertUser({
@@ -60,21 +81,23 @@ async function insertUser({
   customerId = null,
   subscriptionId = null,
   internalUnlimited = 0,
+  isGuest = 0,
 }: {
   id: number;
-  email?: string;
+  email?: string | null;
   planTier?: string;
   billingStatus?: string;
   customerId?: string | null;
   subscriptionId?: string | null;
   internalUnlimited?: number;
+  isGuest?: number;
 }) {
   const now = new Date().toISOString();
   await db.run(
     `INSERT INTO users (
       id, email, role, plan_tier, billing_status, stripe_customer_id,
-      stripe_subscription_id, internal_unlimited, created_at, updated_at
-    ) VALUES (?, ?, 'user', ?, ?, ?, ?, ?, ?, ?)`,
+      stripe_subscription_id, internal_unlimited, is_guest, created_at, updated_at
+    ) VALUES (?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       email,
@@ -83,6 +106,7 @@ async function insertUser({
       customerId,
       subscriptionId,
       internalUnlimited,
+      isGuest,
       now,
       now,
     ],
@@ -143,6 +167,8 @@ before(async () => {
 });
 
 beforeEach(async () => {
+  await db.run("DELETE FROM next_move_plans");
+  await db.run("DELETE FROM situations");
   await db.run("DELETE FROM stripe_events");
   await db.run("DELETE FROM monthly_usage");
   await db.run("DELETE FROM users");
@@ -173,6 +199,52 @@ test("free user can use a feature within quota and is blocked after quota", asyn
     () => usage.assertCanUseFeature(1, "next_move_plan"),
     /free monthly FlowPath usage is used up/,
   );
+});
+
+test("guest user gets guest limits and signup-oriented quota copy", async () => {
+  await insertUser({ id: 8, email: null, isGuest: 1 });
+  await setUsage(8, "today_checkin", 1);
+
+  const decision = await usage.canUseFeature(8, "today_checkin");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.limit, 1);
+  assert.match(decision.upgradeMessage, /Create a free account/);
+
+  const summary = await usage.getBillingSummary(8);
+  assert.equal(summary.is_guest, true);
+  assert.equal(
+    summary.usage.find((item) => item.usage_type === "today_checkin")?.limit,
+    1,
+  );
+});
+
+test("guest can finish the first situation intake even after lightweight quota", async () => {
+  await insertUser({ id: 18, email: null, isGuest: 1 });
+  await setUsage(18, "lightweight_assist", 5);
+  const now = new Date().toISOString();
+  await db.run(
+    `INSERT INTO situations (
+      id, user_id, title, description, category, status, urgency, created_at, updated_at
+    ) VALUES (101, 18, 'First guest intake', 'First guest intake', 'custom', 'active', 'medium', ?, ?)`,
+    [now, now],
+  );
+  await db.run(
+    `INSERT INTO situations (
+      id, user_id, title, description, category, status, urgency, created_at, updated_at
+    ) VALUES (102, 18, 'Second guest intake', 'Second guest intake', 'custom', 'active', 'medium', ?, ?)`,
+    [now, now],
+  );
+
+  const blockedAssist = await usage.canUseFeature(18, "lightweight_assist");
+  assert.equal(blockedAssist.allowed, false);
+  assert.equal(await usage.canUseGuestFirstSituationIntake(18, 101), true);
+  assert.equal(await usage.canUseGuestFirstSituationIntake(18, 102), false);
+
+  await db.run(
+    "INSERT INTO next_move_plans (user_id, situation_id, created_at) VALUES (18, 101, ?)",
+    [now],
+  );
+  assert.equal(await usage.canUseGuestFirstSituationIntake(18, 101), false);
 });
 
 test("core user has the higher quota", async () => {

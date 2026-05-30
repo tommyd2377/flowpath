@@ -1128,6 +1128,9 @@ export async function generateInterviewQuestion(
             intervention: options.cognitiveContext.intervention,
             selected_memory: options.cognitiveContext.memorySelection,
             repeated_topic: options.cognitiveContext.repeatedTopic,
+            repeated_loop_detected: options.cognitiveContext.repeatedLoopDetected,
+            historical_effectiveness:
+              options.cognitiveContext.historicalEffectiveness?.advisoryText || "",
             instruction:
               "Use these cognitive routing hints to avoid redundant questions, handle rumination/anxiety carefully, and keep the next intake turn compact. Do not expose raw metadata to the user.",
           }
@@ -1205,6 +1208,12 @@ export async function generateNextMovePlan(
     cognitiveContext?.repeatedTopic
       ? "The user appears to be circling a repeated topic. Do not give a longer version of the same answer; name the stable conclusion and convert uncertainty into one experiment."
       : "",
+    cognitiveContext?.repeatedLoopDetected
+      ? "Outcome history suggests a repeated loop. Briefly name the unresolved uncertainty, avoid restating stale advice, and propose one concrete experiment or starter action."
+      : "",
+    cognitiveContext?.historicalEffectiveness?.advisoryText
+      ? `Use this outcome harness context as advisory, not controlling: ${cognitiveContext.historicalEffectiveness.advisoryText}`
+      : "",
     "If web search is available, use it only when the web_search_decision below says current/local/volatile facts matter. If web_search_decision says not to search, do not search.",
     "Use at most three web searches. If web search is not needed, do not use it.",
     "Fill recommendation_basis with concrete signals and their implications. Fill restraint_guidance with whether the user should push or deliberately narrow the situation today.",
@@ -1234,6 +1243,9 @@ export async function generateNextMovePlan(
           selected_memory: cognitiveContext.memorySelection,
           web_search_decision: cognitiveContext.webSearchDecision,
           repeated_topic: cognitiveContext.repeatedTopic,
+          repeated_loop_detected: cognitiveContext.repeatedLoopDetected,
+          historical_effectiveness_advisory:
+            cognitiveContext.historicalEffectiveness?.advisoryText || "",
           success_criteria: cognitiveContext.intervention.success_criteria,
           escalation_model_selected: cognitiveContext.useEscalationModel,
         }
@@ -1284,6 +1296,8 @@ export async function generateNextMovePlan(
           blocked_by_policy: false,
         },
         repeatedTopic: false,
+        repeatedLoopDetected: false,
+        historicalEffectiveness: null,
         useEscalationModel: false,
       },
       options.sourceMessageId ?? null,
@@ -1325,9 +1339,8 @@ export async function generateNextMovePlan(
         evaluator,
         revision_instruction: buildRevisionInstruction(evaluator),
       }),
-      tools,
-      include,
-      maxToolCalls: tools ? 2 : undefined,
+      tools: undefined,
+      include: undefined,
       maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
       model: revisionModel,
     });

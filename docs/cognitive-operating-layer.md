@@ -9,6 +9,7 @@ records the plan so the product gets better at turning guidance into action.
 ```text
 user message / situation
   -> update recent unresolved outcomes
+  -> load compact outcome harness effectiveness signals
   -> state detection
   -> intervention selection
   -> compact memory selection
@@ -17,6 +18,7 @@ user message / situation
   -> deterministic evaluator
   -> one optional rewrite
   -> plan + cognitive metadata + outcome record
+  -> outcome harness events
   -> user-confirmed task conversion
 ```
 
@@ -62,6 +64,13 @@ Intervention selection returns:
 Outcome records are stored in `outcome_records` with the source message, optional
 conversation and plan id, detected state, intervention, recommended action, task
 ids created, user outcome, evidence, follow-up time, notes, and QA flag.
+
+Fine-grained workflow signals are stored separately in
+`outcome_harness_events`. These events capture accepted, edited, dismissed,
+completed, ignored, helpful, not-helpful, still-stuck, repeated-loop, and intake
+lifecycle signals. They are operational product behavior signals, not claims
+that FlowPath was medically, legally, financially, or objectively correct. See
+`docs/outcome-harness.md`.
 
 ## Model Routing
 
@@ -116,6 +125,8 @@ rewrite instructions. There is no loop.
 - `tasks_created_count`
 - `memory_items_used`
 - `web_search_used`
+- `outcome_harness_context_included`
+- `historical_effectiveness_influenced_intervention`
 - `cognitive_metadata_json`
 
 Cost is `null` unless `OPENAI_MODEL_PRICING_JSON` is configured.
