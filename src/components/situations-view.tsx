@@ -7,7 +7,14 @@ import { Archive, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "@/lib/client-api";
 import type { Situation } from "@/lib/types";
 import { Button, Card, EmptyState, Notice, PageHeader, SelectInput } from "./ui";
-import { modeLabel } from "./next-move-plan-card";
+
+function formatUpdatedAt(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
+}
 
 export function SituationsView() {
   const [situations, setSituations] = useState<Situation[]>([]);
@@ -88,11 +95,8 @@ export function SituationsView() {
 
   return (
     <div>
-      <PageHeader eyebrow="Situations" title="Current Reality">
-        <p>
-          Situations are the context FlowPath uses to separate highest-leverage moves from
-          noise.
-        </p>
+      <PageHeader eyebrow="Situations" title="Active Situations">
+        <p>View and manage the situations FlowPath is helping you move through.</p>
       </PageHeader>
 
       {message ? <div className="mb-4"><Notice tone="success">{message}</Notice></div> : null}
@@ -112,7 +116,7 @@ export function SituationsView() {
         <Link href="/next-move">
           <Button type="button">
             <Plus className="h-4 w-4" />
-            Find My Next Move
+            New Situation
           </Button>
         </Link>
       </div>
@@ -130,26 +134,18 @@ export function SituationsView() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <Link href={`/situations/${situation.id}`} className="min-w-0">
                   <div className="flex flex-wrap gap-2">
-                    <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
-                      {situation.category}
-                    </span>
                     <span className="rounded-md bg-[rgba(0,120,212,0.18)] px-2 py-1 text-xs font-medium text-blue-100">
-                      {situation.urgency}
+                      {situation.urgency} urgency
                     </span>
                     <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
                       {situation.status}
                     </span>
-                    {situation.latest_plan_mode ? (
-                      <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
-                        {modeLabel(situation.latest_plan_mode)}
-                      </span>
-                    ) : null}
                   </div>
                   <h2 className="mt-3 text-xl font-semibold text-white">
                     {situation.title}
                   </h2>
                   <p className="mt-1 text-sm text-slate-400">
-                    Latest move: {situation.latest_plan_move || "No plan generated yet."}
+                    Last updated {formatUpdatedAt(situation.updated_at)}
                   </p>
                 </Link>
                 <div className="flex flex-wrap gap-2 sm:justify-end">

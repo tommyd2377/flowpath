@@ -108,6 +108,24 @@ test("outcome context lowers tasks from ignored plans", () => {
   assert.equal(ranked[0].id, 2);
 });
 
+test("active status order keeps blocked tasks behind actionable tasks", () => {
+  const ranked = rankTasks(
+    [
+      task({ id: 1, title: "Completed", status: "done", importance: 5 }),
+      task({ id: 2, title: "Blocked", status: "blocked", importance: 5 }),
+      task({ id: 3, title: "Not started", status: "open", importance: 3 }),
+      task({ id: 4, title: "In progress", status: "in_progress", importance: 2 }),
+      task({ id: 5, title: "No longer relevant", status: "ignored", importance: 5 }),
+    ],
+    "2026-05-17",
+  );
+
+  assert.deepEqual(
+    ranked.map((item) => item.id),
+    [4, 3, 2, 5, 1],
+  );
+});
+
 test("deadline and unblocker signals can lift a task above creation order", () => {
   const ranked = rankTasks(
     [

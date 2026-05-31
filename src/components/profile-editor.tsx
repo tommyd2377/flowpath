@@ -333,8 +333,8 @@ export function ProfileEditor() {
       ) : (
         <div className="grid gap-5">
           <MemorySection
-            title="Review before saving"
-            description="FlowPath inferred these broad memories. They are not durable memory unless you save them."
+            title="Proposed Memory"
+            description="Review broad context FlowPath inferred before saving it for future situations."
           >
             {proposedItems.length === 0 ? (
               <EmptyState>No memories waiting for review.</EmptyState>
@@ -358,6 +358,7 @@ export function ProfileEditor() {
                   onKeep={() => updateItem(item.id, { persistence: "saved_memory" })}
                   onDelete={() => deleteItem(item.id)}
                   keepLabel="Save"
+                  deleteLabel="Reject"
                   saving={saving}
                 />
               ))
@@ -365,7 +366,7 @@ export function ProfileEditor() {
           </MemorySection>
 
           <MemorySection
-            title="Saved memory"
+            title="Saved Memory"
             description="Durable context FlowPath can reuse later: saved cards, broad constraints, and manual profile notes."
           >
             {savedItems.length === 0 && profileNotes.length === 0 && constraintCards.length === 0 ? (
@@ -394,6 +395,7 @@ export function ProfileEditor() {
                     onKeep={() => updateItem(item.id, { persistence: "saved_memory" })}
                     onDelete={() => deleteItem(item.id)}
                     keepLabel="Save"
+                    deleteLabel="Reject"
                     saving={saving}
                   />
                 ))}
@@ -421,8 +423,8 @@ export function ProfileEditor() {
 
           {sessionOnlyItems.length > 0 ? (
             <MemorySection
-              title="Used for this situation only"
-              description="These details helped with a specific intake or plan. They are not saved as durable memory; move one into review only if a broad version should carry forward."
+              title="Situation Notes"
+              description="Context tied to a specific situation. Save only a broad version if it should carry forward."
             >
               {sessionOnlyItems.map((item) => (
                 <MemoryItemCard
@@ -442,7 +444,8 @@ export function ProfileEditor() {
                   onSave={() => editingItem && updateItem(item.id, editingItem)}
                   onKeep={() => updateItem(item.id, { persistence: "proposed_memory" })}
                   onDelete={() => deleteItem(item.id)}
-                  keepLabel="Review for saving"
+                  keepLabel="Review"
+                  deleteLabel="Reject"
                   saving={saving}
                 />
               ))}
@@ -543,6 +546,7 @@ function MemoryItemCard({
   onKeep,
   onDelete,
   keepLabel,
+  deleteLabel = "Delete",
   saving,
 }: {
   item: InferredContextItem;
@@ -555,6 +559,7 @@ function MemoryItemCard({
   onKeep: () => void;
   onDelete: () => void;
   keepLabel: string;
+  deleteLabel?: string;
   saving: boolean;
 }) {
   const draft = editingItem ?? item;
@@ -601,7 +606,7 @@ function MemoryItemCard({
                 ))}
               </SelectInput>
             </Field>
-            <Field label="Memory">
+            <Field label="Section">
               <SelectInput
                 value={draft.persistence}
                 onChange={(event) =>
@@ -611,9 +616,9 @@ function MemoryItemCard({
                   })
                 }
               >
-                <option value="session_only">session only</option>
-                <option value="proposed_memory">proposed</option>
-                <option value="saved_memory">saved</option>
+                <option value="session_only">Situation Notes</option>
+                <option value="proposed_memory">Proposed Memory</option>
+                <option value="saved_memory">Saved Memory</option>
               </SelectInput>
             </Field>
           </div>
@@ -633,9 +638,6 @@ function MemoryItemCard({
           <div className="min-w-0">
             <div className="flex flex-wrap gap-2">
               <Badge>{categoryLabels[item.category]}</Badge>
-              <Badge>{item.sensitivity} sensitivity</Badge>
-              <Badge>{item.persistence.replaceAll("_", " ")}</Badge>
-              <Badge>{item.source}</Badge>
               {item.situation_title ? <Badge>{item.situation_title}</Badge> : null}
             </div>
             <h3 className="mt-3 text-lg font-semibold text-white">{item.label}</h3>
@@ -654,7 +656,7 @@ function MemoryItemCard({
             </Button>
             <Button type="button" variant="danger" onClick={onDelete} disabled={saving}>
               <Trash2 className="h-4 w-4" />
-              Delete
+              {deleteLabel}
             </Button>
           </div>
         </div>

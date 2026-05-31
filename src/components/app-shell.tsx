@@ -12,7 +12,6 @@ import {
   CreditCard,
   Globe2,
   Heart,
-  LifeBuoy,
   LogIn,
   MapPinned,
   Send,
@@ -22,13 +21,12 @@ import { QaModeBanner } from "./qa-mode-banner";
 
 const links = [
   { href: "/", label: "Today", icon: Compass },
-  { href: "/next-move", label: "Find My Next Move", icon: LifeBuoy },
+  { href: "/situations", label: "Situations", icon: MapPinned },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/memory", label: "Memory", icon: Brain },
 ];
 
 const secondaryLinks = [
-  { href: "/situations", label: "Situations", icon: MapPinned },
   { href: "/history", label: "History", icon: Archive },
   { href: "/billing", label: "Billing", icon: CreditCard },
 ];

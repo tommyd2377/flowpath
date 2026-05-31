@@ -54,6 +54,7 @@ import type {
   ProjectInput,
   SituationInput,
   SituationUpdate,
+  TaskFeedbackInput,
   TaskInput,
 } from "./schemas";
 import { rankTasks } from "./task-ranking";
@@ -1619,7 +1620,13 @@ export async function listTasks(
     WHERE tasks.user_id = ?
       ${qaClause("tasks", isQa)}
     ORDER BY
-      CASE tasks.status WHEN 'open' THEN 1 WHEN 'ignored' THEN 2 ELSE 3 END,
+      CASE tasks.status
+        WHEN 'in_progress' THEN 1
+        WHEN 'open' THEN 2
+        WHEN 'blocked' THEN 3
+        WHEN 'ignored' THEN 4
+        ELSE 5
+      END,
       tasks.importance DESC,
       tasks.effort ASC,
       tasks.created_at DESC`,
@@ -1813,6 +1820,65 @@ export async function updateTask(
       isQa: Boolean(updated.is_qa),
     });
   }
+  return updated;
+}
+
+export async function recordTaskFeedback(
+  userId: number,
+  id: number,
+  input: TaskFeedbackInput,
+): Promise<Task | null> {
+  assertSafeTextFields({ notes: input.notes });
+  const existing = await getTask(userId, id);
+  if (!existing) return null;
+
+  const feedbackMap: Record<
+    TaskFeedbackInput["outcome"],
+    { status: Task["status"]; eventType: OutcomeHarnessEventType }
+  > = {
+    completed: { status: "done", eventType: "task_completed" },
+    couldnt_complete: {
+      status: "blocked",
+      eventType: "user_reported_deferred",
+    },
+    need_help: {
+      status: "blocked",
+      eventType: "user_reported_still_stuck",
+    },
+    no_longer_relevant: {
+      status: "ignored",
+      eventType: "task_dismissed",
+    },
+  };
+  const feedback = feedbackMap[input.outcome];
+
+  await run(
+    `UPDATE tasks SET
+      status = ?,
+      updated_at = ?
+    WHERE id = ? AND user_id = ?`,
+    [feedback.status, nowIso(), id, userId],
+  );
+  const updated = await getTask(userId, id);
+  if (!updated) return null;
+
+  await createOutcomeHarnessEvent(userId, {
+    taskId: updated.id,
+    situationId: updated.situation_id ?? null,
+    planId: updated.source_next_move_plan_id ?? null,
+    eventType: feedback.eventType,
+    source: "manual_user_feedback",
+    metadata: {
+      outcome: input.outcome,
+      notes: input.notes,
+      title: updated.title,
+      previousStatus: existing.status,
+      nextStatus: updated.status,
+      estimatedMinutes: updated.estimated_minutes ?? null,
+    },
+    isQa: Boolean(updated.is_qa),
+  });
+
   return updated;
 }
 
@@ -2645,7 +2711,13 @@ export async function listTasksForSituation(
     WHERE tasks.user_id = ? AND tasks.situation_id = ?
       ${qaClause("tasks", isQa)}
     ORDER BY
-      CASE tasks.status WHEN 'open' THEN 1 WHEN 'ignored' THEN 2 ELSE 3 END,
+      CASE tasks.status
+        WHEN 'in_progress' THEN 1
+        WHEN 'open' THEN 2
+        WHEN 'blocked' THEN 3
+        WHEN 'ignored' THEN 4
+        ELSE 5
+      END,
       tasks.importance DESC,
       tasks.created_at DESC`,
     [userId, situationId],

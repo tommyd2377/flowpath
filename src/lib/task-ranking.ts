@@ -122,6 +122,14 @@ function rankReason(task: Task, today: string, context?: TaskRankingOutcomeConte
   return reasons.slice(0, 3).join("; ") || "best balance of importance, urgency, and effort";
 }
 
+function statusOrder(status: Task["status"]) {
+  if (status === "in_progress") return 0;
+  if (status === "open") return 1;
+  if (status === "blocked") return 2;
+  if (status === "ignored") return 3;
+  return 4;
+}
+
 export function scoreTask(
   task: Task,
   today = todayIsoDate(),
@@ -155,8 +163,8 @@ export function rankTasks(
       rank_reason: rankReason(task, today, context),
     }))
     .sort((first, second) => {
-      const firstStatus = first.status === "open" ? 0 : first.status === "ignored" ? 1 : 2;
-      const secondStatus = second.status === "open" ? 0 : second.status === "ignored" ? 1 : 2;
+      const firstStatus = statusOrder(first.status);
+      const secondStatus = statusOrder(second.status);
       if (firstStatus !== secondStatus) return firstStatus - secondStatus;
       if ((second.rank_score ?? 0) !== (first.rank_score ?? 0)) {
         return (second.rank_score ?? 0) - (first.rank_score ?? 0);

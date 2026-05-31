@@ -10,7 +10,13 @@ export type {
 
 export const PRIORITY_LEVELS = ["low", "medium", "high"] as const;
 export const PROJECT_STATUSES = ["active", "paused", "someday", "done"] as const;
-export const TASK_STATUSES = ["open", "done", "ignored"] as const;
+export const TASK_STATUSES = [
+  "open",
+  "in_progress",
+  "blocked",
+  "done",
+  "ignored",
+] as const;
 export const TASK_FRICTION_TYPES = [
   "none",
   "unclear",

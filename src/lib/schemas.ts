@@ -243,6 +243,16 @@ export const taskInputSchema = z.object({
   notes: text(TASK_NOTES_MAX),
 });
 
+export const taskFeedbackInputSchema = z.object({
+  outcome: z.enum([
+    "completed",
+    "couldnt_complete",
+    "no_longer_relevant",
+    "need_help",
+  ]),
+  notes: text(1200),
+});
+
 export const checkInInputSchema = z.object({
   energy_level: z.number().int().min(1).max(10),
   mood: text(1000),
@@ -512,6 +522,7 @@ export type ProfileInput = z.infer<typeof profileInputSchema>;
 export type LifeAreaInput = z.infer<typeof lifeAreaInputSchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
+export type TaskFeedbackInput = z.infer<typeof taskFeedbackInputSchema>;
 export type CheckInInput = z.infer<typeof checkInInputSchema>;
 export type ContextConstraintsInput = z.infer<typeof contextConstraintsInputSchema>;
 export type InferredContextItemInput = z.infer<

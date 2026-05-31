@@ -2,7 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
-import { Check, Clock3, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import {
+  Ban,
+  Check,
+  Clock3,
+  HelpCircle,
+  Pencil,
+  Play,
+  Plus,
+  Save,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
 import { TASK_NOTES_MAX, TASK_TITLE_MAX } from "@/lib/schemas";
@@ -41,6 +52,12 @@ type TaskForm = {
   notes: string;
 };
 
+type TaskFeedbackOutcome =
+  | "completed"
+  | "couldnt_complete"
+  | "no_longer_relevant"
+  | "need_help";
+
 const emptyTask: TaskForm = {
   title: "",
   life_area_id: null,
@@ -66,6 +83,24 @@ const frictionLabels: Record<TaskFrictionType, string> = {
   not_important: "not important",
   admin_drag: "admin drag",
 };
+
+const activeTaskStatuses = new Set<TaskStatus>([
+  "in_progress",
+  "open",
+  "blocked",
+]);
+
+const statusLabels: Record<TaskStatus, string> = {
+  open: "Not Started",
+  in_progress: "In Progress",
+  blocked: "Blocked",
+  done: "Completed",
+  ignored: "No Longer Relevant",
+};
+
+function isActiveTask(task: Task) {
+  return activeTaskStatuses.has(task.status);
+}
 
 function formFromTask(task: Task): TaskForm {
   return {
@@ -95,12 +130,12 @@ export function TasksManager() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const openTasks = useMemo(
-    () => tasks.filter((task) => task.status === "open"),
+  const activeTasks = useMemo(
+    () => tasks.filter(isActiveTask),
     [tasks],
   );
-  const deferredOrDone = useMemo(
-    () => tasks.filter((task) => task.status !== "open"),
+  const inactiveTasks = useMemo(
+    () => tasks.filter((task) => !isActiveTask(task)),
     [tasks],
   );
   const isInitialLoading = loading && tasks.length === 0;
@@ -167,6 +202,32 @@ export function TasksManager() {
     }
   }
 
+  async function submitTaskFeedback(
+    id: number,
+    outcome: TaskFeedbackOutcome,
+    notes: string,
+  ) {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiFetch<Task>(`/api/tasks/${id}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ outcome, notes }),
+      });
+      setMessage("Task feedback saved.");
+      await load();
+    } catch (feedbackError) {
+      setError(
+        feedbackError instanceof Error
+          ? feedbackError.message
+          : "Could not save task feedback.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function deleteTask(id: number) {
     setSaving(true);
     setError(null);
@@ -184,10 +245,10 @@ export function TasksManager() {
 
   return (
     <div>
-      <PageHeader eyebrow="Tasks" title="Ranked next actions">
+      <PageHeader eyebrow="Tasks" title="Task Queue">
         <p>
-          Tasks from every situation are ranked by what matters most now, not by
-          where they came from.
+          Work through concrete tasks, then give quick feedback so FlowPath can
+          learn from what happened.
         </p>
       </PageHeader>
 
@@ -197,15 +258,15 @@ export function TasksManager() {
       <div className="mb-5 grid gap-3 sm:grid-cols-4">
         <Card>
           <div className="text-2xl font-semibold">
-            {isInitialLoading ? "..." : openTasks.length}
+            {isInitialLoading ? "..." : activeTasks.length}
           </div>
-          <div className="text-sm text-slate-400">open actions</div>
+          <div className="text-sm text-slate-400">active actions</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold">
             {isInitialLoading
               ? "..."
-              : openTasks.filter((task) => task.importance >= 4).length}
+              : activeTasks.filter((task) => task.importance >= 4).length}
           </div>
           <div className="text-sm text-slate-400">high importance</div>
         </Card>
@@ -213,7 +274,7 @@ export function TasksManager() {
           <div className="text-2xl font-semibold">
             {isInitialLoading
               ? "..."
-              : openTasks.filter((task) => task.effort <= 2).length}
+              : activeTasks.filter((task) => task.effort <= 2).length}
           </div>
           <div className="text-sm text-slate-400">low effort</div>
         </Card>
@@ -221,7 +282,7 @@ export function TasksManager() {
           <div className="text-2xl font-semibold">
             {isInitialLoading
               ? "..."
-              : openTasks.filter((task) => task.source_next_move_plan_id).length}
+              : activeTasks.filter((task) => task.source_next_move_plan_id).length}
           </div>
           <div className="text-sm text-slate-400">from plans</div>
         </Card>
@@ -231,18 +292,18 @@ export function TasksManager() {
         <Card>
           <div className="mb-4 flex items-center gap-2">
             <Clock3 className="h-4 w-4 text-[var(--azure-light)]" />
-            <h2 className="text-xl font-semibold">Action queue</h2>
+            <h2 className="text-xl font-semibold">Task Queue</h2>
           </div>
           {loading ? (
             <div className="text-sm text-slate-400">Loading tasks...</div>
-          ) : openTasks.length === 0 ? (
+          ) : activeTasks.length === 0 ? (
             <EmptyState>
               No tasks yet. Start with a situation and FlowPath will turn the plan
               into ranked next actions.
             </EmptyState>
           ) : (
             <div className="grid gap-3">
-              {openTasks.map((task, index) => (
+              {activeTasks.map((task, index) => (
                 <TaskCard
                   key={task.id}
                   task={task}
@@ -254,17 +315,14 @@ export function TasksManager() {
                   projects={projects}
                   saving={saving}
                   onSave={() => saveTask(task.id, editingForm)}
-                  onDone={() =>
+                  onStart={() =>
                     saveTask(task.id, {
                       ...formFromTask(task),
-                      status: "done",
+                      status: "in_progress",
                     })
                   }
-                  onDefer={() =>
-                    saveTask(task.id, {
-                      ...formFromTask(task),
-                      status: "ignored",
-                    })
+                  onFeedback={(outcome, notes) =>
+                    submitTaskFeedback(task.id, outcome, notes)
                   }
                   onEdit={() => {
                     setEditingId(task.id);
@@ -300,14 +358,14 @@ export function TasksManager() {
           </details>
         </Card>
 
-        {deferredOrDone.length > 0 ? (
+        {inactiveTasks.length > 0 ? (
           <Card>
             <details>
               <summary className="cursor-pointer text-xl font-semibold text-white">
-                Deferred and completed tasks
+                Completed and removed tasks
               </summary>
               <div className="mt-4 grid gap-3">
-                {deferredOrDone.map((task) => (
+                {inactiveTasks.map((task) => (
                   <TaskCard
                     key={task.id}
                     task={task}
@@ -318,17 +376,14 @@ export function TasksManager() {
                     projects={projects}
                     saving={saving}
                     onSave={() => saveTask(task.id, editingForm)}
-                    onDone={() =>
+                    onStart={() =>
                       saveTask(task.id, {
                         ...formFromTask(task),
-                        status: "done",
+                        status: "in_progress",
                       })
                     }
-                    onDefer={() =>
-                      saveTask(task.id, {
-                        ...formFromTask(task),
-                        status: "ignored",
-                      })
+                    onFeedback={(outcome, notes) =>
+                      submitTaskFeedback(task.id, outcome, notes)
                     }
                     onEdit={() => {
                       setEditingId(task.id);
@@ -357,8 +412,8 @@ function TaskCard({
   projects,
   saving,
   onSave,
-  onDone,
-  onDefer,
+  onStart,
+  onFeedback,
   onEdit,
   onCancel,
   onDelete,
@@ -372,16 +427,18 @@ function TaskCard({
   projects: Project[];
   saving: boolean;
   onSave: () => void;
-  onDone: () => void;
-  onDefer: () => void;
+  onStart: () => void;
+  onFeedback: (outcome: TaskFeedbackOutcome, notes: string) => void;
   onEdit: () => void;
   onCancel: () => void;
   onDelete: () => void;
 }) {
   const frictionType = task.friction_type ?? "none";
+  const [feedbackNotes, setFeedbackNotes] = useState("");
+  const canGiveFeedback = isActiveTask(task);
 
   return (
-    <div className={`rounded-md border border-slate-800 bg-slate-900/70 p-4 ${task.status === "done" ? "opacity-70" : ""}`}>
+    <div className={`rounded-md border border-slate-800 bg-slate-900/70 p-4 ${!canGiveFeedback ? "opacity-75" : ""}`}>
       {editing ? (
         <div className="grid gap-4">
           <TaskFields
@@ -412,7 +469,7 @@ function TaskCard({
                   </span>
                 ) : null}
                 <h2 className="text-lg font-semibold">{task.title}</h2>
-                <Badge>{task.status === "ignored" ? "deferred" : task.status}</Badge>
+                <Badge>{statusLabels[task.status]}</Badge>
                 {task.situation_title ? <Badge>{task.situation_title}</Badge> : null}
                 {task.source_next_move_plan_id ? <Badge>Next Move plan</Badge> : null}
                 {frictionType !== "none" ? <Badge>{frictionLabels[frictionType]}</Badge> : null}
@@ -432,16 +489,10 @@ function TaskCard({
               ) : null}
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
-              {task.status !== "done" ? (
-                <Button type="button" variant="secondary" onClick={onDone} disabled={saving}>
-                  <Check className="h-4 w-4" />
-                  Complete
-                </Button>
-              ) : null}
-              {task.status === "open" ? (
-                <Button type="button" variant="secondary" onClick={onDefer} disabled={saving}>
-                  <Clock3 className="h-4 w-4" />
-                  Defer
+              {task.status !== "in_progress" && canGiveFeedback ? (
+                <Button type="button" variant="secondary" onClick={onStart} disabled={saving}>
+                  <Play className="h-4 w-4" />
+                  Start
                 </Button>
               ) : null}
               <Button type="button" variant="secondary" onClick={onEdit}>
@@ -463,8 +514,58 @@ function TaskCard({
               value={task.estimated_minutes ? `${task.estimated_minutes} min` : "None"}
             />
             <Info title="Due date" value={task.due_date || "None"} />
-            <Info title="Score" value={String(Math.round(task.rank_score ?? 0))} />
+            <Info title="Status" value={statusLabels[task.status]} />
           </div>
+          {canGiveFeedback ? (
+            <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
+              <div className="mb-2 text-sm font-medium text-white">Did you do this?</div>
+              <textarea
+                value={feedbackNotes}
+                onChange={(event) => setFeedbackNotes(event.target.value)}
+                maxLength={1200}
+                placeholder="Optional notes: what happened, what blocked it, or what help you need."
+                className="mb-3 min-h-20 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-[var(--azure)] focus:ring-2 focus:ring-[rgba(0,120,212,0.28)]"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => onFeedback("completed", feedbackNotes)}
+                  disabled={saving}
+                >
+                  <Check className="h-4 w-4" />
+                  Completed
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => onFeedback("couldnt_complete", feedbackNotes)}
+                  disabled={saving}
+                >
+                  <Clock3 className="h-4 w-4" />
+                  Couldn&apos;t Complete
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => onFeedback("no_longer_relevant", feedbackNotes)}
+                  disabled={saving}
+                >
+                  <Ban className="h-4 w-4" />
+                  No Longer Relevant
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => onFeedback("need_help", feedbackNotes)}
+                  disabled={saving}
+                >
+                  <HelpCircle className="h-4 w-4" />
+                  Need Help
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -544,9 +645,11 @@ function TaskFields({
               }))
             }
           >
-            <option value="open">open</option>
-            <option value="done">done</option>
-            <option value="ignored">deferred</option>
+            <option value="open">{statusLabels.open}</option>
+            <option value="in_progress">{statusLabels.in_progress}</option>
+            <option value="blocked">{statusLabels.blocked}</option>
+            <option value="done">{statusLabels.done}</option>
+            <option value="ignored">{statusLabels.ignored}</option>
           </SelectInput>
         </Field>
         <Field label="Importance">

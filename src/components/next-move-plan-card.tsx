@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, CheckCircle2, CheckSquare, Clock, Info, Pencil, ShieldAlert, Target, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { Check, CheckCircle2, CheckSquare, Clock, Info, Pencil, ShieldAlert, Target, ThumbsDown, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -218,7 +218,6 @@ export function NextMovePlanCard({
         tasksAdded={tasksAdded}
       />
 
-      <OutcomeFeedback planId={plan.id} />
     </Card>
   );
 }
@@ -510,79 +509,6 @@ function WhyThisResponseBlock({ plan }: { plan: StoredNextMovePlan }) {
         />
       </div>
     </details>
-  );
-}
-
-function OutcomeFeedback({ planId }: { planId: number }) {
-  const [message, setMessage] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function submit(
-    userOutcome: "improved" | "acted" | "rejected" | "needs_followup",
-    evidence: string,
-  ) {
-    setSaving(true);
-    setMessage(null);
-    try {
-      await apiFetch(`/api/next-move-plans/${planId}/outcome`, {
-        method: "POST",
-        body: JSON.stringify({
-          user_outcome: userOutcome,
-          evidence,
-          notes: "Manual lightweight feedback from the plan card.",
-        }),
-      });
-      setMessage("Feedback saved.");
-    } catch {
-      setMessage("Could not save feedback.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
-      <div className="mb-2 font-medium text-white">Outcome follow-up</div>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => submit("improved", "Manual feedback: this helped.")}
-          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
-        >
-          <ThumbsUp className="h-4 w-4" />
-          Helpful
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => submit("acted", "Manual feedback: I did it.")}
-          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
-        >
-          <CheckCircle2 className="h-4 w-4" />
-          I did this
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => submit("rejected", "Manual feedback: not useful.")}
-          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
-        >
-          <ThumbsDown className="h-4 w-4" />
-          Not helpful
-        </button>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => submit("needs_followup", "Manual feedback: still stuck.")}
-          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-700 px-3 text-slate-200 hover:border-[var(--azure)]"
-        >
-          <Info className="h-4 w-4" />
-          Still stuck
-        </button>
-      </div>
-      {message ? <div className="mt-2 text-xs text-slate-400">{message}</div> : null}
-    </div>
   );
 }
 

@@ -389,6 +389,80 @@ test("inferred context items downgrade model-saved memory and can be updated or 
   assert.equal(remaining.some((item) => item.id === created.id), false);
 });
 
+test("task feedback updates status and records outcome metadata", async () => {
+  const feedbackCases = [
+    {
+      outcome: "completed" as const,
+      status: "done",
+      eventType: "task_completed",
+      notes: "Finished it.",
+    },
+    {
+      outcome: "couldnt_complete" as const,
+      status: "blocked",
+      eventType: "user_reported_deferred",
+      notes: "Blocked by missing context.",
+    },
+    {
+      outcome: "need_help" as const,
+      status: "blocked",
+      eventType: "user_reported_still_stuck",
+      notes: "I need help deciding.",
+    },
+    {
+      outcome: "no_longer_relevant" as const,
+      status: "ignored",
+      eventType: "task_dismissed",
+      notes: "This is not relevant anymore.",
+    },
+  ];
+
+  for (const item of feedbackCases) {
+    const task = await repository.createTask(1, {
+      title: `Feedback task ${item.outcome}`,
+      life_area_id: null,
+      project_id: null,
+      status: "open",
+      importance: 3,
+      effort: 2,
+      friction_type: "none",
+      friction_note: "",
+      estimated_minutes: 15,
+      due_date: null,
+      notes: "",
+    });
+
+    const updated = await repository.recordTaskFeedback(1, task.id, {
+      outcome: item.outcome,
+      notes: item.notes,
+    });
+    assert.equal(updated?.status, item.status);
+
+    const rows = await db.all<{
+      event_type: string;
+      metadata_json: string;
+    }>(
+      `SELECT event_type, metadata_json
+      FROM outcome_harness_events
+      WHERE user_id = ? AND task_id = ? AND event_type = ?
+      ORDER BY created_at DESC
+      LIMIT 1`,
+      [1, task.id, item.eventType],
+    );
+    assert.equal(rows.length, 1);
+    const metadata = JSON.parse(rows[0].metadata_json) as {
+      outcome: string;
+      notes: string;
+      previousStatus: string;
+      nextStatus: string;
+    };
+    assert.equal(metadata.outcome, item.outcome);
+    assert.equal(metadata.notes, item.notes);
+    assert.equal(metadata.previousStatus, "open");
+    assert.equal(metadata.nextStatus, item.status);
+  }
+});
+
 test("sensitive inferred context is not silently saved", async () => {
   const created = await repository.createInferredContextItem(
     1,

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, CheckCircle2, CheckSquare, Info, MessageSquare, Plus, Sparkles } from "lucide-react";
 
 import { ApiClientError, apiFetch } from "@/lib/client-api";
@@ -35,7 +35,6 @@ import {
   Button,
   Card,
   CharacterCount,
-  EmptyState,
   Field,
   Notice,
   PageHeader,
@@ -71,7 +70,6 @@ const templates = [
 ] as const;
 
 export function NextMoveFlow() {
-  const [situations, setSituations] = useState<Situation[]>([]);
   const [detail, setDetail] = useState<SituationDetail | null>(null);
   const [description, setDescription] = useState("");
   const [title, setTitle] = useState("");
@@ -82,7 +80,6 @@ export function NextMoveFlow() {
     content: string;
     clientMessageId: string;
   } | null>(null);
-  const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [converting, setConverting] = useState(false);
@@ -101,17 +98,6 @@ export function NextMoveFlow() {
     type: ActiveGeneration["type"];
   } | null>(null);
   const latestGenerationIdRef = useRef<string | null>(null);
-
-  const activeSituations = useMemo(
-    () => situations.filter((situation) => situation.status === "active"),
-    [situations],
-  );
-
-  const loadSituations = useCallback(async () => {
-    const data = await apiFetch<Situation[]>("/api/situations?status=active");
-    setSituations(data);
-    return data;
-  }, []);
 
   const loadDetail = useCallback(async (id: number) => {
     const requestId = detailRequestRef.current + 1;
@@ -135,17 +121,21 @@ export function NextMoveFlow() {
   }, []);
 
   const initialLoad = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
-      const data = await loadSituations();
-      if (data[0]) await loadDetail(data[0].id);
+      const requestedSituationId =
+        typeof window === "undefined"
+          ? NaN
+          : Number(new URLSearchParams(window.location.search).get("situationId"));
+      if (Number.isInteger(requestedSituationId) && requestedSituationId > 0) {
+        await loadDetail(requestedSituationId);
+      } else {
+        setDetail(null);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load next move.");
-    } finally {
-      setLoading(false);
     }
-  }, [loadDetail, loadSituations]);
+  }, [loadDetail]);
 
   useEffect(() => {
     void Promise.resolve().then(initialLoad);
@@ -227,7 +217,6 @@ export function NextMoveFlow() {
       setCategory("custom");
       setUrgency("medium");
       setTaskConfirmation(null);
-      await loadSituations();
       await loadDetail(created.situation.id);
       setMessage("Situation started. Answer one question at a time.");
     } catch (createError) {
@@ -308,7 +297,6 @@ export function NextMoveFlow() {
       );
       if (latestGenerationIdRef.current !== id) return;
       await loadDetail(situationId);
-      await loadSituations();
       await loadBillingSummary();
       setMessage("Next Move Plan generated.");
     } catch (generateError) {
@@ -321,7 +309,6 @@ export function NextMoveFlow() {
           reconciledDetail.latestPlan &&
           reconciledDetail.latestPlan.id !== previousPlanId
         ) {
-          await loadSituations();
           setMessage("Next Move Plan generated. It finished after the connection took a while.");
           return;
         }
@@ -413,25 +400,33 @@ export function NextMoveFlow() {
         (task) => task.source_next_move_plan_id === detail.latestPlan?.id,
       ),
   );
+  const workflowStep: IntakeStep = !detail
+    ? description.trim()
+      ? "description"
+      : "category"
+    : detail.latestPlan || isReadyToGenerate
+      ? "plan"
+      : "intake";
 
   return (
     <div>
-      <PageHeader eyebrow="Find My Next Move" title="Start with the situation">
+      <PageHeader eyebrow="New Situation" title="Intake to next move">
         <p>
-          Answer a few focused questions. FlowPath will turn the signal into a
-          practical plan, inferred context, and ranked next actions.
+          Move through one guided flow: category, description, intake, then plan.
         </p>
       </PageHeader>
+
+      <IntakeStepper current={workflowStep} />
 
       {message ? <div className="mb-4"><Notice tone="success">{message}</Notice></div> : null}
       {error ? <div className="mb-4"><Notice tone="error">{error}</Notice></div> : null}
 
-      <div className="grid gap-5 lg:grid-cols-[0.75fr_1.25fr]">
-        <div className="grid gap-5">
+      <div className="grid gap-5">
+        {!detail ? (
           <Card>
             <h2 className="mb-3 text-xl font-semibold">Start a situation</h2>
             <p className="mb-4 text-sm text-slate-400">
-              Pick the broad lane. The intake will classify the specifics.
+              Pick the broad lane, then describe what is going on in plain language.
             </p>
             <div className="mb-4 grid gap-2">
               {templates.map(([templateCategory, label]) => (
@@ -505,39 +500,7 @@ export function NextMoveFlow() {
               </Button>
             </form>
           </Card>
-
-          <Card>
-            <h2 className="mb-3 text-xl font-semibold">Active situations</h2>
-            {loading ? (
-              <div className="text-sm text-slate-400">Loading situations...</div>
-            ) : activeSituations.length === 0 ? (
-              <EmptyState>No active situations yet.</EmptyState>
-            ) : (
-              <div className="grid gap-2">
-                {activeSituations.map((situation) => (
-                  <button
-                    key={situation.id}
-                    type="button"
-                    onClick={() => {
-                      setTaskConfirmation(null);
-                      void loadDetail(situation.id);
-                    }}
-                    className={`rounded-md border px-3 py-2 text-left text-sm transition ${
-                      detail?.situation.id === situation.id
-                        ? "border-[var(--azure)] bg-[rgba(0,120,212,0.16)] text-white"
-                        : "border-slate-800 bg-slate-900 text-slate-300 hover:border-[var(--azure)]"
-                    }`}
-                  >
-                    <div className="font-medium">{situation.title}</div>
-                    <div className="text-xs text-slate-400">
-                      {situation.category} · {situation.urgency}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
+        ) : null}
 
         <div className="grid gap-5">
           {detail ? (
@@ -742,9 +705,7 @@ export function NextMoveFlow() {
                 taskConfirmation={taskConfirmation}
               />
             </>
-          ) : (
-            <EmptyState>Start or select a situation to begin.</EmptyState>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
@@ -764,6 +725,43 @@ function QuotaNotice({ message }: { message: string }) {
         </Link>
       </div>
     </Notice>
+  );
+}
+
+type IntakeStep = "category" | "description" | "intake" | "plan";
+
+function IntakeStepper({ current }: { current: IntakeStep }) {
+  const steps: Array<{ id: IntakeStep; label: string }> = [
+    { id: "category", label: "Category" },
+    { id: "description", label: "Description" },
+    { id: "intake", label: "Intake" },
+    { id: "plan", label: "Plan" },
+  ];
+  const currentIndex = steps.findIndex((step) => step.id === current);
+
+  return (
+    <div className="mb-5 rounded-lg border border-slate-800 bg-slate-950 p-3">
+      <div className="grid gap-2 sm:grid-cols-4">
+        {steps.map((step, index) => {
+          const active = index === currentIndex;
+          const complete = index < currentIndex;
+          return (
+            <div
+              key={step.id}
+              className={`flex min-h-10 items-center justify-center rounded-md border px-3 text-sm font-medium ${
+                active
+                  ? "border-[var(--azure)] bg-[rgba(0,120,212,0.18)] text-white"
+                  : complete
+                    ? "border-slate-700 bg-slate-900 text-slate-200"
+                    : "border-slate-800 bg-slate-950 text-slate-500"
+              }`}
+            >
+              {step.label}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
