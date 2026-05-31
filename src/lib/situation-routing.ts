@@ -317,14 +317,6 @@ function rawSituationText(situation: SituationRoutingContext) {
   return `${situation.title} ${situation.description ?? ""}`.trim();
 }
 
-function medicationLabel(text: string) {
-  if (/\b(propecia|finasteride)\b/.test(text)) {
-    return "Propecia or generic finasteride";
-  }
-  if (/\bminoxidil\b/.test(text)) return "minoxidil";
-  return "the medication or prescription";
-}
-
 function hasHealthSignal(situation: SituationRoutingContext, text: string) {
   return (
     isCategory(situation, [/health/, /recovery/, /fitness/, /medical/]) ||
@@ -347,7 +339,6 @@ function hasWorkProductSignal(situation: SituationRoutingContext, text: string) 
   return (
     isCategory(situation, [/work/, /career/, /business/, /startup/, /product/]) ||
     hasAny(text, [
-      /\bflowpath\b/,
       /\bstartup\b/,
       /\bfounder\b/,
       /\bproduct\b/,
@@ -415,8 +406,6 @@ function hasCreativeSignal(situation: SituationRoutingContext, text: string) {
       /\brevis(e|ion)\b/,
       /\bnovel\b/,
       /\bstory\b/,
-      /\blovelacers\b/,
-      /\bamanda\b/,
       /\bacting\b/,
     ])
   );
@@ -508,8 +497,6 @@ function draftFirstIntakePlan(
 
     if (
       hasAny(text, [
-        /\bpropecia\b/,
-        /\bfinasteride\b/,
         /\bgeneric prescription\b/,
         /\bask (my )?doctor\b/,
         /\bprescription\b/,
@@ -518,14 +505,14 @@ function draftFirstIntakePlan(
       ]) &&
       (hasDecisionLanguage(text) || /\bask (my )?doctor\b/.test(text))
     ) {
-      const label = medicationLabel(text);
       return {
         domain: "health",
         subtype: "routine_medication_discussion",
         questionPurpose: "clarify_decision",
         decisionShape: "routine clinician conversation decision",
         missingInfoTarget: "the main concern driving the medication decision",
-        question: `What are you mainly unsure about with ${label}: whether it works, side effects, cost, or how to bring it up with your doctor?`,
+        question:
+          "What are you mainly unsure about with the medication or prescription: whether it works, side effects, cost, or how to bring it up with your doctor?",
         whyThisQuestion:
           "This is a routine medication discussion, so the useful first question is the decision concern, not recovery or stabilization.",
       };
@@ -596,16 +583,16 @@ function draftFirstIntakePlan(
   if (hasMoneyStabilitySignal(situation, text) || route.domain === "housing_high_stakes") {
     if (
       hasAny(text, [/\bsuspicious\b/, /\bunauthorized\b/, /\bfraud\b/, /\btransaction\b/]) ||
-      (/\bcharge\b/.test(text) && hasAny(text, [/\be[-\s]?trade\b/, /\bbank\b/, /\bcard\b/, /\baccount\b/]))
+      (/\bcharge\b/.test(text) && hasAny(text, [/\bbank\b/, /\bcard\b/, /\baccount\b/, /\bbrokerage\b/]))
     ) {
-      const account = /\be[-\s]?trade\b/.test(text) ? "E-Trade " : "";
       return {
         domain: "money/stability",
         subtype: "suspicious_charge",
         questionPurpose: "clarify_risk_or_safety",
         decisionShape: "possible account or transaction issue",
         missingInfoTarget: "amount, merchant, date, pending/posted status, and recognizability",
-        question: `What do you know so far about the ${account}charge: amount, merchant name, date, whether it posted or is pending, and whether you recognize any part of it?`,
+        question:
+          "What do you know so far about the charge or transaction: amount, merchant name, date, whether it posted or is pending, and whether you recognize any part of it?",
         whyThisQuestion: "A suspicious charge needs concrete transaction facts before next steps.",
       };
     }
@@ -695,7 +682,6 @@ function draftFirstIntakePlan(
 
     if (
       hasAny(text, [
-        /\bflowpath\b/,
         /\bpricing\b/,
         /\bprice\b/,
         /\bfree\b/,
@@ -705,14 +691,14 @@ function draftFirstIntakePlan(
         /\btoken costs?\b/,
       ])
     ) {
-      const product = /\bflowpath\b/.test(text) ? "FlowPath " : "";
       return {
         domain: "work/product",
         subtype: "product_strategy",
         questionPurpose: "clarify_tradeoff",
         decisionShape: "product pricing or adoption tradeoff",
         missingInfoTarget: "the tradeoff between adoption, cost, perceived value, and proof",
-        question: `What tradeoff are you most worried about in the ${product}free-versus-charging decision: user adoption, API/token costs, perceived value, or charging before the product feels proven?`,
+        question:
+          "What tradeoff are you most worried about in the free-versus-charging decision: user adoption, API/token costs, perceived value, or charging before the product feels proven?",
         whyThisQuestion: "A pricing decision needs the exact tradeoff, not a broad product prompt.",
       };
     }
@@ -795,16 +781,15 @@ function draftFirstIntakePlan(
   }
 
   if (hasCreativeSignal(situation, text) || route.domain === "creative_project_focus") {
-    if (/\bamanda\b/.test(text) || (/\barc\b/.test(text) && /\bcharacter\b/.test(text))) {
-      const character = /\bamanda\b/.test(text) ? "Amanda's" : "the character";
-      const project = /\blovelacers\b/.test(text) ? " in Lovelacers" : "";
+    if (/\barc\b/.test(text) && /\bcharacter\b/.test(text)) {
       return {
         domain: "creative/project",
         subtype: "character_psychology",
         questionPurpose: "clarify_creative_bottleneck",
         decisionShape: "character arc revision",
         missingInfoTarget: "want, pressure, moral turn, and emotional payoff",
-        question: `What feels most unresolved in ${character} arc${project}: the want, the pressure/envy, the moral turn, or the ending's emotional payoff?`,
+        question:
+          "What feels most unresolved in the character arc: the want, the pressure/envy, the moral turn, or the ending's emotional payoff?",
         whyThisQuestion: "Character-arc work should locate the exact emotional or structural bottleneck.",
       };
     }
@@ -1138,20 +1123,13 @@ const stopWords = new Set([
 ]);
 
 const concretePhraseCandidates = [
-  "propecia",
-  "finasteride",
   "generic prescription",
   "doctor",
-  "flowpath",
   "api",
   "token",
   "early users",
   "free",
   "charge",
-  "amanda",
-  "lovelacers",
-  "e-trade",
-  "etrade",
   "rent",
   "housing",
   "benefits",
@@ -1206,14 +1184,7 @@ function assessGenericityRisk(
   situation: SituationRoutingContext,
 ): FirstIntakeGenericityRisk {
   const question = normalizeForMatch(plan.question);
-  const broadTemplateHit = [
-    "meaningful progress",
-    "body-respecting",
-    "stabilizing step",
-    "next 24-72 hours",
-    "what would make this situation",
-    "what would count as real progress",
-  ].some((fragment) => question.includes(fragment));
+  const broadTemplateHit = hasBroadTemplateHit(question);
   const reflectsInput = questionReflectsConcreteInput(plan.question, situation);
 
   if (!reflectsInput && broadTemplateHit) return "high";
@@ -1224,23 +1195,144 @@ function assessGenericityRisk(
   return "low";
 }
 
+function hasBroadTemplateHit(question: string) {
+  const normalizedQuestion = normalizeForMatch(question);
+  return [
+    "meaningful progress",
+    "body-respecting",
+    "stabilizing step",
+    "next 24-72 hours",
+    "what would make this situation",
+    "what would count as real progress",
+  ].some((fragment) => normalizedQuestion.includes(fragment));
+}
+
 function subjectFallback(situation: SituationRoutingContext) {
   const subject = rawSituationText(situation) || situation.category;
   return subject.length > 120 ? `${subject.slice(0, 117).trim()}...` : subject;
 }
 
-function reviseHighGenericityQuestion(
+function quotedSubjectFallback(situation: SituationRoutingContext) {
+  return subjectFallback(situation).replace(/"/g, "'");
+}
+
+function archetypeAnchoredQuestion(
+  plan: Omit<FirstIntakePlan, "genericityRisk">,
+  situation: SituationRoutingContext,
+): Omit<FirstIntakePlan, "genericityRisk"> | null {
+  if (plan.subtype === "factual_question") return null;
+
+  const subject = quotedSubjectFallback(situation);
+  const text = fullText(situation);
+
+  if (
+    hasAny(text, [
+      /\bresearch\b/,
+      /\bcompare\b/,
+      /\bcomparison\b/,
+      /\bevaluate\b/,
+      /\breview\b/,
+      /\bfind\b/,
+      /\blook(ing)? for\b/,
+      /\boptions?\b/,
+    ])
+  ) {
+    return {
+      ...plan,
+      subtype: "research_or_comparison",
+      questionPurpose: "clarify_success_criteria",
+      decisionShape: "research or comparison focus",
+      missingInfoTarget: "criteria, comparison set, contact target, or useful example",
+      question: `For "${subject}", what are you trying to identify first: the criteria that matter, the options worth comparing, who to contact, or an example that would make the choice clearer?`,
+      whyThisQuestion: `${plan.whyThisQuestion} The situation is framed as research or comparison, so the first question should identify what kind of signal would end the search.`,
+    };
+  }
+
+  if (hasDecisionLanguage(text)) {
+    return {
+      ...plan,
+      subtype: "decision_support",
+      questionPurpose: "clarify_decision",
+      decisionShape: "decision tradeoff",
+      missingInfoTarget: "options, deciding criterion, tradeoff, risk, or reversibility",
+      question: `For "${subject}", what are the options on the table, and which factor should decide it first: time, cost, risk, upside, or reversibility?`,
+      whyThisQuestion: `${plan.whyThisQuestion} The situation is framed as a decision, so the first question should expose the options and deciding criterion.`,
+    };
+  }
+
+  if (hasAny(text, [/\bplan\b/, /\bschedule\b/, /\blogistic(s|al)?\b/, /\bbook\b/, /\borganize\b/])) {
+    return {
+      ...plan,
+      subtype: "logistical_planning",
+      questionPurpose: "clarify_constraint",
+      decisionShape: "logistical planning",
+      missingInfoTarget: "timing, location, people, cost, sequence, or next action",
+      question: `For "${subject}", which constraint should be resolved first: timing, location, people involved, cost, sequence, or the exact next action?`,
+      whyThisQuestion: `${plan.whyThisQuestion} The situation is framed as planning, so the first question should find the binding constraint.`,
+    };
+  }
+
+  if (hasAny(text, [/\bfix\b/, /\bdebug\b/, /\bbug\b/, /\berror\b/, /\bnot working\b/, /\bbroken\b/, /\btroubleshoot\b/])) {
+    return {
+      ...plan,
+      subtype: "troubleshooting",
+      questionPurpose: "clarify_constraint",
+      decisionShape: "troubleshooting or repair",
+      missingInfoTarget: "failing behavior, location, error, attempted fix, or constraint",
+      question: `For "${subject}", what is failing, where does it show up, and what have you already tried?`,
+      whyThisQuestion: `${plan.whyThisQuestion} The situation is framed as troubleshooting, so the first question should locate the failure and prior attempts.`,
+    };
+  }
+
+  if (hasAny(text, [/\bcontact\b/, /\breach out\b/, /\bmessage\b/, /\bemail\b/, /\bcall\b/, /\btalk to\b/, /\bask\b/])) {
+    return {
+      ...plan,
+      subtype: "contact_or_conversation",
+      questionPurpose: "clarify_success_criteria",
+      decisionShape: "contact or conversation next step",
+      missingInfoTarget: "person, desired outcome, boundary, risk, or ask",
+      question: `For "${subject}", who is involved, what outcome do you want, and what would make the contact clearer or lower-risk?`,
+      whyThisQuestion: `${plan.whyThisQuestion} The situation is framed around contacting someone, so the first question should clarify the person, desired outcome, and risk.`,
+    };
+  }
+
+  if (hasAny(text, [/\burgent\b/, /\btoday\b/, /\bdeadline\b/, /\btriage\b/, /\btime-sensitive\b/])) {
+    return {
+      ...plan,
+      subtype: "urgent_triage",
+      questionPurpose: "clarify_risk_or_safety",
+      decisionShape: "time-sensitive triage",
+      missingInfoTarget: "deadline, consequence, person waiting, risk, or unblocker",
+      question: `For "${subject}", what has the nearest real consequence: a deadline, a person waiting, a risk, or the task that unlocks the rest?`,
+      whyThisQuestion: `${plan.whyThisQuestion} The situation is time-sensitive, so the first question should identify what must be triaged first.`,
+    };
+  }
+
+  return null;
+}
+
+function reviseUnanchoredQuestion(
   plan: Omit<FirstIntakePlan, "genericityRisk">,
   situation: SituationRoutingContext,
 ): Omit<FirstIntakePlan, "genericityRisk"> {
-  const subject = subjectFallback(situation);
-  const target = plan.missingInfoTarget || "the missing detail that would change the next move";
+  const archetypeQuestion = archetypeAnchoredQuestion(plan, situation);
+  if (archetypeQuestion) return archetypeQuestion;
+
+  const subject = quotedSubjectFallback(situation);
+  const question = plan.question.trim();
+  const anchoredQuestion =
+    question && !hasBroadTemplateHit(question)
+      ? `${question.charAt(0).toLowerCase()}${question.slice(1)}`
+      : "what specific decision, constraint, risk, or success criterion should FlowPath clarify first?";
   return {
     ...plan,
-    question: `For "${subject}", what is the specific decision or constraint FlowPath should focus on first, and what missing detail would change the answer?`,
-    missingInfoTarget: target,
-    whyThisQuestion: `${plan.whyThisQuestion} The first draft was too broad, so this version anchors on the user's actual wording.`,
+    question: `For "${subject}", ${anchoredQuestion}`,
+    whyThisQuestion: `${plan.whyThisQuestion} The first draft was not anchored enough, so this version uses the user's actual wording.`,
   };
+}
+
+function shouldPreserveFirstQuestion(plan: Omit<FirstIntakePlan, "genericityRisk">) {
+  return plan.domain === "safety";
 }
 
 export function buildFirstIntakePlan(
@@ -1249,11 +1341,15 @@ export function buildFirstIntakePlan(
   const route = classifySituationDomain(situation);
   const draft = draftFirstIntakePlan(situation, route);
   const genericityRisk = assessGenericityRisk(draft, situation);
-  if (genericityRisk !== "high") {
+  if (
+    genericityRisk !== "high" &&
+    (shouldPreserveFirstQuestion(draft) ||
+      questionReflectsConcreteInput(draft.question, situation))
+  ) {
     return { ...draft, genericityRisk };
   }
 
-  const revised = reviseHighGenericityQuestion(draft, situation);
+  const revised = reviseUnanchoredQuestion(draft, situation);
   return {
     ...revised,
     genericityRisk: assessGenericityRisk(revised, situation),

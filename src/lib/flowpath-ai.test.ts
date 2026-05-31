@@ -2,11 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildFirstIntakeQuestionPromptInput,
+  firstIntakeQuestionSystemPrompt,
   intakeInferredMemoryInstruction,
+  parseFirstIntakeQuestionOutput,
   privacyAwareConstraintInstruction,
   socialConnectionInstruction,
 } from "./flowpath-ai";
 import { nextMovePlanSchema } from "./schemas";
+import { buildFirstIntakePlan } from "./intake";
+import type { Situation } from "./types";
+
+const baseSituation: Situation = {
+  id: 1,
+  title: "Research local service providers for a time-sensitive project",
+  description: "",
+  category: "custom",
+  status: "active",
+  urgency: "medium",
+  created_at: "2026-05-30T00:00:00.000Z",
+  updated_at: "2026-05-30T00:00:00.000Z",
+};
 
 test("privacy-aware prompt instructs least-sensitive constraint collection", () => {
   assert.match(privacyAwareConstraintInstruction, /least sensitive useful/i);
@@ -33,6 +49,54 @@ test("social connection prompt includes consent, boundaries, non-manipulation, a
   assert.match(socialConnectionInstruction, /under 18/i);
   assert.match(socialConnectionInstruction, /call or text 988/i);
   assert.match(socialConnectionInstruction, /call 911 or their local emergency number/i);
+});
+
+test("first intake prompt requires a situation-specific question", () => {
+  assert.match(firstIntakeQuestionSystemPrompt, /specific to the submitted situation/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /concrete nouns, verbs, places, roles, artifacts/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /3-5 plausible lanes/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /Do not invent facts/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /meaningful progress/i);
+});
+
+test("first intake prompt input includes the situation and fallback plan", () => {
+  const fallbackPlan = buildFirstIntakePlan(baseSituation);
+  const input = buildFirstIntakeQuestionPromptInput(baseSituation, fallbackPlan);
+
+  assert.deepEqual(input.situation, {
+    title: baseSituation.title,
+    description: baseSituation.description,
+    category: baseSituation.category,
+    urgency: baseSituation.urgency,
+  });
+  assert.equal(input.deterministic_fallback.question, fallbackPlan.question);
+  assert.match(input.quality_requirements.join(" "), /concrete terms/i);
+});
+
+test("first intake output parser maps model output to planner metadata", () => {
+  const fallbackPlan = buildFirstIntakePlan(baseSituation);
+  const output = parseFirstIntakeQuestionOutput(
+    JSON.stringify({
+      question:
+        'For "Research local service providers for a time-sensitive project", are you trying to compare quality signals, find reachable providers, understand pricing, or decide who to contact first?',
+      domain: "general",
+      subtype: "research_or_comparison",
+      question_purpose: "clarify_success_criteria",
+      decision_shape: "research or comparison focus",
+      missing_info_target: "criteria, comparison set, and contact target",
+      why_this_question:
+        "The situation is research-oriented, so the first useful answer is what signal should end the search.",
+      situation_terms_used: ["research", "local service providers", "time-sensitive project"],
+    }),
+    baseSituation,
+    fallbackPlan,
+  );
+
+  assert.equal(output.subtype, "research_or_comparison");
+  assert.equal(output.questionPurpose, "clarify_success_criteria");
+  assert.equal(output.genericityRisk, "low");
+  assert.match(output.question, /local service providers/i);
+  assert.match(output.question, /quality signals|pricing|contact/i);
 });
 
 test("next move plan schema still requires structured insight fields", () => {

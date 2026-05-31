@@ -1,5 +1,11 @@
 import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import {
+  canUseFeature,
+  canUseFirstSituationFlow,
+  incrementUsage,
+} from "@/lib/billing/usage";
+import { generateFirstIntakePlanOrFallback } from "@/lib/flowpath-ai";
 import { buildFirstIntakePlan } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
@@ -12,9 +18,40 @@ import {
   listSituations,
 } from "@/lib/repository";
 import { situationInputSchema } from "@/lib/schemas";
+import type { FirstIntakePlan } from "@/lib/situation-routing";
+import type { Situation } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+async function firstIntakePlanForNewSituation(
+  userId: number,
+  situation: Situation,
+): Promise<{ plan: FirstIntakePlan; source: "ai" | "fallback"; model?: string }> {
+  const fallbackPlan = buildFirstIntakePlan(situation);
+  if (!process.env.OPENAI_API_KEY) {
+    return { plan: fallbackPlan, source: "fallback" };
+  }
+
+  const firstFlowPass = await canUseFirstSituationFlow(userId, situation.id, {
+    isQa: Boolean(situation.is_qa),
+  });
+  if (!firstFlowPass) {
+    const usageDecision = await canUseFeature(userId, "lightweight_assist");
+    if (!usageDecision.allowed) return { plan: fallbackPlan, source: "fallback" };
+  }
+
+  const generated = await generateFirstIntakePlanOrFallback(situation, fallbackPlan);
+  if (!firstFlowPass && generated.source === "ai" && generated.usage) {
+    await incrementUsage(userId, "lightweight_assist", generated.usage);
+  }
+
+  return {
+    plan: generated.plan,
+    source: generated.source,
+    model: generated.model,
+  };
+}
 
 export async function GET(request: Request) {
   try {
@@ -35,7 +72,11 @@ export async function POST(request: Request) {
     const activeSituations = await listSituations(user.id, "active", { isQa });
     const situation = await createSituation(user.id, input, { isQa });
     const session = await getOrCreateIntakeSession(user.id, situation.id);
-    const firstIntakePlanner = buildFirstIntakePlan(situation);
+    const firstIntakeGeneration = await firstIntakePlanForNewSituation(
+      user.id,
+      situation,
+    );
+    const firstIntakePlanner = firstIntakeGeneration.plan;
     const messages = await addIntakeMessage(
       user.id,
       session.id,
@@ -87,6 +128,8 @@ export async function POST(request: Request) {
       metadata: {
         genericityRisk: firstIntakePlanner.genericityRisk,
         missingInfoTarget: firstIntakePlanner.missingInfoTarget,
+        generationSource: firstIntakeGeneration.source,
+        model: firstIntakeGeneration.model ?? null,
       },
       dedupeKey: `first-intake-question-shown:${situation.id}`,
       isQa,

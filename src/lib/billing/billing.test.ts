@@ -238,6 +238,7 @@ test("guest can finish the first situation intake even after lightweight quota",
   const blockedAssist = await usage.canUseFeature(18, "lightweight_assist");
   assert.equal(blockedAssist.allowed, false);
   assert.equal(await usage.canUseGuestFirstSituationIntake(18, 101), true);
+  assert.equal(await usage.canUseFirstSituationFlow(18, 101), true);
   assert.equal(await usage.canUseGuestFirstSituationIntake(18, 102), false);
 
   await db.run(
@@ -245,6 +246,37 @@ test("guest can finish the first situation intake even after lightweight quota",
     [now],
   );
   assert.equal(await usage.canUseGuestFirstSituationIntake(18, 101), false);
+  assert.equal(await usage.canUseFirstSituationFlow(18, 101), false);
+});
+
+test("free user can finish one first situation flow before upgrade", async () => {
+  await insertUser({ id: 19 });
+  await setUsage(19, "lightweight_assist", 5);
+  await setUsage(19, "next_move_plan", 1);
+  const now = new Date().toISOString();
+  await db.run(
+    `INSERT INTO situations (
+      id, user_id, title, description, category, status, urgency, created_at, updated_at
+    ) VALUES (201, 19, 'First free flow', 'First free flow', 'custom', 'active', 'medium', ?, ?)`,
+    [now, now],
+  );
+  await db.run(
+    `INSERT INTO situations (
+      id, user_id, title, description, category, status, urgency, created_at, updated_at
+    ) VALUES (202, 19, 'Second free flow', 'Second free flow', 'custom', 'active', 'medium', ?, ?)`,
+    [now, now],
+  );
+
+  assert.equal((await usage.canUseFeature(19, "lightweight_assist")).allowed, false);
+  assert.equal((await usage.canUseFeature(19, "next_move_plan")).allowed, false);
+  assert.equal(await usage.canUseFirstSituationFlow(19, 201), true);
+  assert.equal(await usage.canUseFirstSituationFlow(19, 202), false);
+
+  await db.run(
+    "INSERT INTO next_move_plans (user_id, situation_id, created_at) VALUES (19, 201, ?)",
+    [now],
+  );
+  assert.equal(await usage.canUseFirstSituationFlow(19, 201), false);
 });
 
 test("core user has the higher quota", async () => {

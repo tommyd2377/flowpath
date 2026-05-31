@@ -8,7 +8,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import {
   assertCanUseFeature,
-  canUseGuestFirstSituationIntake,
+  canUseFirstSituationFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
 import {
@@ -93,10 +93,10 @@ export async function POST(request: Request, context: Context) {
     });
     const situation = await getSituation(user.id, situationId);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
-    const guestFirstSituationIntakePass =
-      user.isGuest &&
-      (await canUseGuestFirstSituationIntake(user.id, situationId, { isQa }));
-    if (!guestFirstSituationIntakePass) {
+    const firstSituationFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
+      isQa,
+    });
+    if (!firstSituationFlowPass) {
       await assertCanUseFeature(user.id, "lightweight_assist");
     }
 
@@ -276,7 +276,7 @@ export async function POST(request: Request, context: Context) {
       });
       throw generationError;
     }
-    if (!guestFirstSituationIntakePass) {
+    if (!firstSituationFlowPass) {
       await incrementUsage(user.id, "lightweight_assist", usage);
     }
     if (await isGenerationAbandoned(user.id, clientGenerationId)) {

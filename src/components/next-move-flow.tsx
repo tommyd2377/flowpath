@@ -2,7 +2,16 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowRight, CheckCircle2, CheckSquare, Info, MessageSquare, Plus, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  CheckSquare,
+  Info,
+  MessageSquare,
+  Plus,
+  Sparkles,
+} from "lucide-react";
 
 import { ApiClientError, apiFetch } from "@/lib/client-api";
 import { readClientQaMode } from "@/lib/qa-mode";
@@ -547,6 +556,10 @@ export function NextMoveFlow() {
                     <p className="text-slate-100">{lastAssistant.content}</p>
                   </div>
                 ) : null}
+                <SafetySupportNotice
+                  plan={detail.firstIntakePlanner}
+                  currentQuestion={lastAssistant?.content ?? ""}
+                />
                 {debugVisible && detail.firstIntakePlanner ? (
                   <FirstIntakePlannerDebug
                     plan={detail.firstIntakePlanner}
@@ -793,6 +806,28 @@ function FirstIntakePlannerDebug({
         <DebugBrief title="Skipped" value={skipped ? "yes" : "no"} />
       </div>
     </details>
+  );
+}
+
+function SafetySupportNotice({
+  plan,
+  currentQuestion,
+}: {
+  plan?: FirstIntakePlan;
+  currentQuestion: string;
+}) {
+  if (!plan || plan.domain !== "safety") return null;
+  const guidance = plan.question.trim();
+  if (!guidance || guidance === currentQuestion.trim()) return null;
+
+  return (
+    <div className="mb-4 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4 text-sm text-amber-50">
+      <div className="mb-1 flex items-center gap-2 font-medium text-amber-100">
+        <AlertTriangle className="h-4 w-4" />
+        Human help may matter here
+      </div>
+      <p>{guidance}</p>
+    </div>
   );
 }
 

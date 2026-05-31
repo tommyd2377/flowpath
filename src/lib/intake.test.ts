@@ -36,14 +36,14 @@ test("routine medication decision asks about the decision concern, not recovery"
   const result = assertUsableFirstQuestion(
     {
       title:
-        "I'm trying to decide if I should ask my doctor for a generic prescription for Propecia.",
+        "I'm trying to decide if I should ask my doctor for a generic prescription.",
       category: "health_recovery",
       urgency: "low",
     },
     {
       subtype: "routine_medication_discussion",
       purpose: "clarify_decision",
-      reflects: /Propecia|finasteride|doctor/i,
+      reflects: /medication|prescription|doctor/i,
       avoids: /body-respecting|stabilizing|24-72 hours/i,
     },
   );
@@ -84,14 +84,14 @@ test("fitness recovery can use physical recovery framing", () => {
 test("product pricing decision asks about the pricing tradeoff", () => {
   assertUsableFirstQuestion(
     {
-      title: "I'm trying to decide whether to make FlowPath free or charge early users.",
+      title: "I'm trying to decide whether to make my product free or charge early users.",
       category: "business",
       urgency: "medium",
     },
     {
       subtype: "product_strategy",
       purpose: "clarify_tradeoff",
-      reflects: /FlowPath|free-versus-charging|API\/token costs|early users/i,
+      reflects: /free-versus-charging|API\/token costs|early users/i,
     },
   );
 });
@@ -114,14 +114,14 @@ test("coding implementation blocker asks for system-specific constraints", () =>
 test("creative character revision asks about the character arc", () => {
   assertUsableFirstQuestion(
     {
-      title: "I need to revise Amanda's arc in Lovelacers.",
+      title: "I need to revise the main character arc in my script.",
       category: "creative_project",
       urgency: "medium",
     },
     {
       subtype: "character_psychology",
       purpose: "clarify_creative_bottleneck",
-      reflects: /Amanda|Lovelacers|arc|want|moral turn|emotional payoff/i,
+      reflects: /character arc|want|moral turn|emotional payoff/i,
     },
   );
 });
@@ -144,14 +144,14 @@ test("dating and social plans ask about the specific next action", () => {
 test("suspicious financial charge asks for transaction facts", () => {
   assertUsableFirstQuestion(
     {
-      title: "I think I found a suspicious E-Trade charge.",
+      title: "I think I found a suspicious brokerage account charge.",
       category: "money_stability",
       urgency: "high",
     },
     {
       subtype: "suspicious_charge",
       purpose: "clarify_risk_or_safety",
-      reflects: /E-Trade charge|amount|merchant|date|pending|posted/i,
+      reflects: /charge or transaction|amount|merchant|date|pending|posted/i,
     },
   );
 });
@@ -186,6 +186,24 @@ test("too many open loops asks for the pressure point", () => {
   );
 });
 
+test("research and comparison questions use a reusable situation archetype", () => {
+  const result = assertUsableFirstQuestion(
+    {
+      title: "Research local service providers for a time-sensitive project",
+      category: "custom",
+      urgency: "medium",
+    },
+    {
+      subtype: "research_or_comparison",
+      purpose: "clarify_success_criteria",
+      reflects: /Research local service providers for a time-sensitive project|criteria that matter|options worth comparing|who to contact|example/i,
+      avoids: /most want to change about this situation/i,
+    },
+  );
+
+  assert.equal(result.genericityRisk, "low");
+});
+
 test("simple factual or logistical questions avoid heavy intake", () => {
   assertUsableFirstQuestion(
     {
@@ -203,7 +221,7 @@ test("simple factual or logistical questions avoid heavy intake", () => {
 
 test("first question string API still returns the planned question", () => {
   const situation = {
-    title: "I'm trying to decide whether to make FlowPath free or charge early users.",
+    title: "I'm trying to decide whether to make my product free or charge early users.",
     category: "business",
     urgency: "medium" as const,
   };

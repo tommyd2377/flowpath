@@ -64,7 +64,7 @@ test("money and housing fixtures use domain-specific safe questions", () => {
 
 test("first intake planner exposes subtype and genericity metadata", () => {
   const result = buildFirstIntakePlan({
-    title: "I'm trying to decide if I should ask my doctor for a generic prescription for Propecia.",
+    title: "I'm trying to decide if I should ask my doctor for a generic prescription.",
     description: "",
     category: "health_recovery",
     urgency: "low",

@@ -3,6 +3,7 @@ import type {
   ResponseCreateParamsNonStreaming,
   ResponseUsage,
 } from "openai/resources/responses/responses";
+import { z } from "zod";
 
 import { dailyPlanSchema, interviewerOutputSchema, nextMovePlanSchema } from "./schemas";
 import {
@@ -18,7 +19,12 @@ import {
   getModelForRole,
   type StageUsage,
 } from "./model-routing";
-import { classifySituationDomain } from "./situation-routing";
+import {
+  buildFirstIntakePlan,
+  classifySituationDomain,
+  FIRST_INTAKE_QUESTION_PURPOSES,
+  type FirstIntakePlan,
+} from "./situation-routing";
 import type {
   CheckIn,
   DailyPlan,
@@ -39,6 +45,7 @@ export { DEFAULT_OPENAI_MODEL } from "./model-routing";
 
 export const DEFAULT_WEB_SEARCH_CONTEXT_SIZE = "medium";
 export const DAILY_PLAN_MAX_OUTPUT_TOKENS = 8000;
+export const FIRST_INTAKE_QUESTION_MAX_OUTPUT_TOKENS = 1200;
 export const INTERVIEW_MAX_OUTPUT_TOKENS = 3000;
 export const NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS = 10000;
 
@@ -60,6 +67,14 @@ export const intakeInferredMemoryInstruction = `FlowPath should infer practical 
 const systemPrompt = `You are FlowPath, a practical AI prioritization strategist. Your job is to help the user identify the few actions today that most move their life forward across work, health, creativity, acting, and personal stability. You are direct, grounded, and psychologically perceptive. You do not overwhelm the user. You choose 3 main actions maximum. You distinguish urgent from important. You notice avoidance patterns. You respect health and energy constraints. You optimize for real-world momentum, not fantasy productivity. ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction}`;
 
 const interviewerSystemPrompt = `You are FlowPath's intake interviewer. Your job is to understand the user's current situation well enough to help identify their next best move. Ask one clear question at a time. Focus on goals, constraints, resources, urgency, what has been tried, what is being avoided, and what would create real-world progress. Before asking, review the full situation, profile, structured context constraints, and message history so you do not ask for facts the user already provided. If the next move will depend on local, regional, or current real-world information and location is missing, ask for the least precise useful location exactly once. For substance-use situations, ask about the substance and immediate safety or withdrawal risk exactly once when it affects triage. Never repeat location or substance questions once answered; move to constraints, resources, safety, or readiness. Do not overwhelm the user. Do not give the full plan yet unless the user asks. If the situation appears high-stakes, gather enough information to triage safely and recommend appropriate human help. When there is enough context for a useful plan, set current_stage to ready_to_generate and is_complete to true. In that complete state, do not ask whether the user wants a plan; put a short transition in question, such as "I have enough context to generate a plan." Your tone is calm, direct, practical, and humane. ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction}`;
+
+export const firstIntakeQuestionSystemPrompt = `You are FlowPath's first intake question writer. The user has just typed a situation, and your job is to ask the first question that makes the next move possible.
+
+Write exactly one question. It must be specific to the submitted situation, not a generic coaching opener. Use the user's concrete nouns, verbs, places, roles, artifacts, or stated goal when helpful. If useful, include 3-5 plausible lanes the user may be choosing among, inferred from the situation itself, so the user can answer quickly.
+
+Do not hardcode canned domains. Do not pretend certainty. Do not invent facts, organizations, phone numbers, deadlines, or resources. Do not ask for secrets, exact financial balances, account numbers, exact addresses, passwords, tax IDs, or payment details. If the situation is high-stakes, ask the least sensitive safety or triage question needed and keep professional/emergency boundaries conservative.
+
+Avoid questions like "What do you most want to change about this situation?" or "What would meaningful progress look like?" unless the user's wording is so vague that there is truly no better specific question. Prefer questions in the shape: "For [the user's situation], are you trying to clarify A, B, C, or D?"`;
 
 const operatorPlanInstruction = `FlowPath is generating an operator plan. Do not write generic advice. The user needs the next move that actually changes the situation. Analyze the situation like a successful domain operator advising someone they care about who lacks access, context, or hidden knowledge. Identify the real bottleneck, not just the obvious problem. Name the naive path most people would take, the higher-leverage operator path, and the wasted motion to avoid. Use the user's constraints: time, money, location, energy, access, credentials, safety, deadlines, support, prior attempts, and current tradeoffs when available. Ask no more questions if there is enough signal to produce a useful plan. Produce one next move for the next 24-48 hours, one first 10-minute action, and 2-3 concrete task candidates. Include assumptions, confidence, and professional/safety boundaries where relevant. Do not overclaim certainty. Do not pretend to have secret access, guaranteed outcomes, credentials, or personal connections. Prefer practical sequencing over motivational language. If the situation is high stakes, stabilize first and route to human/professional support where appropriate. If the situation is vague, make a reasonable plan based on available signal and list assumptions instead of forcing endless intake.`;
 
@@ -885,6 +900,50 @@ const interviewerJsonSchema = {
   },
 };
 
+const firstIntakeQuestionJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "question",
+    "domain",
+    "subtype",
+    "question_purpose",
+    "decision_shape",
+    "missing_info_target",
+    "why_this_question",
+    "situation_terms_used",
+  ],
+  properties: {
+    question: { type: "string" },
+    domain: { type: "string" },
+    subtype: { type: "string" },
+    question_purpose: {
+      type: "string",
+      enum: FIRST_INTAKE_QUESTION_PURPOSES,
+    },
+    decision_shape: { type: "string" },
+    missing_info_target: { type: "string" },
+    why_this_question: { type: "string" },
+    situation_terms_used: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: { type: "string" },
+    },
+  },
+};
+
+const firstIntakeQuestionOutputSchema = z.object({
+  question: z.string().trim().min(1).max(1200),
+  domain: z.string().trim().min(1).max(120),
+  subtype: z.string().trim().min(1).max(120),
+  question_purpose: z.enum(FIRST_INTAKE_QUESTION_PURPOSES),
+  decision_shape: z.string().trim().min(1).max(240),
+  missing_info_target: z.string().trim().min(1).max(500),
+  why_this_question: z.string().trim().min(1).max(800),
+  situation_terms_used: z.array(z.string().trim().min(1).max(120)).min(1).max(6),
+});
+
 const nextMovePlanJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -1104,6 +1163,160 @@ async function createStructuredResponse({
     usage: responseUsageMetadata(response.usage),
     usedWebSearch: responseUsedWebSearch(response),
   };
+}
+
+export type FirstIntakeGenerationResult = {
+  plan: FirstIntakePlan;
+  source: "ai" | "fallback";
+  model?: string;
+  usage?: AiUsageMetadata;
+  error?: string;
+};
+
+function shortSituationSubject(situation: Situation) {
+  const subject = `${situation.title} ${situation.description || ""}`
+    .replace(/\s+/g, " ")
+    .trim();
+  const fallback = subject || situation.category;
+  return fallback.length > 120 ? `${fallback.slice(0, 117).trim()}...` : fallback;
+}
+
+function normalizeQuestionTerm(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function questionUsesSituationTerms(question: string, terms: string[]) {
+  const normalizedQuestion = normalizeQuestionTerm(question);
+  return terms
+    .map(normalizeQuestionTerm)
+    .filter((term) => term.length >= 3)
+    .some((term) => normalizedQuestion.includes(term));
+}
+
+function ensureGeneratedFirstQuestionAnchor(
+  question: string,
+  situation: Situation,
+  terms: string[],
+) {
+  const subject = shortSituationSubject(situation).replace(/"/g, "'");
+  if (
+    questionUsesSituationTerms(question, terms) ||
+    normalizeQuestionTerm(question).includes(normalizeQuestionTerm(subject))
+  ) {
+    return question;
+  }
+
+  return `For "${subject}", ${question.charAt(0).toLowerCase()}${question.slice(1)}`;
+}
+
+export function buildFirstIntakeQuestionPromptInput(
+  situation: Situation,
+  fallbackPlan: FirstIntakePlan = buildFirstIntakePlan(situation),
+) {
+  return {
+    instruction:
+      "Generate one situation-specific first intake question. Use the deterministic fallback only as a safety net, not as a template if it is generic.",
+    situation: {
+      title: situation.title,
+      description: situation.description,
+      category: situation.category,
+      urgency: situation.urgency,
+    },
+    detected_domain: classifySituationDomain(situation),
+    deterministic_fallback: {
+      domain: fallbackPlan.domain,
+      subtype: fallbackPlan.subtype,
+      question_purpose: fallbackPlan.questionPurpose,
+      decision_shape: fallbackPlan.decisionShape,
+      missing_info_target: fallbackPlan.missingInfoTarget,
+      question: fallbackPlan.question,
+      genericity_risk: fallbackPlan.genericityRisk,
+    },
+    quality_requirements: [
+      "Ask exactly one question.",
+      "Make the question specific to the title and description.",
+      "Use concrete terms from the situation whenever possible.",
+      "If useful, offer 3-5 plausible lanes inferred from the situation.",
+      "Do not ask a generic progress or life-coaching opener.",
+      "Do not invent facts, people, organizations, deadlines, or resources.",
+      "Ask only for information that would change the next move.",
+    ],
+  };
+}
+
+export function parseFirstIntakeQuestionOutput(
+  outputText: string,
+  situation: Situation,
+  fallbackPlan: FirstIntakePlan = buildFirstIntakePlan(situation),
+): FirstIntakePlan {
+  const parsed = firstIntakeQuestionOutputSchema.parse(
+    trimGeneratedRecordStrings(JSON.parse(outputText), {
+      question: 1200,
+      domain: 120,
+      subtype: 120,
+      decision_shape: 240,
+      missing_info_target: 500,
+      why_this_question: 800,
+    }),
+  );
+  const question = ensureGeneratedFirstQuestionAnchor(
+    parsed.question,
+    situation,
+    parsed.situation_terms_used,
+  );
+
+  return {
+    domain: fallbackPlan.domain === "safety" ? fallbackPlan.domain : parsed.domain || fallbackPlan.domain,
+    subtype: parsed.subtype || fallbackPlan.subtype,
+    questionPurpose: parsed.question_purpose,
+    decisionShape: parsed.decision_shape || fallbackPlan.decisionShape,
+    missingInfoTarget: parsed.missing_info_target || fallbackPlan.missingInfoTarget,
+    question,
+    whyThisQuestion: parsed.why_this_question || fallbackPlan.whyThisQuestion,
+    genericityRisk: questionUsesSituationTerms(question, parsed.situation_terms_used)
+      ? "low"
+      : "medium",
+  };
+}
+
+export async function generateFirstIntakePlan(
+  situation: Situation,
+  fallbackPlan: FirstIntakePlan = buildFirstIntakePlan(situation),
+): Promise<FirstIntakeGenerationResult> {
+  const { outputText, model, usage } = await createStructuredResponse({
+    system: firstIntakeQuestionSystemPrompt,
+    name: "flowpath_first_intake_question",
+    description: "One situation-specific first intake question.",
+    schema: firstIntakeQuestionJsonSchema,
+    user: buildFirstIntakeQuestionPromptInput(situation, fallbackPlan),
+    maxOutputTokens: FIRST_INTAKE_QUESTION_MAX_OUTPUT_TOKENS,
+  });
+
+  return {
+    plan: parseFirstIntakeQuestionOutput(outputText, situation, fallbackPlan),
+    source: "ai",
+    model,
+    usage,
+  };
+}
+
+export async function generateFirstIntakePlanOrFallback(
+  situation: Situation,
+  fallbackPlan: FirstIntakePlan = buildFirstIntakePlan(situation),
+): Promise<FirstIntakeGenerationResult> {
+  try {
+    return await generateFirstIntakePlan(situation, fallbackPlan);
+  } catch (error) {
+    return {
+      plan: fallbackPlan,
+      source: "fallback",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export async function generateInterviewQuestion(

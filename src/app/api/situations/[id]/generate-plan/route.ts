@@ -7,7 +7,12 @@ import {
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
 import { canUseWebSearchForTier } from "@/lib/billing/plans";
-import { assertCanUseFeature, incrementUsage } from "@/lib/billing/usage";
+import {
+  assertCanUseFeature,
+  canUseFeature,
+  canUseFirstSituationFlow,
+  incrementUsage,
+} from "@/lib/billing/usage";
 import {
   buildCognitivePlanContext,
   compactProfileForMemorySelection,
@@ -69,7 +74,13 @@ export async function POST(request: Request, context: Context) {
         : 0;
     const situation = await getSituation(user.id, situationId);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
-    const usageDecision = await assertCanUseFeature(user.id, "next_move_plan");
+    const firstFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
+      isQa,
+    });
+    const usageDecision = await canUseFeature(user.id, "next_move_plan");
+    if (!usageDecision.allowed && !firstFlowPass) {
+      await assertCanUseFeature(user.id, "next_move_plan");
+    }
     await markRunningGenerationAsRetry(user.id, "operator_plan", situationId);
     await startGenerationEvent(user.id, {
       client_generation_id: clientGenerationId,

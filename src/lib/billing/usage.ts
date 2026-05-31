@@ -206,8 +206,25 @@ export async function canUseGuestFirstSituationIntake(
   situationId: number,
   { isQa = false }: { isQa?: boolean } = {},
 ) {
+  return canUseFirstSituationFlow(userId, situationId, { isQa, guestsOnly: true });
+}
+
+export async function canUseFirstSituationFlow(
+  userId: number,
+  situationId: number,
+  {
+    isQa = false,
+    guestsOnly = false,
+  }: { isQa?: boolean; guestsOnly?: boolean } = {},
+) {
   const user = await getBillingUser(userId);
-  if (!user?.is_guest) return false;
+  if (!user) return false;
+  const planTier = getEffectivePlanTier(user);
+  if (guestsOnly) {
+    if (!user.is_guest) return false;
+  } else if (!user.is_guest && planTier !== "free") {
+    return false;
+  }
 
   const planCount = await first<{ count: number }>(
     `SELECT COUNT(*) AS count
