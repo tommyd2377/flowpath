@@ -17,13 +17,13 @@ const urgencyScore: Record<SituationUrgency, number> = {
 const frictionPenalty: Record<TaskFrictionType, number> = {
   none: 0,
   unclear: 2,
-  too_large: 4,
-  scary: 5,
-  blocked: 8,
-  low_energy: 4,
-  needs_person: 3,
-  not_important: 8,
-  admin_drag: 4,
+  too_large: 6,
+  scary: 8,
+  blocked: 14,
+  low_energy: 5,
+  needs_person: 5,
+  not_important: 12,
+  admin_drag: 5,
 };
 
 function daysUntil(date: string, today: string) {
@@ -46,26 +46,54 @@ function deadlineScore(task: Task, today: string) {
 
 function sourcePlanScore(task: Task) {
   if (!task.source_next_move_plan_id) return 0;
-  if (task.source_plan_section === "first_30_minutes") return 18;
-  if (task.source_plan_section === "immediate_next_action") return 18;
-  if (task.source_plan_section === "next_24_hours") return 12;
-  if (task.source_plan_section === "follow_up") return 12;
+  if (task.source_plan_section === "immediate_next_action") return 22;
+  if (task.source_plan_section === "first_30_minutes") return 22;
+  if (task.source_plan_section === "follow_up") return 13;
+  if (task.source_plan_section === "next_24_hours") return 13;
   if (task.source_plan_section === "next_7_days") return 6;
-  return 8;
+  if (task.source_plan_section === "supporting") return 2;
+  return 4;
+}
+
+function taskText(task: Task) {
+  return `${task.title} ${task.notes} ${task.friction_note} ${task.situation_title ?? ""}`.toLowerCase();
+}
+
+function isExplicitUnblocker(task: Task) {
+  const text = taskText(task);
+  const passiveBlocker = /\b(blocked by|waiting on|depends on|dependent on)\b/.test(text);
+  const activeUnblocker =
+    /\b(unblock|unlock|prerequisite|needed before|must happen before|enables?|opens? the door)\b/.test(
+      text,
+    ) ||
+    /\b(clears?|clearing|cleared|removes?|removing|removed|resolves?|resolving|resolved|lifts?|lifting|lifted) (?:the )?(blocker|dependency)\b/.test(
+      text,
+    );
+  return activeUnblocker && !passiveBlocker;
 }
 
 function unblockerScore(task: Task) {
-  const text = `${task.title} ${task.notes} ${task.friction_note}`.toLowerCase();
-  if (/\b(unblock|blocked|dependency|waiting on|needed before)\b/.test(text)) {
-    return 8;
+  if (isExplicitUnblocker(task)) {
+    return 10;
+  }
+  return 0;
+}
+
+function readinessPenalty(task: Task) {
+  if ((task.friction_type ?? "none") === "blocked" && !isExplicitUnblocker(task)) {
+    return 10;
   }
   return 0;
 }
 
 function stabilityScore(task: Task) {
-  const text = `${task.title} ${task.notes} ${task.situation_title ?? ""}`.toLowerCase();
-  if (/\b(safety|stable|stability|housing|food|utility|deadline|urgent|runway|risk)\b/.test(text)) {
-    return 8;
+  const text = taskText(task);
+  if (
+    /\b(safety|safe|stable|stability|housing|rent|mortgage|eviction|food|grocer(?:y|ies)?|utility|utilities|bill|bills|debt|collections|credit|cash|money|financial|finance|income|runway|bank|tax|insurance|medical|medicine|doctor|legal|court|deadline|overdue|urgent|risk)\b/.test(
+      text,
+    )
+  ) {
+    return 9;
   }
   return 0;
 }
@@ -107,6 +135,7 @@ function rankReason(task: Task, today: string, context?: TaskRankingOutcomeConte
 
   if (task.source_next_move_plan_id) reasons.push("from a Next Move plan");
   if (unblockerScore(task) > 0) reasons.push("unblocks progress");
+  if (stabilityScore(task) > 0) reasons.push("stability or risk signal");
   if (task.effort <= 2) reasons.push("low effort");
   if ((task.friction_type ?? "none") !== "none") {
     reasons.push(`friction: ${task.friction_type.replaceAll("_", " ")}`);
@@ -147,7 +176,8 @@ export function scoreTask(
     stabilityScore(task) -
     task.effort * 4 -
     frictionPenalty[task.friction_type ?? "none"] +
-    outcomeScore(task, context)
+    outcomeScore(task, context) -
+    readinessPenalty(task)
   );
 }
 

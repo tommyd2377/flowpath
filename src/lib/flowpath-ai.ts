@@ -1438,6 +1438,9 @@ export async function generateNextMovePlan(
     "Fill context_used with compact, broad, non-sensitive context that shaped the answer. Generalize sensitive details. Use source situation, session_intake, saved_memory, inferred, or manual; use persistence session_only, proposed_memory, or saved_memory.",
     "Fill inferred_context_items with reviewable memories or constraints from this plan. Use source plan. Do not mark sensitive details saved_memory; use proposed_memory only for broad reusable memories and session_only for high-sensitivity details.",
     "Each task candidate must include the existing task fields plus description, estimated_minutes, friction_level, leverage, why_now, success_condition, category, and source_message_id.",
+    "Order task_candidates by within-situation action priority: first the immediate_next_action that is actionable today, then a follow_up, then an optional supporting action. Do not list a long-timeline task first just because the parent situation matters.",
+    "Set importance for each specific task's leverage, urgency, and consequence, not for the parent situation as a whole.",
+    "For dependency handling in task_candidates: if a task unlocks other work, say so in the title, details, and rank_reason; if a task is not actionable until something else happens, set friction_type to blocked and name the blocker; use due_date only for a real deadline, not vague urgency.",
     "For resources_to_seek, include a verified URL, phone number, or practical search target when web search verifies one. Leave contact_or_url empty unless you can provide a reliable official or well-established resource.",
     "If local specificity matters but location is missing, ask for city plus region/country in follow_up_questions_if_any and give a non-local fallback only when useful.",
   ]
