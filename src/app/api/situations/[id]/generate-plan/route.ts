@@ -19,7 +19,7 @@ import {
 } from "@/lib/cognitive-operating-layer";
 import type { CognitiveMetadata } from "@/lib/cognitive-schemas";
 import { generateNextMovePlan } from "@/lib/flowpath-ai";
-import { buildFirstIntakePlan } from "@/lib/intake";
+import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   completeGenerationEvent,
@@ -109,7 +109,7 @@ export async function POST(request: Request, context: Context) {
       latestUserMessage?.content ||
       situation.description ||
       situation.title;
-    const firstIntakePlanner = buildFirstIntakePlan(situation);
+    const intakeRouting = buildIntakeRoutingMetadata(situation);
     const baseCognitiveContext = buildCognitivePlanContext({
       userMessage,
       situation,
@@ -123,8 +123,8 @@ export async function POST(request: Request, context: Context) {
     const historicalEffectiveness = await getInterventionEffectivenessForContext(
       user.id,
       {
-        domain: firstIntakePlanner.domain || situation.category,
-        subtype: firstIntakePlanner.subtype,
+        domain: intakeRouting.domain || situation.category,
+        subtype: intakeRouting.subtype,
         currentState: baseCognitiveContext.stateDetection.primary_state,
         isQa,
       },
@@ -219,9 +219,9 @@ export async function POST(request: Request, context: Context) {
       source: "next_move_plan",
       stateDetected: cognitiveContext.stateDetection.primary_state,
       interventionType: cognitiveContext.intervention.intervention_type,
-      domain: firstIntakePlanner.domain,
-      subtype: firstIntakePlanner.subtype,
-      questionPurpose: firstIntakePlanner.questionPurpose,
+      domain: intakeRouting.domain,
+      subtype: intakeRouting.subtype,
+      questionPurpose: intakeRouting.questionPurpose,
       modelUsed: model,
       metadata: {
         taskCandidateCount: plan.task_candidates.length,
@@ -241,9 +241,9 @@ export async function POST(request: Request, context: Context) {
       source: "suggested_action",
       stateDetected: cognitiveContext.stateDetection.primary_state,
       interventionType: cognitiveContext.intervention.intervention_type,
-      domain: firstIntakePlanner.domain,
-      subtype: firstIntakePlanner.subtype,
-      questionPurpose: firstIntakePlanner.questionPurpose,
+      domain: intakeRouting.domain,
+      subtype: intakeRouting.subtype,
+      questionPurpose: intakeRouting.questionPurpose,
       modelUsed: model,
       metadata: {
         title:
@@ -266,9 +266,9 @@ export async function POST(request: Request, context: Context) {
         source: "first_intake",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
-        questionPurpose: firstIntakePlanner.questionPurpose,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
+        questionPurpose: intakeRouting.questionPurpose,
         metadata: { currentStage: session?.current_stage ?? null },
         dedupeKey: `intake-skipped-generate-now:${situationId}:${storedPlan.id}`,
         isQa,
@@ -284,9 +284,9 @@ export async function POST(request: Request, context: Context) {
         source: "system_inference",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
-        questionPurpose: firstIntakePlanner.questionPurpose,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
+        questionPurpose: intakeRouting.questionPurpose,
         metadata: {
           repeatedTopic: cognitiveContext.repeatedTopic,
           repeatedLoopCount: historicalEffectiveness.repeatedLoopCount,
@@ -304,8 +304,8 @@ export async function POST(request: Request, context: Context) {
         source: "system_inference",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
         metadata: { evaluatorScore: cognitiveMetadata.evaluator?.score ?? null },
         dedupeKey: `evaluator-rewrite:${storedPlan.id}`,
         isQa,
@@ -320,8 +320,8 @@ export async function POST(request: Request, context: Context) {
         source: "system_inference",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
         metadata: { reason: cognitiveMetadata.web_search_reason },
         dedupeKey: `web-search-used:${storedPlan.id}`,
         isQa,
@@ -336,8 +336,8 @@ export async function POST(request: Request, context: Context) {
         source: "system_inference",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
         metadata: {
           memoryItemsUsed: cognitiveContext.memorySelection.selected_memories.length,
         },
@@ -354,8 +354,8 @@ export async function POST(request: Request, context: Context) {
         source: "system_inference",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
         metadata: { model },
         dedupeKey: `escalation-triggered:${storedPlan.id}`,
         isQa,

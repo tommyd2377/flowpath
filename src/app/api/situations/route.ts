@@ -1,17 +1,18 @@
-import { dataResponse, errorResponse, readJson } from "@/lib/api-response";
+import { ApiRequestError, dataResponse, errorResponse, readJson } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
 import {
-  canUseFeature,
+  assertCanUseFeature,
   canUseFirstSituationFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
-import { generateFirstIntakePlanOrFallback } from "@/lib/flowpath-ai";
-import { buildFirstIntakePlan } from "@/lib/intake";
+import { generateFirstIntakePlan } from "@/lib/flowpath-ai";
+import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   addIntakeMessage,
   createOutcomeHarnessEvent,
   createSituation,
+  deleteSituation,
   getLatestIntakeSession,
   getOrCreateIntakeSession,
   listIntakeMessages,
@@ -27,28 +28,30 @@ export const dynamic = "force-dynamic";
 async function firstIntakePlanForNewSituation(
   userId: number,
   situation: Situation,
-): Promise<{ plan: FirstIntakePlan; source: "ai" | "fallback"; model?: string }> {
-  const fallbackPlan = buildFirstIntakePlan(situation);
+): Promise<{ plan: FirstIntakePlan; source: "ai"; model?: string }> {
   if (!process.env.OPENAI_API_KEY) {
-    return { plan: fallbackPlan, source: "fallback" };
+    throw new ApiRequestError(
+      "OPENAI_API_KEY is missing. Add it to .env.local, then restart the dev server.",
+      400,
+      "missing_api_key",
+    );
   }
 
   const firstFlowPass = await canUseFirstSituationFlow(userId, situation.id, {
     isQa: Boolean(situation.is_qa),
   });
   if (!firstFlowPass) {
-    const usageDecision = await canUseFeature(userId, "lightweight_assist");
-    if (!usageDecision.allowed) return { plan: fallbackPlan, source: "fallback" };
+    await assertCanUseFeature(userId, "lightweight_assist");
   }
 
-  const generated = await generateFirstIntakePlanOrFallback(situation, fallbackPlan);
-  if (!firstFlowPass && generated.source === "ai" && generated.usage) {
+  const generated = await generateFirstIntakePlan(situation);
+  if (!firstFlowPass && generated.usage) {
     await incrementUsage(userId, "lightweight_assist", generated.usage);
   }
 
   return {
     plan: generated.plan,
-    source: generated.source,
+    source: "ai",
     model: generated.model,
   };
 }
@@ -71,26 +74,34 @@ export async function POST(request: Request) {
     const input = situationInputSchema.parse(await readJson(request));
     const activeSituations = await listSituations(user.id, "active", { isQa });
     const situation = await createSituation(user.id, input, { isQa });
-    const session = await getOrCreateIntakeSession(user.id, situation.id);
-    const firstIntakeGeneration = await firstIntakePlanForNewSituation(
-      user.id,
-      situation,
-    );
+    const { session, firstIntakeGeneration, messages } = await (async () => {
+      try {
+        const session = await getOrCreateIntakeSession(user.id, situation.id);
+        const firstIntakeGeneration = await firstIntakePlanForNewSituation(
+          user.id,
+          situation,
+        );
+        const messages = await addIntakeMessage(
+          user.id,
+          session.id,
+          "assistant",
+          firstIntakeGeneration.plan.question,
+          { isQa },
+        );
+        return { session, firstIntakeGeneration, messages };
+      } catch (firstIntakeError) {
+        await deleteSituation(user.id, situation.id).catch(() => {});
+        throw firstIntakeError;
+      }
+    })();
     const firstIntakePlanner = firstIntakeGeneration.plan;
-    const messages = await addIntakeMessage(
-      user.id,
-      session.id,
-      "assistant",
-      firstIntakePlanner.question,
-      { isQa },
-    );
     for (const active of activeSituations.slice(0, 8)) {
       const activeSession = await getLatestIntakeSession(user.id, active.id);
       if (!activeSession) continue;
       const activeMessages = await listIntakeMessages(user.id, activeSession.id);
       const hasUserAnswer = activeMessages.some((message) => message.role === "user");
       if (hasUserAnswer || activeMessages.length === 0) continue;
-      const activePlanner = buildFirstIntakePlan(active);
+      const activePlanner = buildIntakeRoutingMetadata(active);
       await createOutcomeHarnessEvent(user.id, {
         situationId: active.id,
         conversationId: String(active.id),

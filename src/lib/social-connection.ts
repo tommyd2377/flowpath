@@ -14,13 +14,16 @@ const immediateDangerPattern =
   /\b(immediate danger|active violence|someone is going to hurt|about to hurt|medical emergency|call 911|unsafe right now|imminent harm|in danger now)\b/i;
 
 const crisisSupportPattern =
-  /\b(suicidal|suicide|kill myself|end my life|self[- ]?harm|hurt myself|severe emotional crisis|crisis support|can't stay safe|cannot stay safe|want to die)\b/i;
+  /\b(suicidal|suicide|kill myself|end my life|self[- ]?harm|hurt myself|severe emotional crisis|crisis support|can't stay safe|cannot stay safe|want to die|want to not be alive|do not want to be alive|don't want to be alive|not be alive anymore|wish i (was|were) dead)\b/i;
 
 export const usCrisisSupportCopy =
   "If you are in the U.S., call or text 988, or use the 988 Lifeline chat at https://988lifeline.org/chat. They provide 24/7 crisis support. If you are outside the U.S., contact your local crisis line or emergency number.";
 
 export const immediateDangerCopy =
   "If you or someone else is in immediate danger, call 911 or your local emergency number now.";
+
+export const safetyStatusQuestion =
+  "Before FlowPath helps with the underlying problem, I need to check safety: are you in immediate danger of hurting yourself today, worried you might act on it in the next few days, or not planning to hurt yourself but feeling overwhelmed, ashamed, or hopeless? You can answer with one of those.";
 
 export function isSocialConnectionSituation(situation: SituationText) {
   return socialConnectionPattern.test(

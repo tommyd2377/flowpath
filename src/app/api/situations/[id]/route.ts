@@ -7,7 +7,7 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
-import { buildFirstIntakePlan } from "@/lib/intake";
+import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   createOutcomeHarnessEvent,
@@ -48,7 +48,6 @@ async function situationDetail(userId: number, id: number, isQa = false) {
     latestPlan,
     plans,
     tasks,
-    firstIntakePlanner: buildFirstIntakePlan(situation),
   };
 }
 
@@ -80,7 +79,7 @@ export async function PUT(request: Request, context: Context) {
     const situation = await updateSituation(user.id, id, input);
     if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
     if (existingSituation && !hasUserAnswer) {
-      const planner = buildFirstIntakePlan(situation);
+      const planner = buildIntakeRoutingMetadata(situation);
       await createOutcomeHarnessEvent(user.id, {
         situationId: id,
         conversationId: String(id),

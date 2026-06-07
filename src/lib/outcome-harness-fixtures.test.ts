@@ -7,7 +7,6 @@ import {
   evaluateNextMovePlan,
 } from "./cognitive-operating-layer";
 import { outcomeHarnessFixtures } from "./outcome-harness-fixtures";
-import { buildFirstIntakePlan } from "./intake";
 import type { IntakeMessage, NextMovePlan, Profile, Situation } from "./types";
 
 const profile: Profile = {
@@ -47,25 +46,6 @@ test("outcome harness includes 50 deterministic QA fixtures", () => {
     assert.ok(fixture.expectedQuestionPurpose);
     assert.ok(fixture.maxTaskCount >= 0 && fixture.maxTaskCount <= 3);
   }
-});
-
-test("fixture first-intake questions stay specific and non-generic", () => {
-  const highRisk = outcomeHarnessFixtures
-    .map((fixture) => ({
-      fixture,
-      plan: buildFirstIntakePlan({
-        title: fixture.text,
-        description: "",
-        category: fixture.category,
-        urgency: "medium",
-      }),
-    }))
-    .filter(({ plan }) => plan.genericityRisk === "high");
-
-  assert.deepEqual(
-    highRisk.map(({ fixture }) => fixture.id),
-    [],
-  );
 });
 
 test("fixture coverage exercises high-stakes caution and lightweight factual paths", () => {

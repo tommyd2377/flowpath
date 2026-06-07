@@ -8,7 +8,7 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
-import { buildFirstIntakePlan } from "@/lib/intake";
+import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import {
   createOutcomeHarnessEvent,
   getNextMovePlan,
@@ -36,8 +36,8 @@ async function planContext(userId: number, planId: number) {
   const plan = await getNextMovePlan(userId, planId);
   if (!plan) throw new ApiRequestError("Plan not found.", 404, "not_found");
   const situation = await getSituation(userId, plan.situation_id);
-  const firstIntakePlanner = situation ? buildFirstIntakePlan(situation) : null;
-  return { plan, situation, firstIntakePlanner };
+  const intakeRouting = situation ? buildIntakeRoutingMetadata(situation) : null;
+  return { plan, situation, intakeRouting };
 }
 
 function originalSuggestedAction(plan: Awaited<ReturnType<typeof getNextMovePlan>>) {
@@ -77,7 +77,7 @@ async function writeSuggestedEvent(
   taskId?: number | null,
   dedupeKey?: string,
 ) {
-  const { plan, firstIntakePlanner } = await planContext(userId, planId);
+  const { plan, intakeRouting } = await planContext(userId, planId);
   return createOutcomeHarnessEvent(userId, {
     situationId: plan.situation_id,
     conversationId: String(plan.situation_id),
@@ -87,9 +87,9 @@ async function writeSuggestedEvent(
     source: eventType.startsWith("task_") ? "task_deck" : "suggested_action",
     stateDetected: plan.cognitive_metadata?.state_detection.primary_state ?? null,
     interventionType: plan.cognitive_metadata?.intervention.intervention_type ?? null,
-    domain: firstIntakePlanner?.domain ?? null,
-    subtype: firstIntakePlanner?.subtype ?? null,
-    questionPurpose: firstIntakePlanner?.questionPurpose ?? null,
+    domain: intakeRouting?.domain ?? null,
+    subtype: intakeRouting?.subtype ?? null,
+    questionPurpose: intakeRouting?.questionPurpose ?? null,
     modelUsed: plan.model,
     metadata,
     dedupeKey,

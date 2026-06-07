@@ -18,7 +18,7 @@ import {
   inferOutcomeFromUserMessage,
 } from "@/lib/cognitive-operating-layer";
 import { generateInterviewQuestion } from "@/lib/flowpath-ai";
-import { buildFirstIntakePlan } from "@/lib/intake";
+import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   addIntakeMessage,
@@ -129,7 +129,7 @@ export async function POST(request: Request, context: Context) {
       getProfile(user.id),
       listInferredContextItems(user.id, { isQa }),
     ]);
-    const firstIntakePlanner = buildFirstIntakePlan(situation);
+    const intakeRouting = buildIntakeRoutingMetadata(situation);
     const baseCognitiveContext = buildCognitivePlanContext({
       userMessage: input.content,
       situation,
@@ -141,8 +141,8 @@ export async function POST(request: Request, context: Context) {
     const historicalEffectiveness = await getInterventionEffectivenessForContext(
       user.id,
       {
-        domain: firstIntakePlanner.domain || situation.category,
-        subtype: firstIntakePlanner.subtype,
+        domain: intakeRouting.domain || situation.category,
+        subtype: intakeRouting.subtype,
         currentState: baseCognitiveContext.stateDetection.primary_state,
         isQa,
       },
@@ -184,9 +184,9 @@ export async function POST(request: Request, context: Context) {
       source: "followup_intake",
       stateDetected: cognitiveContext.stateDetection.primary_state,
       interventionType: cognitiveContext.intervention.intervention_type,
-      domain: firstIntakePlanner.domain,
-      subtype: firstIntakePlanner.subtype,
-      questionPurpose: firstIntakePlanner.questionPurpose,
+      domain: intakeRouting.domain,
+      subtype: intakeRouting.subtype,
+      questionPurpose: intakeRouting.questionPurpose,
       metadata: {
         currentStage: session.current_stage,
         answerLength: input.content.length,
@@ -205,9 +205,9 @@ export async function POST(request: Request, context: Context) {
         source: "system_inference",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
-        domain: firstIntakePlanner.domain,
-        subtype: firstIntakePlanner.subtype,
-        questionPurpose: firstIntakePlanner.questionPurpose,
+        domain: intakeRouting.domain,
+        subtype: intakeRouting.subtype,
+        questionPurpose: intakeRouting.questionPurpose,
         metadata: {
           repeatedTopic: cognitiveContext.repeatedTopic,
           repeatedLoopCount: historicalEffectiveness.repeatedLoopCount,

@@ -10,7 +10,6 @@ import {
   socialConnectionInstruction,
 } from "./flowpath-ai";
 import { nextMovePlanSchema } from "./schemas";
-import { buildFirstIntakePlan } from "./intake";
 import type { Situation } from "./types";
 
 const baseSituation: Situation = {
@@ -47,6 +46,10 @@ test("social connection prompt includes consent, boundaries, non-manipulation, a
   assert.match(socialConnectionInstruction, /pickup-artist tactics/i);
   assert.match(socialConnectionInstruction, /explicit sexual details/i);
   assert.match(socialConnectionInstruction, /under 18/i);
+  assert.match(socialConnectionInstruction, /immediate danger today/i);
+  assert.match(socialConnectionInstruction, /near-term risk/i);
+  assert.match(socialConnectionInstruction, /distress without intent/i);
+  assert.match(socialConnectionInstruction, /do not ask why/i);
   assert.match(socialConnectionInstruction, /call or text 988/i);
   assert.match(socialConnectionInstruction, /call 911 or their local emergency number/i);
 });
@@ -57,11 +60,15 @@ test("first intake prompt requires a situation-specific question", () => {
   assert.match(firstIntakeQuestionSystemPrompt, /3-5 plausible lanes/i);
   assert.match(firstIntakeQuestionSystemPrompt, /Do not invent facts/i);
   assert.match(firstIntakeQuestionSystemPrompt, /meaningful progress/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /ask a safety-status question first/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /immediate danger today/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /near-term risk/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /distress without intent/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /must not ask why/i);
 });
 
-test("first intake prompt input includes the situation and fallback plan", () => {
-  const fallbackPlan = buildFirstIntakePlan(baseSituation);
-  const input = buildFirstIntakeQuestionPromptInput(baseSituation, fallbackPlan);
+test("first intake prompt input includes the situation without a deterministic fallback", () => {
+  const input = buildFirstIntakeQuestionPromptInput(baseSituation);
 
   assert.deepEqual(input.situation, {
     title: baseSituation.title,
@@ -69,12 +76,13 @@ test("first intake prompt input includes the situation and fallback plan", () =>
     category: baseSituation.category,
     urgency: baseSituation.urgency,
   });
-  assert.equal(input.deterministic_fallback.question, fallbackPlan.question);
+  assert.equal("deterministic_fallback" in input, false);
   assert.match(input.quality_requirements.join(" "), /concrete terms/i);
+  assert.match(input.quality_requirements.join(" "), /safety status before/i);
+  assert.match(input.quality_requirements.join(" "), /Do not ask why/i);
 });
 
 test("first intake output parser maps model output to planner metadata", () => {
-  const fallbackPlan = buildFirstIntakePlan(baseSituation);
   const output = parseFirstIntakeQuestionOutput(
     JSON.stringify({
       question:
@@ -89,7 +97,6 @@ test("first intake output parser maps model output to planner metadata", () => {
       situation_terms_used: ["research", "local service providers", "time-sensitive project"],
     }),
     baseSituation,
-    fallbackPlan,
   );
 
   assert.equal(output.subtype, "research_or_comparison");
@@ -97,6 +104,32 @@ test("first intake output parser maps model output to planner metadata", () => {
   assert.equal(output.genericityRisk, "low");
   assert.match(output.question, /local service providers/i);
   assert.match(output.question, /quality signals|pricing|contact/i);
+});
+
+test("first intake output parser does not repeat matching title and description", () => {
+  const repeated = "I need help with my blue notebook problem";
+  const situation: Situation = {
+    ...baseSituation,
+    title: repeated,
+    description: repeated,
+    category: "relationships_connection",
+  };
+  const output = parseFirstIntakeQuestionOutput(
+    JSON.stringify({
+      question: "Which constraint should FlowPath clarify first?",
+      domain: "relationships/connection",
+      subtype: "social_planning",
+      question_purpose: "clarify_constraint",
+      decision_shape: "constraint clarification",
+      missing_info_target: "the barrier that would change the next move",
+      why_this_question:
+        "The situation needs the first practical constraint before planning.",
+      situation_terms_used: ["blue notebook"],
+    }),
+    situation,
+  );
+
+  assert.equal(output.question.split(repeated).length - 1, 1);
 });
 
 test("next move plan schema still requires structured insight fields", () => {
