@@ -27,7 +27,6 @@ import type {
   Project,
   RecommendationBasis,
   RestraintGuidance,
-  SafetyBoundary,
   Situation,
   StoredPlan,
   StoredNextMovePlan,
@@ -43,6 +42,7 @@ import {
   type OutcomeHarnessEventInput,
   type OutcomeHarnessEventType,
 } from "./outcome-harness";
+import { DEFAULT_SAFETY_BOUNDARY } from "./schemas";
 import type {
   CheckInInput,
   InferredContextItemInput,
@@ -112,16 +112,6 @@ const defaultOperatorInsight: OperatorInsight = {
   naive_path: "No mentor insight was stored for this older plan.",
   operator_path: "Use the clearest next move from the rest of this plan.",
   wasted_motion_to_avoid: "Avoid expanding the plan before taking the next concrete step.",
-};
-
-const defaultSafetyBoundary: SafetyBoundary = {
-  risk_level: "low",
-  professional_help_signal:
-    "Use appropriate human or professional help when the situation exceeds planning support.",
-  do_not_rely_on_ai_for:
-    "Do not rely on FlowPath for legal, medical, financial, emergency, or crisis decisions.",
-  urgent_support_guidance:
-    "If there is immediate danger, contact local emergency services or a trusted person nearby now.",
 };
 
 const defaultTaskCandidates: PlanTaskCandidate[] = [];
@@ -2519,7 +2509,7 @@ function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
     ),
     resources_to_seek: parseJson(row.resources_to_seek_json, []),
     when_to_get_human_help: row.when_to_get_human_help,
-    safety_boundary: parseJson(row.safety_boundary_json, defaultSafetyBoundary),
+    safety_boundary: parseJson(row.safety_boundary_json, DEFAULT_SAFETY_BOUNDARY),
     context_used: parseJson(row.context_used_json, defaultContextUsed),
     inferred_context_items: parseJson(
       row.inferred_context_items_json,

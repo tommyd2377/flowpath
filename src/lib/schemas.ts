@@ -37,6 +37,7 @@ import {
   TASK_STATUSES,
   URGENT_FINANCIAL_RISKS,
 } from "./types";
+import type { SafetyBoundary } from "./types";
 
 export const SITUATION_TITLE_MAX = 120;
 export const SITUATION_DESCRIPTION_MAX = 8000;
@@ -46,8 +47,24 @@ export const MEMORY_VALUE_MAX = 1000;
 export const TASK_TITLE_MAX = 220;
 export const TASK_NOTES_MAX = 5000;
 
+export const DEFAULT_SAFETY_BOUNDARY: SafetyBoundary = {
+  risk_level: "low",
+  professional_help_signal:
+    "Use appropriate human or professional help when the situation exceeds planning support.",
+  do_not_rely_on_ai_for:
+    "Do not rely on FlowPath for legal, medical, financial, emergency, or crisis decisions.",
+  urgent_support_guidance:
+    "If there is immediate danger, contact local emergency services or a trusted person nearby now.",
+};
+
 const text = (max = 4000) => z.string().trim().max(max).optional().default("");
 const nullableId = z.number().int().positive().nullable().optional().default(null);
+const safetyBoundaryText = (fallback: string) =>
+  z
+    .string()
+    .trim()
+    .transform((value) => value || fallback)
+    .pipe(z.string().max(1200));
 const optionalDate = z
   .string()
   .trim()
@@ -308,9 +325,15 @@ export const localRealityScoutSchema = z.object({
 
 export const safetyBoundarySchema = z.object({
   risk_level: z.enum(SAFETY_RISK_LEVELS),
-  professional_help_signal: z.string().trim().min(1).max(1200),
-  do_not_rely_on_ai_for: z.string().trim().min(1).max(1200),
-  urgent_support_guidance: z.string().trim().min(1).max(1200),
+  professional_help_signal: safetyBoundaryText(
+    DEFAULT_SAFETY_BOUNDARY.professional_help_signal,
+  ),
+  do_not_rely_on_ai_for: safetyBoundaryText(
+    DEFAULT_SAFETY_BOUNDARY.do_not_rely_on_ai_for,
+  ),
+  urgent_support_guidance: safetyBoundaryText(
+    DEFAULT_SAFETY_BOUNDARY.urgent_support_guidance,
+  ),
 });
 
 export const dailyPlanSchema = z.object({

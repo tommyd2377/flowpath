@@ -9,7 +9,11 @@ import {
   privacyAwareConstraintInstruction,
   socialConnectionInstruction,
 } from "./flowpath-ai";
-import { nextMovePlanSchema } from "./schemas";
+import {
+  DEFAULT_SAFETY_BOUNDARY,
+  nextMovePlanSchema,
+  safetyBoundarySchema,
+} from "./schemas";
 import type { Situation } from "./types";
 
 const baseSituation: Situation = {
@@ -238,4 +242,27 @@ test("next move plan schema still requires structured insight fields", () => {
   });
 
   assert.equal(parsed.success, true);
+});
+
+test("safety boundary schema defaults blank generated guidance", () => {
+  const parsed = safetyBoundarySchema.parse({
+    risk_level: "medium",
+    professional_help_signal: "",
+    do_not_rely_on_ai_for: "   ",
+    urgent_support_guidance: "",
+  });
+
+  assert.equal(parsed.risk_level, "medium");
+  assert.equal(
+    parsed.professional_help_signal,
+    DEFAULT_SAFETY_BOUNDARY.professional_help_signal,
+  );
+  assert.equal(
+    parsed.do_not_rely_on_ai_for,
+    DEFAULT_SAFETY_BOUNDARY.do_not_rely_on_ai_for,
+  );
+  assert.equal(
+    parsed.urgent_support_guidance,
+    DEFAULT_SAFETY_BOUNDARY.urgent_support_guidance,
+  );
 });
