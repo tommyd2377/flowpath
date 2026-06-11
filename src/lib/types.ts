@@ -315,6 +315,47 @@ export const GENERATION_STATUSES = [
   "retry",
   "error",
 ] as const;
+export const GENERATION_FLOW_TYPES = [
+  "first_intake_question",
+  "followup_intake_question",
+  "next_move_plan",
+  "plan_evaluator",
+  "plan_revision",
+  "task_generation",
+  "task_ranking",
+  "today_dashboard",
+] as const;
+export const GENERATION_FLOW_STATUSES = [
+  "running",
+  "success",
+  "error",
+  "canceled",
+  "timeout",
+  "retry",
+  "quota_blocked",
+  "safety_routed",
+] as const;
+export const SAFETY_ROUTE_TYPES = [
+  "self_harm_or_suicide",
+  "imminent_harm_to_others",
+  "medical_emergency",
+  "abuse_or_domestic_violence",
+  "severe_mental_health_crisis",
+  "housing_or_physical_safety_emergency",
+  "legal_emergency",
+  "other_human_help_needed",
+] as const;
+export const WEB_SEARCH_DECISION_REASONS = [
+  "current_facts_needed",
+  "local_resource_needed",
+  "high_stakes_factuality",
+  "user_requested_current_info",
+  "software_docs_may_have_changed",
+  "pricing_or_recommendations",
+  "not_needed",
+  "unavailable_for_tier",
+  "blocked_by_policy",
+] as const;
 
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
@@ -363,6 +404,10 @@ export type ContextUsedCategory = (typeof CONTEXT_USED_CATEGORIES)[number];
 export type ContextUsedSource = (typeof CONTEXT_USED_SOURCES)[number];
 export type GenerationType = (typeof GENERATION_TYPES)[number];
 export type GenerationStatus = (typeof GENERATION_STATUSES)[number];
+export type GenerationFlowType = (typeof GENERATION_FLOW_TYPES)[number];
+export type GenerationFlowStatus = (typeof GENERATION_FLOW_STATUSES)[number];
+export type SafetyRouteType = (typeof SAFETY_ROUTE_TYPES)[number];
+export type WebSearchDecisionReason = (typeof WEB_SEARCH_DECISION_REASONS)[number];
 
 type PersistedConstraint<T> = {
   value?: T;
@@ -750,15 +795,23 @@ export type GenerationEvent = {
   user_id?: number;
   client_generation_id: string;
   situation_id: number | null;
+  plan_id?: number | null;
+  task_id?: number | null;
   generation_type: GenerationType;
+  flow_type?: GenerationFlowType | null;
   started_at: string;
   completed_at: string | null;
   duration_ms: number | null;
   status: GenerationStatus;
+  flow_status?: GenerationFlowStatus | null;
   model: string | null;
+  model_role?: string | null;
   input_tokens: number | null;
+  cached_input_tokens?: number | null;
   output_tokens: number | null;
+  total_tokens?: number | null;
   estimated_cost: number | null;
+  estimated_cost_usd?: number | null;
   state_detected?: string | null;
   intervention_type?: string | null;
   model_used_by_stage_json?: string | null;
@@ -769,6 +822,16 @@ export type GenerationEvent = {
   tasks_created_count?: number | null;
   memory_items_used?: number | null;
   web_search_used?: boolean;
+  web_search_call_count?: number | null;
+  web_search_decision_reason?: WebSearchDecisionReason | null;
+  used_evaluator?: boolean;
+  evaluator_triggered_revision?: boolean;
+  safety_route_triggered?: boolean;
+  safety_route_type?: SafetyRouteType | null;
+  quota_tier?: PlanTier | null;
+  quota_usage_type?: UsageType | null;
+  error_message_sanitized?: string | null;
+  structural_counts_json?: string | null;
   outcome_harness_context_included?: boolean;
   historical_effectiveness_influenced_intervention?: boolean;
   cognitive_metadata_json?: string | null;

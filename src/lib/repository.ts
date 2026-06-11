@@ -8,6 +8,8 @@ import type {
   DailyPlan,
   GeneratedInferredContextItem,
   GenerationEvent,
+  GenerationFlowStatus,
+  GenerationFlowType,
   GenerationStatus,
   GenerationType,
   HighestLeverageMove,
@@ -27,10 +29,14 @@ import type {
   Project,
   RecommendationBasis,
   RestraintGuidance,
+  SafetyRouteType,
   Situation,
+  PlanTier,
   StoredPlan,
   StoredNextMovePlan,
   Task,
+  UsageType,
+  WebSearchDecisionReason,
 } from "./types";
 import type { CognitiveMetadata, OutcomeValue } from "./cognitive-schemas";
 import {
@@ -3248,6 +3254,9 @@ type GenerationEventRow = Omit<
   | "is_qa"
   | "response_rewritten"
   | "web_search_used"
+  | "used_evaluator"
+  | "evaluator_triggered_revision"
+  | "safety_route_triggered"
   | "outcome_harness_context_included"
   | "historical_effectiveness_influenced_intervention"
 > &
@@ -3255,6 +3264,9 @@ type GenerationEventRow = Omit<
     is_qa?: number;
     response_rewritten?: number;
     web_search_used?: number;
+    used_evaluator?: number;
+    evaluator_triggered_revision?: number;
+    safety_route_triggered?: number;
     outcome_harness_context_included?: number;
     historical_effectiveness_influenced_intervention?: number;
   };
@@ -3264,6 +3276,9 @@ function rowToGenerationEvent(row: GenerationEventRow) {
     ...withoutUserId(row),
     response_rewritten: rowBoolean(row.response_rewritten),
     web_search_used: rowBoolean(row.web_search_used),
+    used_evaluator: rowBoolean(row.used_evaluator),
+    evaluator_triggered_revision: rowBoolean(row.evaluator_triggered_revision),
+    safety_route_triggered: rowBoolean(row.safety_route_triggered),
     outcome_harness_context_included: rowBoolean(
       row.outcome_harness_context_included,
     ),
@@ -3274,12 +3289,33 @@ function rowToGenerationEvent(row: GenerationEventRow) {
   } as GenerationEvent;
 }
 
+type GenerationStructuralCounts = Record<string, string | number | boolean | null>;
+
+function structuralCountsJson(counts?: GenerationStructuralCounts | null) {
+  return counts ? JSON.stringify(counts) : null;
+}
+
+function boolToInt(value?: boolean | null) {
+  return typeof value === "boolean" ? (value ? 1 : 0) : null;
+}
+
 export async function startGenerationEvent(
   userId: number,
   input: {
     client_generation_id: string;
     generation_type: GenerationType;
     situation_id?: number | null;
+    plan_id?: number | null;
+    task_id?: number | null;
+    flow_type?: GenerationFlowType | null;
+    flow_status?: GenerationFlowStatus | null;
+    model_role?: string | null;
+    quota_tier?: PlanTier | null;
+    quota_usage_type?: UsageType | null;
+    web_search_decision_reason?: WebSearchDecisionReason | null;
+    safety_route_triggered?: boolean | null;
+    safety_route_type?: SafetyRouteType | null;
+    structural_counts?: GenerationStructuralCounts | null;
     retry_count?: number;
     is_qa?: boolean;
   },
@@ -3287,14 +3323,24 @@ export async function startGenerationEvent(
   const now = nowIso();
   await run(
     `INSERT INTO generation_events (
-      user_id, client_generation_id, situation_id, generation_type, started_at,
-      status, retry_count, is_qa, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
+      user_id, client_generation_id, situation_id, plan_id, task_id, generation_type,
+      flow_type, flow_status, model_role, quota_tier, quota_usage_type,
+      web_search_decision_reason, safety_route_triggered, safety_route_type,
+      structural_counts_json, started_at, status, retry_count, is_qa, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
     ON CONFLICT(user_id, client_generation_id) DO UPDATE SET
       status = 'running',
+      flow_status = excluded.flow_status,
       started_at = excluded.started_at,
       completed_at = NULL,
       duration_ms = NULL,
+      plan_id = excluded.plan_id,
+      task_id = excluded.task_id,
+      flow_type = excluded.flow_type,
+      model_role = excluded.model_role,
+      cached_input_tokens = NULL,
+      total_tokens = NULL,
+      estimated_cost_usd = NULL,
       state_detected = NULL,
       intervention_type = NULL,
       model_used_by_stage_json = NULL,
@@ -3305,6 +3351,16 @@ export async function startGenerationEvent(
       tasks_created_count = 0,
       memory_items_used = 0,
       web_search_used = 0,
+      web_search_call_count = NULL,
+      web_search_decision_reason = excluded.web_search_decision_reason,
+      used_evaluator = 0,
+      evaluator_triggered_revision = 0,
+      safety_route_triggered = excluded.safety_route_triggered,
+      safety_route_type = excluded.safety_route_type,
+      quota_tier = excluded.quota_tier,
+      quota_usage_type = excluded.quota_usage_type,
+      error_message_sanitized = NULL,
+      structural_counts_json = excluded.structural_counts_json,
       outcome_harness_context_included = 0,
       historical_effectiveness_influenced_intervention = 0,
       cognitive_metadata_json = NULL,
@@ -3315,7 +3371,18 @@ export async function startGenerationEvent(
       userId,
       input.client_generation_id,
       input.situation_id ?? null,
+      input.plan_id ?? null,
+      input.task_id ?? null,
       input.generation_type,
+      input.flow_type ?? null,
+      input.flow_status ?? "running",
+      input.model_role ?? null,
+      input.quota_tier ?? null,
+      input.quota_usage_type ?? null,
+      input.web_search_decision_reason ?? null,
+      boolToInt(input.safety_route_triggered) ?? 0,
+      input.safety_route_type ?? null,
+      structuralCountsJson(input.structural_counts),
       now,
       input.retry_count ?? 0,
       input.is_qa ? 1 : 0,
@@ -3344,10 +3411,17 @@ export async function completeGenerationEvent(
   clientGenerationId: string,
   input: {
     status: Exclude<GenerationStatus, "running">;
+    flowStatus?: GenerationFlowStatus | null;
+    planId?: number | null;
+    taskId?: number | null;
     model?: string | null;
+    modelRole?: string | null;
     inputTokens?: number | null;
+    cachedInputTokens?: number | null;
     outputTokens?: number | null;
+    totalTokens?: number | null;
     estimatedCost?: number | null;
+    estimatedCostUsd?: number | null;
     stateDetected?: string | null;
     interventionType?: string | null;
     modelUsedByStage?: Record<string, string> | null;
@@ -3358,6 +3432,16 @@ export async function completeGenerationEvent(
     tasksCreatedCount?: number | null;
     memoryItemsUsed?: number | null;
     webSearchUsed?: boolean | null;
+    webSearchCallCount?: number | null;
+    webSearchDecisionReason?: WebSearchDecisionReason | null;
+    usedEvaluator?: boolean | null;
+    evaluatorTriggeredRevision?: boolean | null;
+    safetyRouteTriggered?: boolean | null;
+    safetyRouteType?: SafetyRouteType | null;
+    quotaTier?: PlanTier | null;
+    quotaUsageType?: UsageType | null;
+    errorMessageSanitized?: string | null;
+    structuralCounts?: GenerationStructuralCounts | null;
     outcomeHarnessContextIncluded?: boolean | null;
     historicalEffectivenessInfluencedIntervention?: boolean | null;
     cognitiveMetadata?: CognitiveMetadata | null;
@@ -3373,10 +3457,17 @@ export async function completeGenerationEvent(
       completed_at = ?,
       duration_ms = ?,
       status = ?,
+      flow_status = COALESCE(?, flow_status),
+      plan_id = COALESCE(?, plan_id),
+      task_id = COALESCE(?, task_id),
       model = COALESCE(?, model),
+      model_role = COALESCE(?, model_role),
       input_tokens = COALESCE(?, input_tokens),
+      cached_input_tokens = COALESCE(?, cached_input_tokens),
       output_tokens = COALESCE(?, output_tokens),
+      total_tokens = COALESCE(?, total_tokens),
       estimated_cost = COALESCE(?, estimated_cost),
+      estimated_cost_usd = COALESCE(?, estimated_cost_usd),
       state_detected = COALESCE(?, state_detected),
       intervention_type = COALESCE(?, intervention_type),
       model_used_by_stage_json = COALESCE(?, model_used_by_stage_json),
@@ -3387,6 +3478,16 @@ export async function completeGenerationEvent(
       tasks_created_count = COALESCE(?, tasks_created_count),
       memory_items_used = COALESCE(?, memory_items_used),
       web_search_used = COALESCE(?, web_search_used),
+      web_search_call_count = COALESCE(?, web_search_call_count),
+      web_search_decision_reason = COALESCE(?, web_search_decision_reason),
+      used_evaluator = COALESCE(?, used_evaluator),
+      evaluator_triggered_revision = COALESCE(?, evaluator_triggered_revision),
+      safety_route_triggered = COALESCE(?, safety_route_triggered),
+      safety_route_type = COALESCE(?, safety_route_type),
+      quota_tier = COALESCE(?, quota_tier),
+      quota_usage_type = COALESCE(?, quota_usage_type),
+      error_message_sanitized = COALESCE(?, error_message_sanitized),
+      structural_counts_json = COALESCE(?, structural_counts_json),
       outcome_harness_context_included = COALESCE(?, outcome_harness_context_included),
       historical_effectiveness_influenced_intervention = COALESCE(?, historical_effectiveness_influenced_intervention),
       cognitive_metadata_json = COALESCE(?, cognitive_metadata_json),
@@ -3397,10 +3498,17 @@ export async function completeGenerationEvent(
       now,
       durationMs,
       input.status,
+      input.flowStatus ?? null,
+      input.planId ?? null,
+      input.taskId ?? null,
       input.model ?? null,
+      input.modelRole ?? null,
       input.inputTokens ?? null,
+      input.cachedInputTokens ?? null,
       input.outputTokens ?? null,
+      input.totalTokens ?? null,
       input.estimatedCost ?? null,
+      input.estimatedCostUsd ?? null,
       input.stateDetected ?? null,
       input.interventionType ?? null,
       input.modelUsedByStage ? JSON.stringify(input.modelUsedByStage) : null,
@@ -3417,6 +3525,16 @@ export async function completeGenerationEvent(
       input.tasksCreatedCount ?? null,
       input.memoryItemsUsed ?? null,
       typeof input.webSearchUsed === "boolean" ? (input.webSearchUsed ? 1 : 0) : null,
+      input.webSearchCallCount ?? null,
+      input.webSearchDecisionReason ?? null,
+      boolToInt(input.usedEvaluator),
+      boolToInt(input.evaluatorTriggeredRevision),
+      boolToInt(input.safetyRouteTriggered),
+      input.safetyRouteType ?? null,
+      input.quotaTier ?? null,
+      input.quotaUsageType ?? null,
+      input.errorMessageSanitized ?? null,
+      structuralCountsJson(input.structuralCounts),
       typeof input.outcomeHarnessContextIncluded === "boolean"
         ? input.outcomeHarnessContextIncluded
           ? 1

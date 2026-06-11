@@ -8,6 +8,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import {
   assertCanUseFeature,
+  canUseFeature,
   canUseFirstSituationFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
@@ -18,6 +19,7 @@ import {
   inferOutcomeFromUserMessage,
 } from "@/lib/cognitive-operating-layer";
 import { generateInterviewQuestion } from "@/lib/flowpath-ai";
+import { sanitizeGenerationError } from "@/lib/generation-observability";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
@@ -42,6 +44,7 @@ import {
 } from "@/lib/repository";
 import { intakeAnswerInputSchema } from "@/lib/schemas";
 import { logGenerationTiming } from "@/lib/server-telemetry";
+import { safetyRouteFromText } from "@/lib/safety-routing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,19 +99,46 @@ export async function POST(request: Request, context: Context) {
     const firstSituationFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
       isQa,
     });
-    if (!firstSituationFlowPass) {
-      await assertCanUseFeature(user.id, "lightweight_assist");
-    }
-
-    const session = await getOrCreateIntakeSession(user.id, situationId);
+    const usageDecision = await canUseFeature(user.id, "lightweight_assist");
+    const safetyDecision = safetyRouteFromText({
+      text: input.content,
+      situation,
+      urgency: situation.urgency,
+    });
     await markRunningGenerationAsRetry(user.id, "intake", situationId);
     await startGenerationEvent(user.id, {
       client_generation_id: clientGenerationId,
       generation_type: "intake",
       situation_id: situationId,
+      flow_type: "followup_intake_question",
+      flow_status: "running",
+      quota_tier: usageDecision.planTier,
+      quota_usage_type: "lightweight_assist",
+      safety_route_triggered: safetyDecision.triggered,
+      safety_route_type: safetyDecision.routeType,
+      structural_counts: {
+        user_answer_chars: input.content.length,
+        retry_count: input.retry_count,
+        first_flow_pass: firstSituationFlowPass,
+      },
       retry_count: input.retry_count,
       is_qa: isQa,
     });
+    if (!firstSituationFlowPass && !usageDecision.allowed) {
+      await completeGenerationEvent(user.id, clientGenerationId, {
+        status: "error",
+        flowStatus: "quota_blocked",
+        quotaTier: usageDecision.planTier,
+        quotaUsageType: "lightweight_assist",
+        safetyRouteTriggered: safetyDecision.triggered,
+        safetyRouteType: safetyDecision.routeType,
+        errorCategory: "quota_exceeded",
+        errorMessageSanitized: "The user reached the lightweight assist quota.",
+      });
+      await assertCanUseFeature(user.id, "lightweight_assist");
+    }
+
+    const session = await getOrCreateIntakeSession(user.id, situationId);
     await addIntakeMessage(user.id, session.id, "user", input.content, {
       clientMessageId: input.client_message_id,
       isQa,
@@ -223,6 +253,7 @@ export async function POST(request: Request, context: Context) {
     let output;
     let usage;
     let model: string | undefined;
+    let modelRole: string | null | undefined;
     const modelStartedAt = Date.now();
     try {
       const generated = await generateInterviewQuestion({
@@ -236,6 +267,7 @@ export async function POST(request: Request, context: Context) {
       output = generated.output;
       usage = generated.usage;
       model = generated.model;
+      modelRole = generated.modelRole;
       logGenerationTiming({
         route: "situations.messages",
         generationType: "intake",
@@ -254,6 +286,7 @@ export async function POST(request: Request, context: Context) {
         messageCount: messagesAfterUser.length,
       });
     } catch (generationError) {
+      const sanitized = sanitizeGenerationError(generationError);
       logGenerationTiming({
         route: "situations.messages",
         generationType: "intake",
@@ -266,22 +299,26 @@ export async function POST(request: Request, context: Context) {
         retryCount: input.retry_count,
         elapsedMs: Date.now() - routeStartedAt,
         phaseMs: Date.now() - modelStartedAt,
-        errorCategory: classifyGenerationError(generationError),
+        errorCategory: sanitized.errorCategory,
         errorName:
           generationError instanceof Error ? generationError.name : typeof generationError,
       });
       await completeGenerationEvent(user.id, clientGenerationId, {
         status: "error",
-        errorCategory: classifyGenerationError(generationError),
+        flowStatus: "error",
+        errorCategory: sanitized.errorCategory,
+        errorMessageSanitized: sanitized.errorMessageSanitized,
+        safetyRouteTriggered: safetyDecision.triggered,
+        safetyRouteType: safetyDecision.routeType,
       });
       throw generationError;
-    }
-    if (!firstSituationFlowPass) {
-      await incrementUsage(user.id, "lightweight_assist", usage);
     }
     if (await isGenerationAbandoned(user.id, clientGenerationId)) {
       await cancelGenerationEvent(user.id, clientGenerationId);
       throw new ApiRequestError("Generation was canceled. No new intake result was saved.", 409, "generation_canceled");
+    }
+    if (!firstSituationFlowPass) {
+      await incrementUsage(user.id, "lightweight_assist", usage);
     }
 
     const persistStartedAt = Date.now();
@@ -328,9 +365,14 @@ export async function POST(request: Request, context: Context) {
     });
     await completeGenerationEvent(user.id, clientGenerationId, {
       status: "success",
+      flowStatus: "success",
       model,
+      modelRole,
       inputTokens: usage.inputTokens,
+      cachedInputTokens: usage.cachedInputTokens,
       outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      estimatedCostUsd: usage.estimatedCostUsd,
       stateDetected: cognitiveContext.stateDetection.primary_state,
       interventionType: cognitiveContext.intervention.intervention_type,
       modelUsedByStage: { interviewer: model ?? "unknown" },
@@ -341,6 +383,19 @@ export async function POST(request: Request, context: Context) {
       tasksCreatedCount: 0,
       memoryItemsUsed: cognitiveContext.memorySelection.selected_memories.length,
       webSearchUsed: false,
+      webSearchDecisionReason: "not_needed",
+      usedEvaluator: false,
+      evaluatorTriggeredRevision: false,
+      safetyRouteTriggered: safetyDecision.triggered,
+      safetyRouteType: safetyDecision.routeType,
+      quotaTier: usageDecision.planTier,
+      quotaUsageType: "lightweight_assist",
+      structuralCounts: {
+        message_count: messagesAfterUser.length,
+        inferred_context_items_created: output.inferred_context_items.length,
+        question_chars: output.question.length,
+        current_stage_ready: output.current_stage === "ready_to_generate",
+      },
       cognitiveMetadata: buildCognitiveMetadata({
         context: cognitiveContext,
         evaluator: null,

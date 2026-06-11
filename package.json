@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "tsx --test \"src/**/*.test.ts\"",
+    "generation:report": "tsx scripts/flowpath-generation-report.ts",
     "db:init": "node scripts/init-db.mjs",
     "db:seed": "node scripts/seed-db.mjs",
     "db:setup": "npm run db:init && npm run db:seed"

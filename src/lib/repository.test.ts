@@ -642,3 +642,59 @@ test("ignored suggested actions are detected lazily without user-facing spam", a
     true,
   );
 });
+
+test("generation events persist privacy-safe observability metadata", async () => {
+  const clientGenerationId = `test-generation-${Date.now()}`;
+  await repository.startGenerationEvent(1, {
+    client_generation_id: clientGenerationId,
+    generation_type: "operator_plan",
+    flow_type: "next_move_plan",
+    flow_status: "running",
+    model_role: "plan_standard",
+    quota_tier: "free",
+    quota_usage_type: "next_move_plan",
+    web_search_decision_reason: "not_needed",
+    safety_route_triggered: false,
+    structural_counts: {
+      message_count: 2,
+      task_candidate_count: 3,
+    },
+    is_qa: true,
+  });
+
+  await repository.completeGenerationEvent(1, clientGenerationId, {
+    status: "success",
+    flowStatus: "success",
+    model: "test-model",
+    modelRole: "plan_standard",
+    inputTokens: 100,
+    cachedInputTokens: 25,
+    outputTokens: 50,
+    totalTokens: 150,
+    estimatedCostUsd: 0.001,
+    webSearchCallCount: 0,
+    webSearchDecisionReason: "not_needed",
+    usedEvaluator: true,
+    evaluatorTriggeredRevision: false,
+    safetyRouteTriggered: false,
+    quotaTier: "free",
+    quotaUsageType: "next_move_plan",
+    structuralCounts: {
+      message_count: 2,
+      task_candidate_count: 3,
+    },
+  });
+
+  const event = await repository.getGenerationEvent(1, clientGenerationId);
+  assert.equal(event?.flow_type, "next_move_plan");
+  assert.equal(event?.flow_status, "success");
+  assert.equal(event?.model_role, "plan_standard");
+  assert.equal(event?.cached_input_tokens, 25);
+  assert.equal(event?.total_tokens, 150);
+  assert.equal(event?.estimated_cost_usd, 0.001);
+  assert.equal(event?.used_evaluator, true);
+  assert.equal(event?.evaluator_triggered_revision, false);
+  assert.equal(event?.safety_route_triggered, false);
+  assert.equal(event?.quota_usage_type, "next_move_plan");
+  assert.doesNotMatch(event?.structural_counts_json ?? "", /test-generation|user text/i);
+});

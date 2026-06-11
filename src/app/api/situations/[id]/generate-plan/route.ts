@@ -19,6 +19,7 @@ import {
 } from "@/lib/cognitive-operating-layer";
 import type { CognitiveMetadata } from "@/lib/cognitive-schemas";
 import { generateNextMovePlan } from "@/lib/flowpath-ai";
+import { sanitizeGenerationError } from "@/lib/generation-observability";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
@@ -42,6 +43,11 @@ import {
   startGenerationEvent,
   updateIntakeSession,
 } from "@/lib/repository";
+import {
+  buildSafetyRoutedPlan,
+  safetyRouteFromText,
+} from "@/lib/safety-routing";
+import type { WebSearchDecisionReason } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,17 +84,45 @@ export async function POST(request: Request, context: Context) {
       isQa,
     });
     const usageDecision = await canUseFeature(user.id, "next_move_plan");
-    if (!usageDecision.allowed && !firstFlowPass) {
-      await assertCanUseFeature(user.id, "next_move_plan");
-    }
+    const initialSafetyDecision = safetyRouteFromText({
+      text: situation.description || situation.title,
+      situation,
+      urgency: situation.urgency,
+    });
     await markRunningGenerationAsRetry(user.id, "operator_plan", situationId);
     await startGenerationEvent(user.id, {
       client_generation_id: clientGenerationId,
       generation_type: "operator_plan",
       situation_id: situationId,
+      flow_type: "next_move_plan",
+      flow_status: "running",
+      quota_tier: usageDecision.planTier,
+      quota_usage_type: "next_move_plan",
+      safety_route_triggered: initialSafetyDecision.triggered,
+      safety_route_type: initialSafetyDecision.routeType,
+      web_search_decision_reason: canUseWebSearchForTier(usageDecision.planTier)
+        ? "not_needed"
+        : "unavailable_for_tier",
+      structural_counts: {
+        retry_count: retryCount,
+        first_flow_pass: firstFlowPass,
+      },
       retry_count: retryCount,
       is_qa: isQa,
     });
+    if (!usageDecision.allowed && !firstFlowPass) {
+      await completeGenerationEvent(user.id, clientGenerationId, {
+        status: "error",
+        flowStatus: "quota_blocked",
+        quotaTier: usageDecision.planTier,
+        quotaUsageType: "next_move_plan",
+        safetyRouteTriggered: initialSafetyDecision.triggered,
+        safetyRouteType: initialSafetyDecision.routeType,
+        errorCategory: "quota_exceeded",
+        errorMessageSanitized: "The user reached the Next Move plan quota.",
+      });
+      await assertCanUseFeature(user.id, "next_move_plan");
+    }
 
     const session = await getLatestIntakeSession(user.id, situationId);
     const [profile, inferredContextItems, messages, openTasks, recentCheckIns, recentPlans] =
@@ -109,6 +143,11 @@ export async function POST(request: Request, context: Context) {
       latestUserMessage?.content ||
       situation.description ||
       situation.title;
+    const safetyDecision = safetyRouteFromText({
+      text: userMessage,
+      situation,
+      urgency: situation.urgency,
+    });
     const intakeRouting = buildIntakeRoutingMetadata(situation);
     const baseCognitiveContext = buildCognitivePlanContext({
       userMessage,
@@ -147,50 +186,81 @@ export async function POST(request: Request, context: Context) {
 
     let plan;
     let model;
+    let modelRole: string | null | undefined;
     let usage;
+    let webSearchCallCount = 0;
+    let webSearchDecisionReason: WebSearchDecisionReason =
+      canUseWebSearchForTier(usageDecision.planTier) ? "not_needed" : "unavailable_for_tier";
+    let deterministicSafetyRouted = false;
     let cognitiveMetadata: CognitiveMetadata | undefined;
     try {
-      const generated = await generateNextMovePlan(
-        {
-          profile: compactProfile,
-          situation,
-          session,
-          messages,
-          openTasks,
-          recentCheckIns,
-          recentPlans,
-        },
-        {
-          allowWebSearch: canUseWebSearchForTier(usageDecision.planTier),
-          cognitiveContext,
-          sourceMessageId: latestUserMessage ? String(latestUserMessage.id) : null,
-        },
-      );
-      plan = generated.plan;
-      model = generated.model;
-      usage = generated.usage;
-      cognitiveMetadata = generated.cognitiveMetadata;
+      if (safetyDecision.planBehavior === "human_help_only") {
+        deterministicSafetyRouted = true;
+        plan = buildSafetyRoutedPlan(situation, safetyDecision);
+        model = "deterministic-safety-router";
+        modelRole = "safety_classifier";
+        usage = {};
+        webSearchDecisionReason = "blocked_by_policy";
+      } else {
+        const generated = await generateNextMovePlan(
+          {
+            profile: compactProfile,
+            situation,
+            session,
+            messages,
+            openTasks,
+            recentCheckIns,
+            recentPlans,
+          },
+          {
+            allowWebSearch: canUseWebSearchForTier(usageDecision.planTier),
+            cognitiveContext,
+            sourceMessageId: latestUserMessage ? String(latestUserMessage.id) : null,
+          },
+        );
+        plan = generated.plan;
+        model = generated.model;
+        modelRole = generated.modelRole;
+        usage = generated.usage;
+        webSearchCallCount = generated.webSearchCallCount;
+        webSearchDecisionReason = generated.webSearchDecisionReason;
+        cognitiveMetadata = generated.cognitiveMetadata;
+      }
     } catch (generationError) {
+      const sanitized = sanitizeGenerationError(generationError);
       await completeGenerationEvent(user.id, clientGenerationId, {
         status: "error",
-        errorCategory: classifyGenerationError(generationError),
+        flowStatus: "error",
+        errorCategory: sanitized.errorCategory,
+        errorMessageSanitized: sanitized.errorMessageSanitized,
+        safetyRouteTriggered: safetyDecision.triggered,
+        safetyRouteType: safetyDecision.routeType,
       });
       throw generationError;
     }
-    await incrementUsage(user.id, "next_move_plan", usage);
     if (await isGenerationAbandoned(user.id, clientGenerationId)) {
       await completeGenerationEvent(user.id, clientGenerationId, {
         status: "canceled",
+        flowStatus: "canceled",
         model,
+        modelRole,
         inputTokens: usage.inputTokens,
+        cachedInputTokens: usage.cachedInputTokens,
         outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
         errorCategory: "client_canceled",
+        safetyRouteTriggered: safetyDecision.triggered,
+        safetyRouteType: safetyDecision.routeType,
       });
       throw new ApiRequestError(
         "Generation was canceled. No plan, tasks, or memory were created.",
         409,
         "generation_canceled",
       );
+    }
+    if (!deterministicSafetyRouted) {
+      await incrementUsage(user.id, "next_move_plan", usage);
     }
 
     if (session) {
@@ -382,9 +452,15 @@ export async function POST(request: Request, context: Context) {
     });
     await completeGenerationEvent(user.id, clientGenerationId, {
       status: "success",
+      flowStatus: deterministicSafetyRouted ? "safety_routed" : "success",
+      planId: storedPlan.id,
       model,
+      modelRole,
       inputTokens: usage.inputTokens,
+      cachedInputTokens: usage.cachedInputTokens,
       outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      estimatedCostUsd: usage.estimatedCostUsd,
       stateDetected: cognitiveContext.stateDetection.primary_state,
       interventionType: cognitiveContext.intervention.intervention_type,
       modelUsedByStage: cognitiveMetadata?.model_used_by_stage,
@@ -396,6 +472,23 @@ export async function POST(request: Request, context: Context) {
       tasksCreatedCount: plan.task_candidates.length,
       memoryItemsUsed: cognitiveContext.memorySelection.selected_memories.length,
       webSearchUsed: cognitiveMetadata?.web_search_used ?? false,
+      webSearchCallCount,
+      webSearchDecisionReason,
+      usedEvaluator: Boolean(cognitiveMetadata?.evaluator),
+      evaluatorTriggeredRevision: cognitiveMetadata?.response_rewritten ?? false,
+      safetyRouteTriggered: safetyDecision.triggered,
+      safetyRouteType: safetyDecision.routeType,
+      quotaTier: usageDecision.planTier,
+      quotaUsageType: "next_move_plan",
+      structuralCounts: {
+        message_count: messages.length,
+        open_task_count: openTasks.length,
+        recent_plan_count: recentPlans.length,
+        task_candidate_count: plan.task_candidates.length,
+        inferred_context_items_count: plan.inferred_context_items.length,
+        context_used_count: plan.context_used.length,
+        deterministic_safety_routed: deterministicSafetyRouted,
+      },
       outcomeHarnessContextIncluded: historicalEffectiveness.hasMeaningfulSignal,
       historicalEffectivenessInfluencedIntervention:
         Boolean(historicalEffectiveness.advisoryText),
@@ -406,14 +499,4 @@ export async function POST(request: Request, context: Context) {
   } catch (error) {
     return errorResponse(error, "Could not generate next move plan.");
   }
-}
-
-function classifyGenerationError(error: unknown) {
-  if (error instanceof SyntaxError) return "schema_parse_error";
-  if (error instanceof Error && /empty/i.test(error.message)) return "empty_response";
-  if (error instanceof Error && /schema|parse|zod/i.test(error.message)) {
-    return "schema_parse_error";
-  }
-  if (error instanceof Error && /timeout/i.test(error.message)) return "timeout";
-  return "model_or_network_error";
 }

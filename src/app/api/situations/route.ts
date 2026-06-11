@@ -2,14 +2,17 @@ import { ApiRequestError, dataResponse, errorResponse, readJson } from "@/lib/ap
 import { requireUser } from "@/lib/auth";
 import {
   assertCanUseFeature,
+  canUseFeature,
   canUseFirstSituationFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
 import { generateFirstIntakePlan } from "@/lib/flowpath-ai";
+import { sanitizeGenerationError } from "@/lib/generation-observability";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   addIntakeMessage,
+  completeGenerationEvent,
   createOutcomeHarnessEvent,
   createSituation,
   deleteSituation,
@@ -17,6 +20,7 @@ import {
   getOrCreateIntakeSession,
   listIntakeMessages,
   listSituations,
+  startGenerationEvent,
 } from "@/lib/repository";
 import { situationInputSchema } from "@/lib/schemas";
 import type { FirstIntakePlan } from "@/lib/situation-routing";
@@ -40,14 +44,71 @@ async function firstIntakePlanForNewSituation(
   const firstFlowPass = await canUseFirstSituationFlow(userId, situation.id, {
     isQa: Boolean(situation.is_qa),
   });
+  const usageDecision = await canUseFeature(userId, "lightweight_assist");
+  const clientGenerationId = `server-first-intake-${crypto.randomUUID()}`;
+  await startGenerationEvent(userId, {
+    client_generation_id: clientGenerationId,
+    generation_type: "intake",
+    situation_id: situation.id,
+    flow_type: "first_intake_question",
+    flow_status: "running",
+    quota_tier: usageDecision.planTier,
+    quota_usage_type: "lightweight_assist",
+    structural_counts: {
+      situation_title_chars: situation.title.length,
+      situation_description_chars: situation.description.length,
+      first_flow_pass: firstFlowPass,
+    },
+    is_qa: Boolean(situation.is_qa),
+  });
   if (!firstFlowPass) {
-    await assertCanUseFeature(userId, "lightweight_assist");
+    if (!usageDecision.allowed) {
+      await completeGenerationEvent(userId, clientGenerationId, {
+        status: "error",
+        flowStatus: "quota_blocked",
+        quotaTier: usageDecision.planTier,
+        quotaUsageType: "lightweight_assist",
+        errorCategory: "quota_exceeded",
+        errorMessageSanitized: "The user reached the lightweight assist quota.",
+      });
+      await assertCanUseFeature(userId, "lightweight_assist");
+    }
   }
 
-  const generated = await generateFirstIntakePlan(situation);
+  let generated;
+  try {
+    generated = await generateFirstIntakePlan(situation);
+  } catch (error) {
+    const sanitized = sanitizeGenerationError(error);
+    await completeGenerationEvent(userId, clientGenerationId, {
+      status: "error",
+      flowStatus: "error",
+      errorCategory: sanitized.errorCategory,
+      errorMessageSanitized: sanitized.errorMessageSanitized,
+    });
+    throw error;
+  }
   if (!firstFlowPass && generated.usage) {
     await incrementUsage(userId, "lightweight_assist", generated.usage);
   }
+  await completeGenerationEvent(userId, clientGenerationId, {
+    status: "success",
+    flowStatus: "success",
+    model: generated.model,
+    modelRole: generated.modelRole,
+    inputTokens: generated.usage?.inputTokens,
+    cachedInputTokens: generated.usage?.cachedInputTokens,
+    outputTokens: generated.usage?.outputTokens,
+    totalTokens: generated.usage?.totalTokens,
+    estimatedCostUsd: generated.usage?.estimatedCostUsd,
+    quotaTier: usageDecision.planTier,
+    quotaUsageType: "lightweight_assist",
+    structuralCounts: {
+      question_chars: generated.plan.question.length,
+      first_flow_pass: firstFlowPass,
+      genericity_risk_medium: generated.plan.genericityRisk === "medium",
+    },
+  });
 
   return {
     plan: generated.plan,

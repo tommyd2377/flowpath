@@ -15,8 +15,15 @@ import {
 } from "./cognitive-operating-layer";
 import { DEFAULT_APP_TIMEZONE } from "./env";
 import {
+  countWebSearchCalls,
+  webSearchDecisionReason,
+} from "./generation-observability";
+import {
   estimateModelCostDollars,
   getModelForRole,
+  selectModelForGeneration,
+  type GenerationModelSelection,
+  type ModelRole,
   type StageUsage,
 } from "./model-routing";
 import {
@@ -478,24 +485,46 @@ export type StrategistContext = {
 
 export type AiUsageMetadata = {
   inputTokens?: number;
+  cachedInputTokens?: number;
   outputTokens?: number;
+  totalTokens?: number;
   estimatedCostCents?: number;
+  estimatedCostUsd?: number | null;
 };
 
 function responseUsageMetadata(usage: ResponseUsage | undefined): AiUsageMetadata {
+  const inputTokens = usage?.input_tokens;
+  const outputTokens = usage?.output_tokens;
+  const cachedInputTokens = Number(
+    (usage as { input_tokens_details?: { cached_tokens?: unknown } } | undefined)
+      ?.input_tokens_details?.cached_tokens,
+  );
   return {
-    inputTokens: usage?.input_tokens,
-    outputTokens: usage?.output_tokens,
+    inputTokens,
+    cachedInputTokens: Number.isFinite(cachedInputTokens)
+      ? cachedInputTokens
+      : undefined,
+    outputTokens,
+    totalTokens: usage?.total_tokens ?? ((inputTokens ?? 0) + (outputTokens ?? 0) || undefined),
   };
 }
 
 function combineUsage(...items: AiUsageMetadata[]): AiUsageMetadata {
+  const estimatedCostUsd = items.some((item) => item.estimatedCostUsd != null)
+    ? items.reduce((total, item) => total + (item.estimatedCostUsd ?? 0), 0)
+    : undefined;
   return {
     inputTokens: items.reduce((total, item) => total + (item.inputTokens ?? 0), 0),
+    cachedInputTokens: items.reduce(
+      (total, item) => total + (item.cachedInputTokens ?? 0),
+      0,
+    ),
     outputTokens: items.reduce((total, item) => total + (item.outputTokens ?? 0), 0),
+    totalTokens: items.reduce((total, item) => total + (item.totalTokens ?? 0), 0),
     estimatedCostCents: items.some((item) => item.estimatedCostCents != null)
       ? items.reduce((total, item) => total + (item.estimatedCostCents ?? 0), 0)
       : undefined,
+    estimatedCostUsd,
   };
 }
 
@@ -534,11 +563,7 @@ function extractOutputText(response: unknown) {
 }
 
 function responseUsedWebSearch(response: unknown) {
-  try {
-    return JSON.stringify(response).includes("web_search_call");
-  } catch {
-    return false;
-  }
+  return countWebSearchCalls(response) > 0;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -1112,6 +1137,7 @@ async function createStructuredResponse({
   maxToolCalls,
   maxOutputTokens,
   model: requestedModel,
+  modelRole,
 }: {
   system: string;
   user: unknown;
@@ -1123,6 +1149,7 @@ async function createStructuredResponse({
   maxToolCalls?: number;
   maxOutputTokens: number;
   model?: string;
+  modelRole?: ModelRole;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY.");
@@ -1161,8 +1188,10 @@ async function createStructuredResponse({
   return {
     outputText,
     model,
+    modelRole: modelRole ?? null,
     usage: responseUsageMetadata(response.usage),
     usedWebSearch: responseUsedWebSearch(response),
+    webSearchCallCount: countWebSearchCalls(response),
   };
 }
 
@@ -1170,6 +1199,7 @@ export type FirstIntakeGenerationResult = {
   plan: FirstIntakePlan;
   source: "ai";
   model?: string;
+  modelRole?: ModelRole | null;
   usage?: AiUsageMetadata;
 };
 
@@ -1288,6 +1318,12 @@ export function parseFirstIntakeQuestionOutput(
 export async function generateFirstIntakePlan(
   situation: Situation,
 ): Promise<FirstIntakeGenerationResult> {
+  const selection = selectModelForGeneration({
+    flowType: "first_intake_question",
+    situation,
+    urgency: situation.urgency,
+    promptApproxChars: JSON.stringify(buildFirstIntakeQuestionPromptInput(situation)).length,
+  });
   const { outputText, model, usage } = await createStructuredResponse({
     system: firstIntakeQuestionSystemPrompt,
     name: "flowpath_first_intake_question",
@@ -1295,12 +1331,15 @@ export async function generateFirstIntakePlan(
     schema: firstIntakeQuestionJsonSchema,
     user: buildFirstIntakeQuestionPromptInput(situation),
     maxOutputTokens: FIRST_INTAKE_QUESTION_MAX_OUTPUT_TOKENS,
+    model: selection.model,
+    modelRole: selection.modelRole,
   });
 
   return {
     plan: parseFirstIntakeQuestionOutput(outputText, situation),
     source: "ai",
     model,
+    modelRole: selection.modelRole,
     usage,
   };
 }
@@ -1310,6 +1349,23 @@ export async function generateInterviewQuestion(
   options: { cognitiveContext?: CognitivePlanContext } = {},
 ) {
   const route = classifySituationDomain(context.situation);
+  const selection = selectModelForGeneration({
+    flowType: "followup_intake_question",
+    situation: context.situation,
+    urgency: context.situation.urgency,
+    safetyRouteTriggered:
+      (options.cognitiveContext?.stateDetection.risk_flags.length ?? 0) > 0,
+    webSearchNeeded: false,
+    constraintCount:
+      Object.keys(context.profile.context_constraints ?? {}).length +
+      context.messages.length,
+    promptApproxChars:
+      JSON.stringify({
+        situation: context.situation,
+        session: context.session,
+        messages: context.messages,
+      }).length,
+  });
   const { outputText, model, usage } = await createStructuredResponse({
     system: interviewerSystemPrompt,
     name: "flowpath_interviewer_turn",
@@ -1347,6 +1403,8 @@ export async function generateInterviewQuestion(
       profile: context.profile,
     },
     maxOutputTokens: INTERVIEW_MAX_OUTPUT_TOKENS,
+    model: selection.model,
+    modelRole: selection.modelRole,
   });
 
   return {
@@ -1362,6 +1420,7 @@ export async function generateInterviewQuestion(
       },
     ),
     model,
+    modelRole: selection.modelRole,
     usage,
   };
 }
@@ -1376,8 +1435,12 @@ export async function generateNextMovePlan(
 ): Promise<{
   plan: NextMovePlan;
   model: string;
+  modelRole: ModelRole | null;
   usage: AiUsageMetadata;
+  webSearchCallCount: number;
+  webSearchDecisionReason: ReturnType<typeof webSearchDecisionReason>;
   cognitiveMetadata?: ReturnType<typeof buildCognitiveMetadata>;
+  modelSelection?: GenerationModelSelection;
 }> {
   const route = classifySituationDomain(context.situation);
   const cognitiveContext = options.cognitiveContext;
@@ -1386,12 +1449,27 @@ export async function generateNextMovePlan(
     (cognitiveContext?.webSearchDecision.should_use_web_search ?? true);
   const tools = getOpenAIWebSearchTools({ allowWebSearch });
   const include = getOpenAIWebSearchInclude({ allowWebSearch });
-  const generationModel = cognitiveContext?.useEscalationModel
-    ? getModelForRole("escalation_model")
-    : getModelForRole("generator_model");
+  const generationSelection = selectModelForGeneration({
+    flowType: "next_move_plan",
+    situation: context.situation,
+    urgency: context.situation.urgency,
+    safetyRouteTriggered:
+      (cognitiveContext?.stateDetection.risk_flags.length ?? 0) > 0,
+    safetyConfidence:
+      (cognitiveContext?.stateDetection.risk_flags.length ?? 0) > 0
+        ? "medium"
+        : "none",
+    webSearchNeeded: allowWebSearch,
+    constraintCount:
+      (cognitiveContext?.memorySelection.selected_memories.length ?? 0) +
+      context.messages.length,
+    competingPriorityCount: context.openTasks.length,
+    promptApproxChars: JSON.stringify(context).length,
+  });
 
   const baseInstruction = [
     "Generate an operator_plan the user can act on today. Be careful and practical for high-stakes situations. Do not overclaim certainty.",
+    "Keep the answer compact and specific. Avoid filler phrases such as take a step back, reflect on your values, put yourself out there, break it down, just start, stay consistent, or make a list unless tied to a concrete user-specific action.",
     "The generated plan must include generation_mode operator_plan, situation_read, likely_bottleneck, key_constraints, first_10_minute_action, context_used, task_candidates, assumptions, and confidence_level.",
     "Use the detected domain and confidence below. Ask domain-appropriate questions only in follow_up_questions_if_any, and do not let stale or previous-situation categories shape this plan.",
     "Use every prior intake answer; do not ask follow-up questions for details already present in the situation, selected context, session summary, or messages.",
@@ -1515,7 +1593,8 @@ export async function generateNextMovePlan(
     include,
     maxToolCalls: tools ? 3 : undefined,
     maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
-    model: generationModel,
+    model: generationSelection.model,
+    modelRole: generationSelection.modelRole,
   });
 
   let plan = parsePlan(first.outputText);
@@ -1527,10 +1606,19 @@ export async function generateNextMovePlan(
 
   if (cognitiveContext && evaluator && !evaluator.passes) {
     responseRewritten = true;
-    const revisionModel =
-      evaluator.unsafe_or_overconfident || evaluator.score < 0.55
-        ? getModelForRole("escalation_model")
-        : generationModel;
+    const revisionSelection = selectModelForGeneration({
+      flowType: "plan_revision",
+      situation: context.situation,
+      urgency: context.situation.urgency,
+      safetyRouteTriggered:
+        evaluator.unsafe_or_overconfident ||
+        (cognitiveContext.stateDetection.risk_flags.length ?? 0) > 0,
+      safetyConfidence: evaluator.unsafe_or_overconfident ? "high" : "medium",
+      priorValidationFailed: true,
+      evaluatorRequestedRevision: true,
+      evaluatorScore: evaluator.score,
+      promptApproxChars: JSON.stringify({ context, prior_plan: plan, evaluator }).length,
+    });
     revision = await createStructuredResponse({
       system: strategistSystemPrompt,
       name: "flowpath_next_move_plan_revision",
@@ -1544,7 +1632,8 @@ export async function generateNextMovePlan(
       tools: undefined,
       include: undefined,
       maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
-      model: revisionModel,
+      model: revisionSelection.model,
+      modelRole: revisionSelection.modelRole,
     });
     plan = parsePlan(revision.outputText);
     evaluator = evaluateNextMovePlan(plan, cognitiveContext);
@@ -1564,6 +1653,7 @@ export async function generateNextMovePlan(
     generator: {
       model: first.model,
       inputTokens: first.usage.inputTokens,
+      cachedInputTokens: first.usage.cachedInputTokens,
       outputTokens: first.usage.outputTokens,
     },
   };
@@ -1575,12 +1665,16 @@ export async function generateNextMovePlan(
     costInput.revision = {
       model: revision.model,
       inputTokens: revision.usage.inputTokens,
+      cachedInputTokens: revision.usage.cachedInputTokens,
       outputTokens: revision.usage.outputTokens,
     };
   }
 
   const totalEstimatedCost = estimateModelCostDollars(costInput);
+  usage.estimatedCostUsd = totalEstimatedCost;
   const webSearchUsed = first.usedWebSearch || Boolean(revision?.usedWebSearch);
+  const webSearchCallCount =
+    first.webSearchCallCount + (revision?.webSearchCallCount ?? 0);
   const cognitiveMetadata =
     cognitiveContext &&
     buildCognitiveMetadata({
@@ -1597,7 +1691,14 @@ export async function generateNextMovePlan(
   return {
     plan,
     model: responseRewritten && revision ? revision.model : first.model,
+    modelRole: responseRewritten && revision ? revision.modelRole : first.modelRole,
     usage,
+    webSearchCallCount,
+    webSearchDecisionReason: webSearchDecisionReason(
+      cognitiveContext?.webSearchDecision,
+      options.allowWebSearch !== false,
+    ),
     cognitiveMetadata: cognitiveMetadata || undefined,
+    modelSelection: generationSelection,
   };
 }
