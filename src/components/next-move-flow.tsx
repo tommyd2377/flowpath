@@ -26,6 +26,7 @@ import type {
   BillingSummary,
   IntakeMessage,
   IntakeSession,
+  PlanGenerationResponse,
   Situation,
   SituationUrgency,
   StoredNextMovePlan,
@@ -77,6 +78,25 @@ const templates = [
   ["overwhelm", "Overwhelm / Too Many Open Loops"],
   ["something_else", "Something Else"],
 ] as const;
+
+const primaryTaskStatuses = new Set<Task["status"]>([
+  "in_progress",
+  "open",
+  "blocked",
+]);
+
+function isPrimaryTask(task: Task) {
+  return primaryTaskStatuses.has(task.status);
+}
+
+function planGenerationMessage(result?: TaskConversionResponse | null) {
+  if (!result) return "Next Move Plan generated.";
+  if (result.alreadyExisted) {
+    return "Next Move Plan generated. Ranked tasks were already added.";
+  }
+  const label = result.items.length === 1 ? "task" : "tasks";
+  return `Next Move Plan generated and ${result.items.length} ranked ${label} added.`;
+}
 
 export function NextMoveFlow() {
   const [detail, setDetail] = useState<SituationDetail | null>(null);
@@ -295,8 +315,9 @@ export function NextMoveFlow() {
     setGenerating(true);
     setError(null);
     setMessage(null);
+    setTaskConfirmation(null);
     try {
-      await apiFetch<StoredNextMovePlan>(
+      const generated = await apiFetch<PlanGenerationResponse>(
         `/api/situations/${situationId}/generate-plan`,
         {
           method: "POST",
@@ -305,9 +326,10 @@ export function NextMoveFlow() {
         },
       );
       if (latestGenerationIdRef.current !== id) return;
+      setTaskConfirmation(generated.taskConversion ?? null);
       await loadDetail(situationId);
       await loadBillingSummary();
-      setMessage("Next Move Plan generated.");
+      setMessage(planGenerationMessage(generated.taskConversion));
     } catch (generateError) {
       await loadBillingSummary();
       if (controller.signal.aborted) return;
@@ -409,6 +431,19 @@ export function NextMoveFlow() {
         (task) => task.source_next_move_plan_id === detail.latestPlan?.id,
       ),
   );
+  const latestPlanTasks =
+    detail?.latestPlan
+      ? detail.tasks.filter(
+          (task) =>
+            task.source_next_move_plan_id === detail.latestPlan?.id &&
+            isPrimaryTask(task),
+        )
+      : [];
+  const primaryTask =
+    latestPlanTasks[0] ??
+    detail?.tasks.find(isPrimaryTask) ??
+    detail?.tasks[0] ??
+    null;
   const workflowStep: IntakeStep = !detail
     ? description.trim()
       ? "description"
@@ -710,6 +745,7 @@ export function NextMoveFlow() {
               <NextMovePlanCard
                 plan={detail.latestPlan}
                 fallbackTask={detail.tasks[0] ?? null}
+                primaryTask={primaryTask}
                 onConvert={
                   detail.latestPlan && !latestPlanHasTasks ? convertPlan : undefined
                 }

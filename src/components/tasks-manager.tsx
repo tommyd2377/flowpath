@@ -90,6 +90,13 @@ const activeTaskStatuses = new Set<TaskStatus>([
   "blocked",
 ]);
 
+const taskFeedbackMessages: Record<TaskFeedbackOutcome, string> = {
+  completed: "Marked complete: it is out of the active queue.",
+  couldnt_complete: "Noted: I will treat this as blocked friction, not a failure.",
+  no_longer_relevant: "Skipped: I will move this out of the active queue and treat ignored plan suggestions as lower priority.",
+  need_help: "Noted: I will keep this behind directly actionable work until the blocker clears.",
+};
+
 const statusLabels: Record<TaskStatus, string> = {
   open: "Not Started",
   in_progress: "In Progress",
@@ -215,7 +222,7 @@ export function TasksManager() {
         method: "POST",
         body: JSON.stringify({ outcome, notes }),
       });
-      setMessage("Task feedback saved.");
+      setMessage(taskFeedbackMessages[outcome]);
       await load();
     } catch (feedbackError) {
       setError(

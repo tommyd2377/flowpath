@@ -47,6 +47,7 @@ import {
   buildSafetyRoutedPlan,
   safetyRouteFromText,
 } from "@/lib/safety-routing";
+import { createTasksFromNextMovePlanWithTelemetry } from "@/lib/task-conversion";
 import type { WebSearchDecisionReason } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -495,7 +496,18 @@ export async function POST(request: Request, context: Context) {
       cognitiveMetadata,
     });
 
-    return dataResponse(storedPlan, 201);
+    let taskConversion = null;
+    try {
+      taskConversion = await createTasksFromNextMovePlanWithTelemetry(
+        user.id,
+        storedPlan.id,
+        { clientGenerationId: `server-auto-task-conversion-${clientGenerationId}` },
+      );
+    } catch {
+      taskConversion = null;
+    }
+
+    return dataResponse({ ...storedPlan, taskConversion }, 201);
   } catch (error) {
     return errorResponse(error, "Could not generate next move plan.");
   }

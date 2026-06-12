@@ -17,6 +17,7 @@ process.env.APP_TIMEZONE = "UTC";
 
 let db: Awaited<typeof import("@/lib/db")>;
 let repository: Awaited<typeof import("./repository")>;
+let taskConversion: Awaited<typeof import("./task-conversion")>;
 
 function splitStatements(sql: string) {
   return sql
@@ -117,6 +118,7 @@ function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
 before(async () => {
   db = await import("@/lib/db");
   repository = await import("./repository");
+  taskConversion = await import("./task-conversion");
   await applyMigrations();
 });
 
@@ -350,6 +352,69 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
     evidence: "I did it",
   });
   assert.equal(feedback?.user_outcome, "acted");
+});
+
+test("telemetry task conversion creates tasks once and records generated counts", async () => {
+  const situation = await repository.createSituation(1, {
+    title: "I need a compact next action",
+    category: "work_career",
+    urgency: "medium",
+  });
+  const storedPlan = await repository.createNextMovePlan(
+    1,
+    situation.id,
+    null,
+    minimalPlan("Send one focused update"),
+    "test-model",
+  );
+
+  const autoEventId = `test-auto-task-conversion-${Date.now()}`;
+  const autoConversion =
+    await taskConversion.createTasksFromNextMovePlanWithTelemetry(1, storedPlan.id, {
+      clientGenerationId: autoEventId,
+    });
+  assert.equal(autoConversion.created, true);
+  assert.equal(autoConversion.alreadyExisted, false);
+  assert.equal(autoConversion.items.length, 1);
+
+  const manualEventId = `test-manual-task-conversion-${Date.now()}`;
+  const manualConversion =
+    await taskConversion.createTasksFromNextMovePlanWithTelemetry(1, storedPlan.id, {
+      clientGenerationId: manualEventId,
+    });
+  assert.equal(manualConversion.created, false);
+  assert.equal(manualConversion.alreadyExisted, true);
+  assert.equal(manualConversion.items.length, 1);
+
+  const situationTasks = await repository.listTasksForSituation(1, situation.id);
+  assert.equal(
+    situationTasks.filter((task) => task.source_next_move_plan_id === storedPlan.id).length,
+    1,
+  );
+
+  const autoEvent = await repository.getGenerationEvent(1, autoEventId);
+  assert.equal(autoEvent?.flow_type, "task_generation");
+  assert.equal(autoEvent?.model, "deterministic-task-converter");
+  assert.equal(autoEvent?.tasks_created_count, 1);
+  const autoCounts = JSON.parse(autoEvent?.structural_counts_json ?? "{}") as {
+    generated_task_count?: number;
+    returned_task_count?: number;
+    already_existed?: boolean;
+  };
+  assert.equal(autoCounts.generated_task_count, 1);
+  assert.equal(autoCounts.returned_task_count, 1);
+  assert.equal(autoCounts.already_existed, false);
+
+  const manualEvent = await repository.getGenerationEvent(1, manualEventId);
+  assert.equal(manualEvent?.tasks_created_count, 0);
+  const manualCounts = JSON.parse(manualEvent?.structural_counts_json ?? "{}") as {
+    generated_task_count?: number;
+    returned_task_count?: number;
+    already_existed?: boolean;
+  };
+  assert.equal(manualCounts.generated_task_count, 0);
+  assert.equal(manualCounts.returned_task_count, 1);
+  assert.equal(manualCounts.already_existed, true);
 });
 
 test("inferred context items downgrade model-saved memory and can be updated or deleted", async () => {

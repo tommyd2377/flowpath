@@ -1134,7 +1134,7 @@ async function getTaskRankingOutcomeContext(
     WHERE user_id = ?
       AND is_qa = ?
       AND plan_id IS NOT NULL
-      AND event_type IN ('suggested_action_ignored', 'user_reported_not_helpful')`,
+      AND event_type IN ('suggested_action_ignored', 'user_reported_not_helpful', 'task_dismissed')`,
     [userId, isQa ? 1 : 0],
   );
   return {

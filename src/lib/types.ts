@@ -790,6 +790,10 @@ export type StoredNextMovePlan = NextMovePlan & {
   created_at: string;
 };
 
+export type PlanGenerationResponse = StoredNextMovePlan & {
+  taskConversion?: TaskConversionResponse | null;
+};
+
 export type GenerationEvent = {
   id: number;
   user_id?: number;

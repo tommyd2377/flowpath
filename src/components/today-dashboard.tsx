@@ -150,7 +150,7 @@ export function TodayDashboard() {
       <Card className="mb-5 border-[rgba(0,120,212,0.48)] bg-[rgba(0,120,212,0.08)]">
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase text-[var(--azure-light)]">
           <Play className="h-4 w-4" />
-          NEXT MOVE
+          Do this next
         </div>
         {loading ? (
           <EmptyState>Loading next move...</EmptyState>

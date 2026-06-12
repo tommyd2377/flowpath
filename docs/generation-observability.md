@@ -15,7 +15,7 @@ The observability fields are for internal diagnostics only. They must not store 
 - Evaluator metadata: whether an evaluator was used and whether it triggered revision.
 - Safety metadata: whether safety routing triggered and the route type.
 - Quota metadata: plan tier and usage type.
-- `structural_counts_json`: counts only, such as message count, task candidate count, and context item count.
+- `structural_counts_json`: counts only, such as message count, task candidate count, context item count, returned task count, and generated task count.
 - Sanitized errors: category and generic message only.
 
 ## Internal Report

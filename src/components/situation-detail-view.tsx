@@ -19,6 +19,7 @@ import { apiFetch } from "@/lib/client-api";
 import type {
   IntakeMessage,
   IntakeSession,
+  PlanGenerationResponse,
   Situation,
   StoredNextMovePlan,
   Task,
@@ -101,13 +102,15 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
     setGenerating(true);
     setError(null);
     setMessage(null);
+    setTaskConfirmation(null);
     try {
-      await apiFetch<StoredNextMovePlan>(
+      const generated = await apiFetch<PlanGenerationResponse>(
         `/api/situations/${detail.situation.id}/generate-plan`,
         { method: "POST", body: JSON.stringify({}) },
       );
+      setTaskConfirmation(generated.taskConversion ?? null);
       await load();
-      setMessage("Updated plan generated.");
+      setMessage(planGenerationMessage(generated.taskConversion));
     } catch (generateError) {
       setError(
         generateError instanceof Error
@@ -193,6 +196,18 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
         (task) => task.source_next_move_plan_id === detail.latestPlan?.id,
       ),
   );
+  const latestPlanTasks = detail.latestPlan
+    ? detail.tasks.filter(
+        (task) =>
+          task.source_next_move_plan_id === detail.latestPlan?.id &&
+          isPrimaryTask(task),
+      )
+    : [];
+  const primaryTask =
+    latestPlanTasks[0] ??
+    detail.tasks.find(isPrimaryTask) ??
+    detail.tasks[0] ??
+    null;
 
   return (
     <div>
@@ -290,7 +305,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
         <div className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
           <RecommendedMoveCard
             plan={detail.latestPlan}
-            fallbackTask={detail.tasks[0] ?? null}
+            primaryTask={primaryTask}
           />
           <SituationTaskQueue tasks={detail.tasks} />
         </div>
@@ -333,19 +348,62 @@ const taskStatusLabels: Record<Task["status"], string> = {
   ignored: "No Longer Relevant",
 };
 
+const primaryTaskStatuses = new Set<Task["status"]>([
+  "in_progress",
+  "open",
+  "blocked",
+]);
+
+function isPrimaryTask(task: Task) {
+  return primaryTaskStatuses.has(task.status);
+}
+
+function planGenerationMessage(result?: TaskConversionResponse | null) {
+  if (!result) return "Updated plan generated.";
+  if (result.alreadyExisted) {
+    return "Updated plan generated. Ranked tasks were already added.";
+  }
+  const label = result.items.length === 1 ? "task" : "tasks";
+  return `Updated plan generated and ${result.items.length} ranked ${label} added.`;
+}
+
 function RecommendedMoveCard({
   plan,
-  fallbackTask,
+  primaryTask,
 }: {
   plan: StoredNextMovePlan | null;
-  fallbackTask: Task | null;
+  primaryTask: Task | null;
 }) {
   return (
     <Card className="border-[rgba(0,120,212,0.48)] bg-[rgba(0,120,212,0.08)]">
       <div className="mb-2 text-sm font-medium uppercase text-[var(--azure-light)]">
-        Recommended Next Move
+        Do this next
       </div>
-      {plan ? (
+      {primaryTask ? (
+        <div className="grid gap-3">
+          <h2 className="text-2xl font-semibold text-white">
+            {primaryTask.title}
+          </h2>
+          <p className="text-sm text-slate-300">
+            {primaryTask.rank_reason || "Best balance of urgency, importance, and effort."}
+            {plan ? ` ${plan.why_this_move}` : ""}
+          </p>
+          {plan ? (
+            <div className="rounded-md border border-slate-800 bg-slate-950/70 p-3 text-sm text-slate-300">
+              <div className="font-medium text-white">First 10 minutes</div>
+              <p className="mt-1">{plan.first_10_minute_action.details}</p>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2 text-xs text-slate-200">
+            <Badge>importance {primaryTask.importance}/5</Badge>
+            <Badge>effort {primaryTask.effort}/5</Badge>
+            {primaryTask.estimated_minutes ? (
+              <Badge>{primaryTask.estimated_minutes} min</Badge>
+            ) : null}
+            <Badge>{taskStatusLabels[primaryTask.status]}</Badge>
+          </div>
+        </div>
+      ) : plan ? (
         <div className="grid gap-3">
           <h2 className="text-2xl font-semibold text-white">
             {plan.highest_leverage_move_today.title}
@@ -355,18 +413,6 @@ function RecommendedMoveCard({
             <Badge>{plan.highest_leverage_move_today.estimated_minutes} min</Badge>
             <Badge>{plan.confidence_level} confidence</Badge>
             <Badge>{modeLabel(plan.mode)}</Badge>
-          </div>
-        </div>
-      ) : fallbackTask ? (
-        <div className="grid gap-3">
-          <h2 className="text-2xl font-semibold text-white">{fallbackTask.title}</h2>
-          <p className="text-sm text-slate-300">
-            {fallbackTask.rank_reason || fallbackTask.notes || "Top related task."}
-          </p>
-          <div className="flex flex-wrap gap-2 text-xs text-slate-200">
-            <Badge>importance {fallbackTask.importance}/5</Badge>
-            <Badge>effort {fallbackTask.effort}/5</Badge>
-            <Badge>{taskStatusLabels[fallbackTask.status]}</Badge>
           </div>
         </div>
       ) : (

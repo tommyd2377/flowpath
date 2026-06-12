@@ -13,7 +13,7 @@ test("Today no longer renders the daily check-in workflow", () => {
   assert.doesNotMatch(source, /Daily Check-In/);
   assert.doesNotMatch(source, /Save Check-In/);
   assert.match(source, /Your next move/);
-  assert.match(source, /NEXT MOVE/);
+  assert.match(source, /Do this next/);
   assert.match(source, /Task Queue/);
   assert.doesNotMatch(source, /Recent Next Move plan/);
 });
@@ -52,4 +52,14 @@ test("New Situation uses a guided stepper and broad categories", () => {
   assert.match(source, /Relationships \/ Connection/);
   assert.match(source, /Something Else/);
   assert.doesNotMatch(source, /I want sexual connection safely and respectfully/);
+});
+
+test("Task feedback gives deterministic confirmation copy", () => {
+  const source = readSource("src/components/tasks-manager.tsx");
+
+  assert.match(source, /Marked complete: it is out of the active queue/);
+  assert.match(source, /blocked friction, not a failure/);
+  assert.match(source, /ignored plan suggestions as lower priority/);
+  assert.match(source, /behind directly actionable work/);
+  assert.doesNotMatch(source, /Task feedback saved/);
 });

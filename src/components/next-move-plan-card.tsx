@@ -17,6 +17,7 @@ export function modeLabel(mode: string) {
 export function NextMovePlanCard({
   plan,
   fallbackTask,
+  primaryTask,
   onConvert,
   converting,
   tasksAdded,
@@ -24,12 +25,14 @@ export function NextMovePlanCard({
 }: {
   plan: StoredNextMovePlan | null;
   fallbackTask?: Task | null;
+  primaryTask?: Task | null;
   onConvert?: () => void;
   converting?: boolean;
   tasksAdded?: boolean;
   taskConfirmation?: TaskConversionResponse | null;
 }) {
   const showCognitiveDebug = useCognitiveDebugVisible();
+  const displayedTask = primaryTask ?? fallbackTask ?? null;
 
   if (!plan) {
     if (fallbackTask) {
@@ -73,16 +76,27 @@ export function NextMovePlanCard({
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 pb-4">
         <div>
           <div className="text-sm font-medium uppercase text-[var(--azure-light)]">
-            Next best move
+            Do this next
           </div>
           <h2 className="mt-1 text-2xl font-semibold text-white">
-            {plan.highest_leverage_move_today.title}
+            {displayedTask?.title ?? plan.highest_leverage_move_today.title}
           </h2>
           <p className="mt-2 text-slate-300">
-            {plan.highest_leverage_move_today.description}
+            {displayedTask?.rank_reason ||
+              displayedTask?.notes ||
+              plan.highest_leverage_move_today.description}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {displayedTask ? (
+            <>
+              <Badge>importance {displayedTask.importance}/5</Badge>
+              <Badge>effort {displayedTask.effort}/5</Badge>
+              {displayedTask.estimated_minutes ? (
+                <Badge>{displayedTask.estimated_minutes} min</Badge>
+              ) : null}
+            </>
+          ) : null}
           <span className="rounded-md bg-[rgba(0,120,212,0.18)] px-2 py-1 text-xs font-medium text-blue-100">
             {modeLabel(plan.mode)}
           </span>
@@ -91,8 +105,6 @@ export function NextMovePlanCard({
           </span>
         </div>
       </div>
-
-      <SuggestedNextAction plan={plan} />
 
       <TaskAction
         onConvert={onConvert}
@@ -103,121 +115,130 @@ export function NextMovePlanCard({
       {taskConfirmation ? <TaskConfirmation result={taskConfirmation} /> : null}
 
       <div className="grid gap-3 text-sm sm:grid-cols-2">
-        <Brief title="Current reality" value={plan.situation_summary} />
-        <Brief title="Core bottleneck" value={plan.core_bottleneck} />
-        <Brief title="Why this move" value={plan.why_this_move} />
-        <Brief title="Likely trap" value={plan.likely_trap} />
+        <Brief title="Bottleneck" value={plan.core_bottleneck} />
         <Brief
-          title={plan.restraint_guidance.should_push ? "Push signal" : "Restraint signal"}
-          value={plan.restraint_guidance.reason}
-        />
-        <Brief title="Friction pattern" value={plan.friction_pattern} />
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-sm font-semibold">Mentor insight</h3>
-        <div className="grid gap-3 text-sm sm:grid-cols-3">
-          <Brief title="Naive path" value={plan.operator_insight.naive_path} />
-          <Brief
-            title="Higher-leverage path"
-            value={plan.operator_insight.operator_path}
-          />
-          <Brief
-            title="Wasted motion to avoid"
-            value={plan.operator_insight.wasted_motion_to_avoid}
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-4">
-        <StepGroup
-          icon={<Clock className="h-4 w-4" />}
           title="First 10 minutes"
-          steps={[plan.first_10_minute_action]}
+          value={`${plan.first_10_minute_action.title}: ${plan.first_10_minute_action.details}`}
         />
-        <StepGroup
-          icon={<Clock className="h-4 w-4" />}
-          title="First 30 minutes"
-          steps={plan.first_30_minutes}
-        />
-        <StepGroup title="Progress in 24 hours" steps={plan.next_24_hours} />
-        <StepGroup title="Progress in 7 days" steps={plan.next_7_days} />
       </div>
-
-      <ContextUsedBlock plan={plan} />
-
-      {showCognitiveDebug ? <WhyThisResponseBlock plan={plan} /> : null}
 
       <div className="grid gap-3 text-sm sm:grid-cols-2">
-        <ListBlock
-          title="Why this plan"
-          items={plan.recommendation_basis.map(
-            (basis) => `${basis.signal} (${basis.source}): ${basis.implication}`,
-          )}
-        />
-        <ListBlock
-          title="Restraint rails"
-          items={[
-            plan.restraint_guidance.minimum_viable_move,
-            plan.restraint_guidance.scope_boundary,
-            plan.restraint_guidance.recovery_move,
-          ]}
-        />
-        <ListBlock title="What not to do" items={plan.what_not_to_do} />
-        <ListBlock title="Assumptions" items={plan.assumptions} />
+        <Brief title="Why this move" value={plan.why_this_move} />
+        <ListBlock title="What not to waste time on" items={plan.what_not_to_do} />
       </div>
 
-      <LocalScoutBlock plan={plan} />
+      <SafetyBoundaryBlock plan={plan} elevatedOnly />
 
-      <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 p-3 text-sm text-amber-100">
-        <div className="mb-1 flex items-center gap-2 font-medium">
-          <ShieldAlert className="h-4 w-4" />
-          When to get human help
-        </div>
-        <p>{plan.when_to_get_human_help}</p>
-      </div>
+      <details className="rounded-lg border border-slate-800 bg-slate-900/65 p-3">
+        <summary className="cursor-pointer text-sm font-semibold text-white">
+          Full plan details
+        </summary>
+        <div className="mt-4 grid gap-5">
+          {!displayedTask ? <SuggestedNextAction plan={plan} /> : null}
 
-      <SafetyBoundaryBlock plan={plan} />
-
-      {plan.resources_to_seek.length > 0 ? (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold">Resources to seek</h3>
-          <div className="grid gap-2">
-            {plan.resources_to_seek.map((resource) => (
-              <div
-                key={`${resource.name}-${resource.contact_or_url ?? ""}`}
-                className="rounded-md bg-slate-900 p-3 text-sm"
-              >
-                <div className="font-medium text-white">{resource.name}</div>
-                <p className="text-slate-300">{resource.why}</p>
-                {resource.contact_or_url ? (
-                  isWebUrl(resource.contact_or_url) ? (
-                    <a
-                      href={resource.contact_or_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-flex break-all text-[var(--azure-light)] hover:text-white"
-                    >
-                      {resource.contact_or_url}
-                    </a>
-                  ) : (
-                    <div className="mt-2 break-words text-slate-400">
-                      {resource.contact_or_url}
-                    </div>
-                  )
-                ) : null}
-              </div>
-            ))}
+          <div className="grid gap-3 text-sm sm:grid-cols-2">
+            <Brief title="Current reality" value={plan.situation_summary} />
+            <Brief title="Likely trap" value={plan.likely_trap} />
+            <Brief
+              title={plan.restraint_guidance.should_push ? "Push signal" : "Restraint signal"}
+              value={plan.restraint_guidance.reason}
+            />
+            <Brief title="Friction pattern" value={plan.friction_pattern} />
           </div>
+
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">Mentor insight</h3>
+            <div className="grid gap-3 text-sm sm:grid-cols-3">
+              <Brief title="Naive path" value={plan.operator_insight.naive_path} />
+              <Brief
+                title="Higher-leverage path"
+                value={plan.operator_insight.operator_path}
+              />
+              <Brief
+                title="Wasted motion to avoid"
+                value={plan.operator_insight.wasted_motion_to_avoid}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4">
+            <StepGroup
+              icon={<Clock className="h-4 w-4" />}
+              title="First 30 minutes"
+              steps={plan.first_30_minutes}
+            />
+            <StepGroup title="Progress in 24 hours" steps={plan.next_24_hours} />
+            <StepGroup title="Progress in 7 days" steps={plan.next_7_days} />
+          </div>
+
+          <ContextUsedBlock plan={plan} />
+
+          {showCognitiveDebug ? <WhyThisResponseBlock plan={plan} /> : null}
+
+          <div className="grid gap-3 text-sm sm:grid-cols-2">
+            <ListBlock
+              title="Why this plan"
+              items={plan.recommendation_basis.map(
+                (basis) => `${basis.signal} (${basis.source}): ${basis.implication}`,
+              )}
+            />
+            <ListBlock
+              title="Restraint rails"
+              items={[
+                plan.restraint_guidance.minimum_viable_move,
+                plan.restraint_guidance.scope_boundary,
+                plan.restraint_guidance.recovery_move,
+              ]}
+            />
+            <ListBlock title="Assumptions" items={plan.assumptions} />
+          </div>
+
+          <LocalScoutBlock plan={plan} />
+
+          <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 p-3 text-sm text-amber-100">
+            <div className="mb-1 flex items-center gap-2 font-medium">
+              <ShieldAlert className="h-4 w-4" />
+              When to get human help
+            </div>
+            <p>{plan.when_to_get_human_help}</p>
+          </div>
+
+          <SafetyBoundaryBlock plan={plan} />
+
+          {plan.resources_to_seek.length > 0 ? (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Resources to seek</h3>
+              <div className="grid gap-2">
+                {plan.resources_to_seek.map((resource) => (
+                  <div
+                    key={`${resource.name}-${resource.contact_or_url ?? ""}`}
+                    className="rounded-md bg-slate-950 p-3 text-sm"
+                  >
+                    <div className="font-medium text-white">{resource.name}</div>
+                    <p className="text-slate-300">{resource.why}</p>
+                    {resource.contact_or_url ? (
+                      isWebUrl(resource.contact_or_url) ? (
+                        <a
+                          href={resource.contact_or_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-flex break-all text-[var(--azure-light)] hover:text-white"
+                        >
+                          {resource.contact_or_url}
+                        </a>
+                      ) : (
+                        <div className="mt-2 break-words text-slate-400">
+                          {resource.contact_or_url}
+                        </div>
+                      )
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-
-      <TaskAction
-        onConvert={onConvert}
-        converting={converting}
-        tasksAdded={tasksAdded}
-      />
-
+      </details>
     </Card>
   );
 }
@@ -654,10 +675,17 @@ function LocalScoutBlock({ plan }: { plan: StoredNextMovePlan }) {
   );
 }
 
-function SafetyBoundaryBlock({ plan }: { plan: StoredNextMovePlan }) {
+function SafetyBoundaryBlock({
+  plan,
+  elevatedOnly = false,
+}: {
+  plan: StoredNextMovePlan;
+  elevatedOnly?: boolean;
+}) {
   const isElevatedRisk =
     plan.safety_boundary.risk_level === "high" ||
     plan.safety_boundary.risk_level === "crisis";
+  if (elevatedOnly && !isElevatedRisk) return null;
 
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3 text-sm">
