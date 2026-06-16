@@ -337,7 +337,7 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
   assert.equal(tasks[1].title, "Call the bank");
   assert.equal(
     tasks[1].notes,
-    "Ask about account 123456789 and keep the note broad afterward.\n\nWhy ranked: It moves the situation forward after the first action.",
+    "Ask about account 123456789 and keep the note broad afterward.\n\nDefinition of done: The call is made or the next contact window is known.\n\nWhy now: It moves the situation forward after the first action.\n\nWhy ranked: It moves the situation forward after the first action.",
   );
 
   const existingTasks = await repository.createTasksFromNextMovePlan(1, storedPlan.id);

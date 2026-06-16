@@ -4,6 +4,7 @@ import {
   isImmediateDangerText,
   isSocialConnectionSituation,
 } from "./social-connection";
+import { isFounderCategory } from "./founder-wedge";
 
 export const SITUATION_DOMAINS = [
   "career_job_search",
@@ -229,8 +230,16 @@ export function classifySituationDomain(
   }
 
   if (
+    isFounderCategory(category) ||
     category.includes("business") ||
     category.includes("startup") ||
+    category.includes("customer") ||
+    category.includes("wedge") ||
+    category.includes("build") ||
+    category.includes("sales") ||
+    category.includes("cofounder") ||
+    category.includes("pricing") ||
+    category.includes("fundraising") ||
     hasAny(text, domainPatterns.founder_product_validation)
   ) {
     return {

@@ -1,4 +1,7 @@
 @import "tailwindcss";
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";
 
 :root {
   --background: #02040a;
@@ -8,6 +11,14 @@
   --azure-deep: #004578;
   --panel-strong: #101827;
   --blue-bright: #60a5fa;
+  --primary: 207 100% 42%;
+  --primary-foreground: 210 40% 98%;
+  --muted: 222 47% 11%;
+  --muted-foreground: 215 20% 65%;
+  --border: 217 33% 20%;
+  --input: 217 33% 18%;
+  --ring: 207 100% 42%;
+  --radius: 0.5rem;
 }
 
 @theme inline {
@@ -79,4 +90,54 @@ textarea {
 
 .madeInNyc {
   color: #c8d2e1;
+}
+
+.flowpathMarkdown {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.flowpathMarkdown [data-streamdown="heading-1"],
+.flowpathMarkdown [data-streamdown="heading-2"],
+.flowpathMarkdown [data-streamdown="heading-3"],
+.flowpathMarkdown [data-streamdown="heading-4"] {
+  color: #ffffff;
+  letter-spacing: 0;
+}
+
+.flowpathMarkdown [data-streamdown="paragraph"],
+.flowpathMarkdown [data-streamdown="list-item"] {
+  line-height: 1.6;
+}
+
+.flowpathMarkdown [data-streamdown="link"] {
+  color: var(--azure-light);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.flowpathMarkdown [data-streamdown="inline-code"] {
+  border: 1px solid #26354f;
+  background: #02040a;
+  color: #dbeafe;
+}
+
+.flowpathMarkdown [data-streamdown="code-block"],
+.flowpathMarkdown [data-streamdown="table-wrapper"],
+.flowpathMarkdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.flowpathMarkdown [data-streamdown="code-block"],
+.flowpathMarkdown [data-streamdown="table"] {
+  border-color: #26354f;
+}
+
+.flowpathMarkdownCompact {
+  font-size: 0.875rem;
+}
+
+.flowpathMarkdownChat {
+  font-size: 0.95rem;
 }

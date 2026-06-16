@@ -2792,7 +2792,16 @@ export async function createTasksFromNextMovePlan(
     plan.task_candidates.length > 0
       ? plan.task_candidates.slice(0, 3).map((candidate) => ({
           title: candidate.title,
-          details: `${candidate.details}\n\nWhy ranked: ${candidate.rank_reason}`,
+          details: [
+            candidate.details,
+            candidate.success_condition
+              ? `Definition of done: ${candidate.success_condition}`
+              : "",
+            candidate.why_now ? `Why now: ${candidate.why_now}` : "",
+            `Why ranked: ${candidate.rank_reason}`,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
           section: candidate.candidate_type,
           importance: candidate.importance,
           effort: candidate.effort,

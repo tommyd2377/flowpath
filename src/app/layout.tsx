@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
+import "streamdown/styles.css";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -16,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "FlowPath",
-  description: "A private AI prioritization dashboard for deciding what matters today.",
+  description: "Find the next startup move that actually matters.",
 };
 
 export default function RootLayout({

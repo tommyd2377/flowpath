@@ -86,9 +86,9 @@ const activeTaskStatuses = new Set<TaskStatus>([
 ]);
 
 const taskFeedbackMessages: Record<TaskFeedbackOutcome, string> = {
-  completed: "Marked complete: it is out of the active queue.",
+  completed: "Marked complete: it is out of the active startup queue.",
   couldnt_complete: "Noted: I will treat this as blocked friction, not a failure.",
-  no_longer_relevant: "Skipped: I will move this out of the active queue and treat ignored plan suggestions as lower priority.",
+  no_longer_relevant: "Skipped: I will move this out of the active startup queue and treat ignored plan suggestions as lower priority.",
 };
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -288,10 +288,10 @@ export function TasksManager() {
 
   return (
     <div>
-      <PageHeader eyebrow="Tasks" title="Task Queue">
+      <PageHeader eyebrow="Ranked startup tasks" title="Ranked Startup Tasks">
         <p>
-          Work through concrete tasks, then give quick feedback so FlowPath can
-          learn from what happened.
+          Work through one ranked founder move, then report what happened so
+          FlowPath can replan from reality.
         </p>
       </PageHeader>
 
@@ -303,7 +303,7 @@ export function TasksManager() {
           <div className="text-2xl font-semibold">
             {isInitialLoading ? "..." : activeTasks.length}
           </div>
-          <div className="text-sm text-slate-400">active actions</div>
+          <div className="text-sm text-slate-400">active startup moves</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold">
@@ -335,14 +335,14 @@ export function TasksManager() {
         <Card>
           <div className="mb-4 flex items-center gap-2">
             <Clock3 className="h-4 w-4 text-[var(--azure-light)]" />
-            <h2 className="text-xl font-semibold">Task Queue</h2>
+            <h2 className="text-xl font-semibold">Ranked Startup Tasks</h2>
           </div>
           {loading ? (
             <div className="text-sm text-slate-400">Loading tasks...</div>
           ) : activeTasks.length === 0 ? (
             <EmptyState>
-              No tasks yet. Start with a situation and FlowPath will turn the plan
-              into ranked next actions.
+              No tasks yet. Start with a founder situation and FlowPath will turn
+              the plan into ranked next moves.
             </EmptyState>
           ) : (
             <div className="grid gap-3">
@@ -395,7 +395,7 @@ export function TasksManager() {
           <Card>
             <details>
               <summary className="cursor-pointer text-xl font-semibold text-white">
-                Completed and removed tasks
+                Completed and removed startup tasks
               </summary>
               <div className="mt-4 grid gap-3">
                 {inactiveTasks.map((task) => (
@@ -505,7 +505,7 @@ function TaskCard({
         {canGiveFeedback ? (
           <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
             <div className="mb-2 text-sm font-medium text-white">
-              Talk to FlowPath about this task
+              Report outcome or revise this task
             </div>
             <TextArea
               value={revisionText}

@@ -14,6 +14,13 @@ import {
 } from "lucide-react";
 
 import { ApiClientError, apiFetch } from "@/lib/client-api";
+import { recordFounderEvent } from "@/lib/founder-events";
+import {
+  founderCategoryLabel,
+  founderIntakeCategories,
+  founderWedgeCopy,
+} from "@/lib/founder-wedge";
+import type { FounderIntakeCategoryValue } from "@/lib/founder-wedge";
 import { readClientQaMode } from "@/lib/qa-mode";
 import {
   INTAKE_ANSWER_MAX,
@@ -34,6 +41,7 @@ import type {
   TaskConversionResponse,
 } from "@/lib/types";
 import { ContextConstraintsEditor } from "./context-constraints-editor";
+import { FlowPathMarkdown } from "./flowpath-markdown";
 import {
   GenerationStatus,
   intakeGenerationStages,
@@ -69,15 +77,7 @@ type ActiveGeneration = {
   retryCount: number;
 };
 
-const templates = [
-  ["work_career", "Work / Career"],
-  ["money_stability", "Money / Stability"],
-  ["relationships_connection", "Relationships / Connection"],
-  ["health_recovery", "Health / Recovery"],
-  ["creative_project", "Creative / Personal Project"],
-  ["overwhelm", "Overwhelm / Too Many Open Loops"],
-  ["something_else", "Something Else"],
-] as const;
+const templates = founderIntakeCategories;
 
 const primaryTaskStatuses = new Set<Task["status"]>([
   "in_progress",
@@ -90,19 +90,21 @@ function isPrimaryTask(task: Task) {
 }
 
 function planGenerationMessage(result?: TaskConversionResponse | null) {
-  if (!result) return "Next Move Plan generated.";
+  if (!result) return "Founder Next Move Plan generated.";
   if (result.alreadyExisted) {
-    return "Next Move Plan generated. Ranked tasks were already added.";
+    return "Founder Next Move Plan generated. Ranked startup tasks were already added.";
   }
   const label = result.items.length === 1 ? "task" : "tasks";
-  return `Next Move Plan generated and ${result.items.length} ranked ${label} added.`;
+  return `Founder Next Move Plan generated and ${result.items.length} ranked startup ${label} added.`;
 }
 
 export function NextMoveFlow() {
   const [detail, setDetail] = useState<SituationDetail | null>(null);
   const [description, setDescription] = useState("");
   const [title, setTitle] = useState("");
-  const [category, setCategory] = useState("custom");
+  const [category, setCategory] = useState<FounderIntakeCategoryValue>(
+    templates[0].value,
+  );
   const [urgency, setUrgency] = useState<SituationUrgency>("medium");
   const [answer, setAnswer] = useState("");
   const [lastAnswerAttempt, setLastAnswerAttempt] = useState<{
@@ -243,11 +245,15 @@ export function NextMoveFlow() {
       });
       setDescription("");
       setTitle("");
-      setCategory("custom");
+      setCategory(templates[0].value);
       setUrgency("medium");
       setTaskConfirmation(null);
       await loadDetail(created.situation.id);
-      setMessage("Situation started. Answer one question at a time.");
+      recordFounderEvent("founder_situation_started", {
+        situationId: created.situation.id,
+        category,
+      });
+      setMessage("Founder situation started. Answer one question at a time.");
     } catch (createError) {
       setError(
         formatError(createError, "Could not start situation."),
@@ -329,6 +335,14 @@ export function NextMoveFlow() {
       setTaskConfirmation(generated.taskConversion ?? null);
       await loadDetail(situationId);
       await loadBillingSummary();
+      recordFounderEvent("founder_intake_completed", {
+        situationId,
+        planId: generated.id,
+      });
+      recordFounderEvent("founder_plan_generated", {
+        situationId,
+        planId: generated.id,
+      });
       setMessage(planGenerationMessage(generated.taskConversion));
     } catch (generateError) {
       await loadBillingSummary();
@@ -454,9 +468,10 @@ export function NextMoveFlow() {
 
   return (
     <div>
-      <PageHeader eyebrow="New Situation" title="Intake to next move">
+      <PageHeader eyebrow="Founder intake" title="Founder intake to next move">
         <p>
-          Move through one guided flow: category, description, intake, then plan.
+          Move through one guided flow: bottleneck, context, focused intake, then
+          next move.
         </p>
       </PageHeader>
 
@@ -468,36 +483,40 @@ export function NextMoveFlow() {
       <div className="grid gap-5">
         {!detail ? (
           <Card>
-            <h2 className="mb-3 text-xl font-semibold">Start a situation</h2>
+            <h2 className="mb-3 text-xl font-semibold">Choose this week&apos;s bottleneck</h2>
             <p className="mb-4 text-sm text-slate-400">
-              Pick the broad lane, then describe what is going on in plain language.
+              Pick the startup constraint FlowPath should move, then describe it in
+              plain language.
             </p>
             <div className="mb-4 grid gap-2">
-              {templates.map(([templateCategory, label]) => (
+              {templates.map((template) => (
                 <button
-                  key={templateCategory}
+                  key={template.value}
                   type="button"
                   onClick={() => {
-                    setCategory(templateCategory);
+                    setCategory(template.value);
                   }}
                   className={`rounded-md border px-3 py-2 text-left text-sm transition ${
-                    category === templateCategory
+                    category === template.value
                       ? "border-[var(--azure)] bg-[rgba(0,120,212,0.16)] text-white"
                       : "border-slate-800 bg-slate-900 text-slate-200 hover:border-[var(--azure)]"
                   }`}
                 >
-                  {label}
+                  <span className="font-medium">{template.label}</span>
+                  <span className="mt-1 block text-xs text-slate-400">
+                    {template.description}
+                  </span>
                 </button>
               ))}
             </div>
             <form className="grid gap-4" onSubmit={createSituation}>
-              <Field label="What is going on?">
+              <Field label="What startup bottleneck should FlowPath help you move this week?">
                 <TextArea
                   value={description}
                   maxLength={SITUATION_DESCRIPTION_MAX}
                   onChange={(event) => setDescription(event.target.value)}
                   required
-                  placeholder="Example: I have been applying to jobs for months and nothing is happening."
+                  placeholder="Example: I have a working prototype but no users yet, and I do not know whether to focus on customer outreach, positioning, or finding a cofounder."
                 />
                 <CharacterCount value={description} max={SITUATION_DESCRIPTION_MAX} />
               </Field>
@@ -511,7 +530,7 @@ export function NextMoveFlow() {
                       value={title}
                       maxLength={SITUATION_TITLE_MAX}
                       onChange={(event) => setTitle(event.target.value)}
-                      placeholder="Example: Job search stuck"
+                      placeholder="Example: Prototype with no users"
                       className="min-h-20"
                     />
                     <CharacterCount value={title} max={SITUATION_TITLE_MAX} />
@@ -540,7 +559,7 @@ export function NextMoveFlow() {
               </details>
               <Button type="submit" disabled={working}>
                 <Plus className="h-4 w-4" />
-                {working ? "Starting..." : "Start intake"}
+                {working ? "Starting..." : founderWedgeCopy.primaryCta}
               </Button>
             </form>
           </Card>
@@ -553,7 +572,8 @@ export function NextMoveFlow() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium uppercase text-[var(--azure-light)]">
-                      {detail.situation.urgency} urgency · {detail.situation.category}
+                      {detail.situation.urgency} urgency ·{" "}
+                      {founderCategoryLabel(detail.situation.category)}
                     </div>
                     <h2 className="mt-1 text-2xl font-semibold">
                       {detail.situation.title}
@@ -572,7 +592,7 @@ export function NextMoveFlow() {
                     href={`/situations/${detail.situation.id}`}
                     className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:border-[var(--azure)]"
                   >
-                    Detail
+                      Detail
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                 </div>
@@ -581,14 +601,19 @@ export function NextMoveFlow() {
               <Card>
                 <div className="mb-4 flex items-center gap-2">
                   <MessageSquare className="h-4 w-4 text-[var(--azure-light)]" />
-                  <h2 className="text-xl font-semibold">Focused intake</h2>
+                  <h2 className="text-xl font-semibold">Founder-focused intake</h2>
                 </div>
                 {lastAssistant ? (
                   <div className="mb-4 rounded-lg border border-slate-800 bg-slate-900/70 p-4">
                     <div className="mb-1 text-xs font-medium uppercase text-slate-400">
                       {isReadyToGenerate ? "FlowPath says" : "FlowPath asks"}
                     </div>
-                    <p className="text-slate-100">{lastAssistant.content}</p>
+                    <FlowPathMarkdown
+                      content={lastAssistant.content}
+                      isStreaming={working && activeGeneration?.type === "intake"}
+                      mode={working && activeGeneration?.type === "intake" ? "streaming" : "static"}
+                      variant="chat"
+                    />
                   </div>
                 ) : null}
                 <SafetySupportNotice
@@ -615,9 +640,9 @@ export function NextMoveFlow() {
                       <p>
                         {detail.latestPlan
                           ? latestPlanHasTasks
-                            ? "Your Next Move Plan is saved and ranked tasks are ready below."
-                            : "Your Next Move Plan is saved. You can add ranked tasks below."
-                          : "FlowPath has enough context to turn this into a Next Move Plan."}
+                            ? "Your Founder Next Move Plan is saved and ranked startup tasks are ready below."
+                            : "Your Founder Next Move Plan is saved. You can add ranked startup tasks below."
+                          : "FlowPath has enough founder context to choose the next startup move."}
                       </p>
                     </div>
                     {!detail.latestPlan ? (
@@ -629,10 +654,10 @@ export function NextMoveFlow() {
                         >
                           <Sparkles className="h-4 w-4" />
                           {isNextMovePlanQuotaExhausted
-                            ? "Next Move limit reached"
-                            : generating
-                              ? "Generating plan..."
-                              : "Generate plan"}
+                              ? "Next Move limit reached"
+                              : generating
+                                ? "Generating founder plan..."
+                                : "Generate founder plan"}
                         </Button>
                         {isNextMovePlanQuotaExhausted ? (
                           <QuotaNotice message={nextMovePlanQuotaMessage} />
@@ -676,8 +701,8 @@ export function NextMoveFlow() {
                         {isNextMovePlanQuotaExhausted
                           ? "Next Move limit reached"
                           : generating
-                            ? "Generating plan..."
-                            : "I’ve given enough context / Generate now"}
+                            ? "Generating founder plan..."
+                            : "I've given enough context / Generate now"}
                       </Button>
                     </div>
                     {isNextMovePlanQuotaExhausted ? (
@@ -789,10 +814,10 @@ type IntakeStep = "category" | "description" | "intake" | "plan";
 
 function IntakeStepper({ current }: { current: IntakeStep }) {
   const steps: Array<{ id: IntakeStep; label: string }> = [
-    { id: "category", label: "Category" },
-    { id: "description", label: "Description" },
+    { id: "category", label: "Bottleneck" },
+    { id: "description", label: "Context" },
     { id: "intake", label: "Intake" },
-    { id: "plan", label: "Plan" },
+    { id: "plan", label: "Next move" },
   ];
   const currentIndex = steps.findIndex((step) => step.id === current);
 
@@ -891,7 +916,7 @@ function RelatedTasksCard({ tasks }: { tasks: Task[] }) {
     <Card>
       <div className="mb-3 flex items-center gap-2">
         <CheckSquare className="h-4 w-4 text-[var(--azure-light)]" />
-        <h2 className="text-xl font-semibold">Related tasks</h2>
+        <h2 className="text-xl font-semibold">Ranked next moves</h2>
       </div>
       <div className="grid gap-2">
         {tasks.slice(0, 6).map((task) => (
@@ -908,7 +933,7 @@ function RelatedTasksCard({ tasks }: { tasks: Task[] }) {
           href={`/situations/${tasks[0].situation_id ?? ""}`}
           className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)]"
         >
-          View all related tasks
+          View all ranked next moves
         </Link>
       ) : null}
     </Card>

@@ -17,13 +17,14 @@ import {
   Send,
 } from "lucide-react";
 import type { ReactNode, SVGProps } from "react";
+import { founderWedgeCopy } from "@/lib/founder-wedge";
 import { QaModeBanner } from "./qa-mode-banner";
 
 const links = [
   { href: "/", label: "Today", icon: Compass },
-  { href: "/situations", label: "Situations", icon: MapPinned },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/memory", label: "Memory", icon: Brain },
+  { href: "/situations", label: "Startup Situations", icon: MapPinned },
+  { href: "/tasks", label: "Ranked Startup Tasks", icon: CheckSquare },
+  { href: "/memory", label: "Founder Memory", icon: Brain },
 ];
 
 const secondaryLinks = [
@@ -133,7 +134,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <div>
                 <div className="text-lg font-semibold tracking-normal">FlowPath</div>
                 <div className="text-xs text-slate-400">
-                  Find the next move that actually matters.
+                  {founderWedgeCopy.tagline}
                 </div>
               </div>
             </Link>

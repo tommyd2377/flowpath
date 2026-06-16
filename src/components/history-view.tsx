@@ -6,6 +6,7 @@ import { Archive, Sparkles } from "lucide-react";
 import { apiFetch } from "@/lib/client-api";
 import type { StoredNextMovePlan } from "@/lib/types";
 import { Card, EmptyState, Notice, PageHeader } from "./ui";
+import { FlowPathMarkdown } from "./flowpath-markdown";
 import { modeLabel } from "./next-move-plan-card";
 
 function formatDate(value: string) {
@@ -32,10 +33,9 @@ export function HistoryView() {
 
   return (
     <div>
-      <PageHeader eyebrow="History" title="Previous Next Move plans">
+      <PageHeader eyebrow="History" title="Previous Founder Next Move plans">
         <p>
-          Review the situations FlowPath has helped you move through and the plans it
-          generated.
+          Review startup bottlenecks FlowPath has turned into ranked next moves.
         </p>
       </PageHeader>
 
@@ -46,7 +46,7 @@ export function HistoryView() {
           <div className="text-sm text-slate-400">Loading history...</div>
         </Card>
       ) : plans.length === 0 ? (
-        <EmptyState>No Next Move plans yet.</EmptyState>
+        <EmptyState>No Founder Next Move plans yet.</EmptyState>
       ) : (
         <div className="grid gap-3">
           {plans.map((plan) => (
@@ -68,9 +68,12 @@ export function HistoryView() {
                   <h2 className="text-xl font-semibold text-white">
                     {plan.highest_leverage_move_today.title}
                   </h2>
-                  <p className="mt-2 text-sm text-slate-300">
-                    {plan.situation_summary}
-                  </p>
+                  <FlowPathMarkdown
+                    content={plan.situation_summary}
+                    mode="static"
+                    variant="compact"
+                    className="mt-2"
+                  />
                 </div>
                 <Sparkles className="hidden h-5 w-5 shrink-0 text-[var(--azure-light)] sm:block" />
               </div>

@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
+import { recordFounderEvent } from "@/lib/founder-events";
+import { founderCategoryLabel } from "@/lib/founder-wedge";
 import type {
   IntakeMessage,
   IntakeSession,
@@ -29,6 +31,7 @@ import {
   GenerationStatus,
   nextMoveGenerationStages,
 } from "./generation-status";
+import { FlowPathMarkdown } from "./flowpath-markdown";
 import { modeLabel } from "./next-move-plan-card";
 import { Button, Card, EmptyState, Notice, PageHeader } from "./ui";
 
@@ -110,6 +113,10 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       );
       setTaskConfirmation(generated.taskConversion ?? null);
       await load();
+      recordFounderEvent("founder_plan_generated", {
+        situationId: detail.situation.id,
+        planId: generated.id,
+      });
       setMessage(planGenerationMessage(generated.taskConversion));
     } catch (generateError) {
       setError(
@@ -137,7 +144,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       setMessage(
         result.alreadyExisted
           ? "These tasks were already added. No duplicates created."
-          : `Added ${result.items.length} ranked tasks.`,
+          : `Added ${result.items.length} ranked startup tasks.`,
       );
     } catch (convertError) {
       setError(
@@ -211,10 +218,10 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
 
   return (
     <div>
-      <PageHeader eyebrow="Situation" title={detail.situation.title}>
+      <PageHeader eyebrow="Startup Situation" title={detail.situation.title}>
         <p>
-          {detail.situation.category} · {detail.situation.urgency} urgency ·{" "}
-          {detail.situation.status}
+          {founderCategoryLabel(detail.situation.category)} ·{" "}
+          {detail.situation.urgency} urgency · {detail.situation.status}
           {detail.latestPlan ? ` · ${modeLabel(detail.latestPlan.mode)} mode` : ""}
         </p>
         {detail.situation.description &&
@@ -230,10 +237,10 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
         <Button type="button" onClick={generatePlan} disabled={generating || deleting}>
           <Sparkles className="h-4 w-4" />
           {generating
-            ? "Generating plan..."
+            ? "Generating founder plan..."
             : detail.latestPlan
-              ? "Generate updated plan"
-              : "Generate plan"}
+              ? "Generate updated founder plan"
+              : "Generate founder plan"}
         </Button>
         {detail.latestPlan && !latestPlanHasTasks ? (
           <Button
@@ -243,7 +250,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
             disabled={converting || deleting}
           >
             <CheckSquare className="h-4 w-4" />
-            {converting ? "Creating tasks..." : "Turn this plan into tasks"}
+            {converting ? "Creating startup tasks..." : "Turn this plan into startup tasks"}
           </Button>
         ) : null}
         {detail.situation.status === "active" ? (
@@ -269,7 +276,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           </>
         ) : null}
         <Link href={`/next-move?situationId=${detail.situation.id}`}>
-          <Button type="button" variant="ghost">Continue intake</Button>
+          <Button type="button" variant="ghost">Continue founder intake</Button>
         </Link>
         <Button
           type="button"
@@ -315,7 +322,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
         ) : null}
         {taskConfirmation ? <TaskConfirmation result={taskConfirmation} /> : null}
 
-        <CollapsibleSection title="Plan" icon={<ClipboardList className="h-4 w-4" />}>
+        <CollapsibleSection title="Execution plan" icon={<ClipboardList className="h-4 w-4" />}>
           <PlanSection
             plan={detail.latestPlan}
             tasksAdded={latestPlanHasTasks}
@@ -324,11 +331,11 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
           />
         </CollapsibleSection>
 
-        <CollapsibleSection title="Operator Analysis" icon={<Info className="h-4 w-4" />}>
+        <CollapsibleSection title="Founder analysis" icon={<Info className="h-4 w-4" />}>
           <OperatorAnalysisSection plan={detail.latestPlan} />
         </CollapsibleSection>
 
-        <CollapsibleSection title="Context Used" icon={<Info className="h-4 w-4" />}>
+        <CollapsibleSection title="Founder context used" icon={<Info className="h-4 w-4" />}>
           <ContextUsedSection plan={detail.latestPlan} />
         </CollapsibleSection>
 
@@ -359,12 +366,12 @@ function isPrimaryTask(task: Task) {
 }
 
 function planGenerationMessage(result?: TaskConversionResponse | null) {
-  if (!result) return "Updated plan generated.";
+  if (!result) return "Updated founder plan generated.";
   if (result.alreadyExisted) {
-    return "Updated plan generated. Ranked tasks were already added.";
+    return "Updated founder plan generated. Ranked startup tasks were already added.";
   }
   const label = result.items.length === 1 ? "task" : "tasks";
-  return `Updated plan generated and ${result.items.length} ranked ${label} added.`;
+  return `Updated founder plan generated and ${result.items.length} ranked startup ${label} added.`;
 }
 
 function RecommendedMoveCard({
@@ -384,14 +391,20 @@ function RecommendedMoveCard({
           <h2 className="text-2xl font-semibold text-white">
             {primaryTask.title}
           </h2>
-          <p className="text-sm text-slate-300">
-            {primaryTask.rank_reason || "Best balance of urgency, importance, and effort."}
-            {plan ? ` ${plan.why_this_move}` : ""}
-          </p>
+          <FlowPathMarkdown
+            content={`${primaryTask.rank_reason || "Best balance of urgency, importance, and effort."}${plan ? ` ${plan.why_this_move}` : ""}`}
+            mode="static"
+            variant="compact"
+          />
           {plan ? (
             <div className="rounded-md border border-slate-800 bg-slate-950/70 p-3 text-sm text-slate-300">
               <div className="font-medium text-white">First 10 minutes</div>
-              <p className="mt-1">{plan.first_10_minute_action.details}</p>
+              <FlowPathMarkdown
+                content={plan.first_10_minute_action.details}
+                mode="static"
+                variant="compact"
+                className="mt-1"
+              />
             </div>
           ) : null}
           <div className="flex flex-wrap gap-2 text-xs text-slate-200">
@@ -408,7 +421,11 @@ function RecommendedMoveCard({
           <h2 className="text-2xl font-semibold text-white">
             {plan.highest_leverage_move_today.title}
           </h2>
-          <p className="text-sm text-slate-300">{plan.why_this_move}</p>
+          <FlowPathMarkdown
+            content={plan.why_this_move}
+            mode="static"
+            variant="compact"
+          />
           <div className="flex flex-wrap gap-2 text-xs text-slate-200">
             <Badge>{plan.highest_leverage_move_today.estimated_minutes} min</Badge>
             <Badge>{plan.confidence_level} confidence</Badge>
@@ -432,14 +449,14 @@ function SituationTaskQueue({ tasks }: { tasks: Task[] }) {
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <CheckSquare className="h-4 w-4 text-[var(--azure-light)]" />
-          <h2 className="text-xl font-semibold">Task Queue</h2>
+          <h2 className="text-xl font-semibold">Ranked Startup Tasks</h2>
         </div>
         <Link href="/tasks" className="text-sm font-medium text-[var(--azure-light)]">
-          Open tasks
+          Open ranked tasks
         </Link>
       </div>
       {visibleTasks.length === 0 ? (
-        <EmptyState>No active tasks yet.</EmptyState>
+        <EmptyState>No active startup tasks yet.</EmptyState>
       ) : (
         <div className="grid gap-2">
           {visibleTasks.map((task, index) => (
@@ -511,13 +528,13 @@ function PlanSection({
           <Link href="/tasks">
             <Button type="button" variant="secondary">
               <CheckSquare className="h-4 w-4" />
-              View ranked tasks
+              View ranked startup tasks
             </Button>
           </Link>
         ) : onConvert ? (
           <Button type="button" onClick={onConvert} disabled={converting}>
             <CheckSquare className="h-4 w-4" />
-            {converting ? "Creating tasks..." : "Turn this plan into tasks"}
+            {converting ? "Creating startup tasks..." : "Turn this plan into startup tasks"}
           </Button>
         ) : null}
       </div>
@@ -563,7 +580,12 @@ function ContextUsedSection({ plan }: { plan: StoredNextMovePlan | null }) {
         <div key={`${item.label}-${item.value}`} className="rounded-md border border-slate-800 bg-slate-900 p-3 text-sm">
           <div className="text-xs uppercase text-slate-500">{item.meta}</div>
           <div className="mt-1 font-medium text-white">{item.label}</div>
-          <p className="text-slate-300">{item.value}</p>
+          <FlowPathMarkdown
+            content={item.value}
+            mode="static"
+            variant="compact"
+            className="text-slate-300"
+          />
         </div>
       ))}
     </div>
@@ -597,7 +619,11 @@ function HistorySection({
                 <div className="mb-1 text-xs font-medium uppercase text-slate-400">
                   {item.role === "assistant" ? "FlowPath" : "You"}
                 </div>
-                {item.content}
+                <FlowPathMarkdown
+                  content={item.content}
+                  mode="static"
+                  variant={item.role === "assistant" ? "chat" : "compact"}
+                />
               </div>
             ))}
           </div>
@@ -631,7 +657,7 @@ function TaskConfirmation({ result }: { result: TaskConversionResponse }) {
     <Notice tone="success">
       {result.alreadyExisted
         ? "These tasks were already added. No duplicates created."
-        : `Added ${result.items.length} ranked tasks.`}
+        : `Added ${result.items.length} ranked startup tasks.`}
     </Notice>
   );
 }
@@ -650,7 +676,12 @@ function StepList({
         {items.map((item) => (
           <div key={`${title}-${item.title}`} className="rounded-md border border-slate-800 bg-slate-900 p-3">
             <div className="font-medium text-white">{item.title}</div>
-            <p className="mt-1 text-slate-300">{item.details}</p>
+            <FlowPathMarkdown
+              content={item.details}
+              mode="static"
+              variant="compact"
+              className="mt-1"
+            />
           </div>
         ))}
       </div>
@@ -662,7 +693,12 @@ function Brief({ title, value }: { title: string; value: string }) {
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
       <div className="font-medium text-white">{title}</div>
-      <p className="mt-1 text-slate-300">{value}</p>
+      <FlowPathMarkdown
+        content={value}
+        mode="static"
+        variant="compact"
+        className="mt-1"
+      />
     </div>
   );
 }

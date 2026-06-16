@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Archive, CheckCircle2, Plus, Trash2 } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
+import { founderCategoryLabel, founderWedgeCopy } from "@/lib/founder-wedge";
 import type { Situation } from "@/lib/types";
 import { Button, Card, EmptyState, Notice, PageHeader, SelectInput } from "./ui";
 
@@ -95,8 +96,10 @@ export function SituationsView() {
 
   return (
     <div>
-      <PageHeader eyebrow="Situations" title="Active Situations">
-        <p>View and manage the situations FlowPath is helping you move through.</p>
+      <PageHeader eyebrow="Startup situations" title="Active Startup Situations">
+        <p>
+          View the founder bottlenecks FlowPath is turning into ranked next moves.
+        </p>
       </PageHeader>
 
       {message ? <div className="mb-4"><Notice tone="success">{message}</Notice></div> : null}
@@ -116,7 +119,7 @@ export function SituationsView() {
         <Link href="/next-move">
           <Button type="button">
             <Plus className="h-4 w-4" />
-            New Situation
+            {founderWedgeCopy.primaryCta}
           </Button>
         </Link>
       </div>
@@ -126,7 +129,7 @@ export function SituationsView() {
           <div className="text-sm text-slate-400">Loading situations...</div>
         </Card>
       ) : situations.length === 0 ? (
-        <EmptyState>No situations in this view.</EmptyState>
+        <EmptyState>No startup situations in this view.</EmptyState>
       ) : (
         <div className="grid gap-3">
           {situations.map((situation) => (
@@ -136,6 +139,9 @@ export function SituationsView() {
                   <div className="flex flex-wrap gap-2">
                     <span className="rounded-md bg-[rgba(0,120,212,0.18)] px-2 py-1 text-xs font-medium text-blue-100">
                       {situation.urgency} urgency
+                    </span>
+                    <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
+                      {founderCategoryLabel(situation.category)}
                     </span>
                     <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
                       {situation.status}

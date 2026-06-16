@@ -315,11 +315,12 @@ export function ProfileEditor() {
 
   return (
     <div>
-      <PageHeader eyebrow="Memory" title="What FlowPath knows">
+      <PageHeader eyebrow="Founder Memory" title="Founder Memory">
         <p>
-          Review the context FlowPath uses to make future plans more realistic.
-          Proposed items are not saved until you approve them; session-only notes
-          stay tied to the current situation unless you move them into review.
+          Review the founder context FlowPath uses to make future next moves more
+          realistic. Proposed items are not saved until you approve them;
+          session-only notes stay tied to the current situation unless you move
+          them into review.
         </p>
       </PageHeader>
 
@@ -333,8 +334,8 @@ export function ProfileEditor() {
       ) : (
         <div className="grid gap-5">
           <MemorySection
-            title="Proposed Memory"
-            description="Review broad context FlowPath inferred before saving it for future situations."
+            title="Proposed Founder Memory"
+            description="Review broad startup context FlowPath inferred before saving it for future situations."
           >
             {proposedItems.length === 0 ? (
               <EmptyState>No memories waiting for review.</EmptyState>
@@ -366,13 +367,13 @@ export function ProfileEditor() {
           </MemorySection>
 
           <MemorySection
-            title="Saved Memory"
+            title="Saved Founder Memory"
             description="Durable context FlowPath can reuse later: saved cards, broad constraints, and manual profile notes."
           >
             {savedItems.length === 0 && profileNotes.length === 0 && constraintCards.length === 0 ? (
               <EmptyState>
-                No saved memory yet. Start with a situation and FlowPath will propose
-                broad context here.
+                No saved memory yet. Start with a founder situation and FlowPath
+                will propose broad context here.
               </EmptyState>
             ) : (
               <>
@@ -424,7 +425,7 @@ export function ProfileEditor() {
           {sessionOnlyItems.length > 0 ? (
             <MemorySection
               title="Situation Notes"
-              description="Context tied to a specific situation. Save only a broad version if it should carry forward."
+              description="Context tied to a specific founder situation. Save only a broad version if it should carry forward."
             >
               {sessionOnlyItems.map((item) => (
                 <MemoryItemCard
@@ -617,8 +618,8 @@ function MemoryItemCard({
                 }
               >
                 <option value="session_only">Situation Notes</option>
-                <option value="proposed_memory">Proposed Memory</option>
-                <option value="saved_memory">Saved Memory</option>
+                <option value="proposed_memory">Proposed Founder Memory</option>
+                <option value="saved_memory">Saved Founder Memory</option>
               </SelectInput>
             </Field>
           </div>

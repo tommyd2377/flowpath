@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Check, CheckCircle2, CheckSquare, Clock, Info, Pencil, ShieldAlert, Target, ThumbsDown, X } from "lucide-react";
+import { ArrowRight, Check, CheckCircle2, CheckSquare, Clock, Info, Pencil, ShieldAlert, Target, ThumbsDown, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { apiFetch } from "@/lib/client-api";
 import { readClientQaMode } from "@/lib/qa-mode";
 import type { StoredNextMovePlan, Task, TaskConversionResponse } from "@/lib/types";
+import { FlowPathMarkdown } from "./flowpath-markdown";
 import { Button, Card, EmptyState } from "./ui";
 
 export function modeLabel(mode: string) {
@@ -46,7 +47,12 @@ export function NextMovePlanCard({
               {fallbackTask.title}
             </h2>
             {fallbackTask.notes ? (
-              <p className="mt-2 text-slate-300">{fallbackTask.notes}</p>
+              <FlowPathMarkdown
+                content={fallbackTask.notes}
+                mode="static"
+                variant="compact"
+                className="mt-2"
+              />
             ) : null}
           </div>
           <div className="grid gap-2 text-sm text-slate-300 sm:grid-cols-3">
@@ -81,11 +87,16 @@ export function NextMovePlanCard({
           <h2 className="mt-1 text-2xl font-semibold text-white">
             {displayedTask?.title ?? plan.highest_leverage_move_today.title}
           </h2>
-          <p className="mt-2 text-slate-300">
-            {displayedTask?.rank_reason ||
+          <FlowPathMarkdown
+            content={
+              displayedTask?.rank_reason ||
               displayedTask?.notes ||
-              plan.highest_leverage_move_today.description}
-          </p>
+              plan.highest_leverage_move_today.description
+            }
+            mode="static"
+            variant="compact"
+            className="mt-2"
+          />
         </div>
         <div className="flex flex-wrap gap-2">
           {displayedTask ? (
@@ -111,6 +122,21 @@ export function NextMovePlanCard({
         converting={converting}
         tasksAdded={tasksAdded}
       />
+
+      <div className="flex flex-wrap gap-2">
+        <Link href="/">
+          <Button type="button">
+            <ArrowRight className="h-4 w-4" />
+            Go to Today&apos;s Next Move
+          </Button>
+        </Link>
+        <Link href="/">
+          <Button type="button" variant="secondary">
+            <CheckSquare className="h-4 w-4" />
+            Report outcome after you do it
+          </Button>
+        </Link>
+      </div>
 
       {taskConfirmation ? <TaskConfirmation result={taskConfirmation} /> : null}
 
@@ -215,7 +241,12 @@ export function NextMovePlanCard({
                     className="rounded-md bg-slate-950 p-3 text-sm"
                   >
                     <div className="font-medium text-white">{resource.name}</div>
-                    <p className="text-slate-300">{resource.why}</p>
+                    <FlowPathMarkdown
+                      content={resource.why}
+                      mode="static"
+                      variant="compact"
+                      className="text-slate-300"
+                    />
                     {resource.contact_or_url ? (
                       isWebUrl(resource.contact_or_url) ? (
                         <a
@@ -548,7 +579,7 @@ function TaskAction({
         <Link href="/tasks">
           <Button type="button" variant="secondary">
             <CheckSquare className="h-4 w-4" />
-            View ranked tasks
+            View ranked startup tasks
           </Button>
         </Link>
       </div>
@@ -561,7 +592,7 @@ function TaskAction({
     <div>
       <Button type="button" onClick={onConvert} disabled={converting}>
         <CheckSquare className="h-4 w-4" />
-        {converting ? "Creating tasks..." : "Create ranked tasks from this plan"}
+        {converting ? "Creating startup tasks..." : "Create ranked startup tasks from this plan"}
       </Button>
     </div>
   );
@@ -573,7 +604,7 @@ function TaskConfirmation({ result }: { result: TaskConversionResponse }) {
       <div className="font-medium text-white">
         {result.alreadyExisted
           ? "These tasks were already added. No duplicates created."
-          : `Added ${result.items.length} ranked tasks`}
+          : `Added ${result.items.length} ranked startup tasks`}
       </div>
       <div className="mt-2 grid gap-1">
         {result.items.map((item) => (
@@ -586,7 +617,7 @@ function TaskConfirmation({ result }: { result: TaskConversionResponse }) {
         href="/tasks"
         className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)] hover:text-white"
       >
-        View ranked tasks
+        View ranked startup tasks
       </Link>
     </div>
   );
@@ -623,7 +654,12 @@ function ContextUsedBlock({ plan }: { plan: StoredNextMovePlan }) {
               <Badge>{item.persistence.replaceAll("_", " ")}</Badge>
             </div>
             <div className="mt-2 font-medium text-white">{item.label}</div>
-            <p className="text-slate-300">{item.value}</p>
+            <FlowPathMarkdown
+              content={item.value}
+              mode="static"
+              variant="compact"
+              className="text-slate-300"
+            />
           </div>
         ))}
       </div>
@@ -693,9 +729,23 @@ function SafetyBoundaryBlock({
         Safety boundary: {plan.safety_boundary.risk_level}
       </div>
       <div className="mt-2 grid gap-2 text-slate-300">
-        <p>{plan.safety_boundary.professional_help_signal}</p>
-        <p>{plan.safety_boundary.do_not_rely_on_ai_for}</p>
-        {isElevatedRisk ? <p>{plan.safety_boundary.urgent_support_guidance}</p> : null}
+        <FlowPathMarkdown
+          content={plan.safety_boundary.professional_help_signal}
+          mode="static"
+          variant="compact"
+        />
+        <FlowPathMarkdown
+          content={plan.safety_boundary.do_not_rely_on_ai_for}
+          mode="static"
+          variant="compact"
+        />
+        {isElevatedRisk ? (
+          <FlowPathMarkdown
+            content={plan.safety_boundary.urgent_support_guidance}
+            mode="static"
+            variant="compact"
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -705,7 +755,12 @@ function Brief({ title, value }: { title: string; value: string }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3">
       <div className="font-medium text-white">{title}</div>
-      <p className="mt-1 text-slate-300">{value}</p>
+      <FlowPathMarkdown
+        content={value}
+        mode="static"
+        variant="compact"
+        className="mt-1"
+      />
     </div>
   );
 }
@@ -729,7 +784,12 @@ function StepGroup({
         {steps.map((step) => (
           <div key={`${title}-${step.title}`} className="text-sm">
             <div className="font-medium text-slate-100">{step.title}</div>
-            <p className="text-slate-300">{step.details}</p>
+            <FlowPathMarkdown
+              content={step.details}
+              mode="static"
+              variant="compact"
+              className="text-slate-300"
+            />
           </div>
         ))}
       </div>
@@ -742,7 +802,15 @@ function ListBlock({ title, items }: { title: string; items: string[] }) {
     <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-3">
       <div className="font-medium text-white">{title}</div>
       <ul className="mt-2 grid gap-1 text-slate-300">
-        {items.length ? items.map((item) => <li key={item}>{item}</li>) : <li>None listed.</li>}
+        {items.length ? (
+          items.map((item) => (
+            <li key={item}>
+              <FlowPathMarkdown content={item} mode="static" variant="compact" />
+            </li>
+          ))
+        ) : (
+          <li>None listed.</li>
+        )}
       </ul>
     </div>
   );
