@@ -610,26 +610,34 @@ export function NextMoveFlow() {
                     <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.12)] p-4 text-sm text-blue-100">
                       <div className="mb-1 flex items-center gap-2 font-medium text-white">
                         <CheckCircle2 className="h-4 w-4" />
-                        Ready for a plan
+                        {detail.latestPlan ? "Plan generated" : "Ready for a plan"}
                       </div>
-                      <p>FlowPath has enough context to turn this into a Next Move Plan.</p>
+                      <p>
+                        {detail.latestPlan
+                          ? latestPlanHasTasks
+                            ? "Your Next Move Plan is saved and ranked tasks are ready below."
+                            : "Your Next Move Plan is saved. You can add ranked tasks below."
+                          : "FlowPath has enough context to turn this into a Next Move Plan."}
+                      </p>
                     </div>
-                    <Button
-                      type="button"
-                      onClick={() => generatePlan()}
-                      disabled={generating || isNextMovePlanQuotaExhausted}
-                    >
-                      <Sparkles className="h-4 w-4" />
-                      {isNextMovePlanQuotaExhausted
-                        ? "Next Move limit reached"
-                        : generating
-                        ? "Generating plan..."
-                        : detail.latestPlan
-                          ? "Generate updated plan"
-                          : "Generate plan"}
-                    </Button>
-                    {isNextMovePlanQuotaExhausted ? (
-                      <QuotaNotice message={nextMovePlanQuotaMessage} />
+                    {!detail.latestPlan ? (
+                      <>
+                        <Button
+                          type="button"
+                          onClick={() => generatePlan()}
+                          disabled={generating || isNextMovePlanQuotaExhausted}
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          {isNextMovePlanQuotaExhausted
+                            ? "Next Move limit reached"
+                            : generating
+                              ? "Generating plan..."
+                              : "Generate plan"}
+                        </Button>
+                        {isNextMovePlanQuotaExhausted ? (
+                          <QuotaNotice message={nextMovePlanQuotaMessage} />
+                        ) : null}
+                      </>
                     ) : null}
                     {generating && activeGeneration?.type === "plan" ? (
                       <GenerationStatus

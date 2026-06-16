@@ -6,13 +6,9 @@ import {
   Ban,
   Check,
   Clock3,
-  HelpCircle,
-  Pencil,
   Play,
   Plus,
-  Save,
   Trash2,
-  X,
 } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
@@ -55,8 +51,7 @@ type TaskForm = {
 type TaskFeedbackOutcome =
   | "completed"
   | "couldnt_complete"
-  | "no_longer_relevant"
-  | "need_help";
+  | "no_longer_relevant";
 
 const emptyTask: TaskForm = {
   title: "",
@@ -94,7 +89,6 @@ const taskFeedbackMessages: Record<TaskFeedbackOutcome, string> = {
   completed: "Marked complete: it is out of the active queue.",
   couldnt_complete: "Noted: I will treat this as blocked friction, not a failure.",
   no_longer_relevant: "Skipped: I will move this out of the active queue and treat ignored plan suggestions as lower priority.",
-  need_help: "Noted: I will keep this behind directly actionable work until the blocker clears.",
 };
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -130,8 +124,6 @@ export function TasksManager() {
   const [areas, setAreas] = useState<LifeArea[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [form, setForm] = useState<TaskForm>(emptyTask);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingForm, setEditingForm] = useState<TaskForm>(emptyTask);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,7 +182,7 @@ export function TasksManager() {
     }
   }
 
-  async function saveTask(id: number, nextForm: TaskForm) {
+  async function saveTask(id: number, nextForm: TaskForm, successMessage = "Task saved.") {
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -199,8 +191,7 @@ export function TasksManager() {
         method: "PUT",
         body: JSON.stringify(nextForm),
       });
-      setEditingId(null);
-      setMessage("Task saved.");
+      setMessage(successMessage);
       await load();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not save task.");
@@ -214,21 +205,66 @@ export function TasksManager() {
     outcome: TaskFeedbackOutcome,
     notes: string,
   ) {
+    const trimmedNotes = notes.trim();
+    if (outcome === "couldnt_complete" && !trimmedNotes) {
+      setError("Tell FlowPath why this did not work so it can revise the task.");
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
       await apiFetch<Task>(`/api/tasks/${id}/feedback`, {
         method: "POST",
-        body: JSON.stringify({ outcome, notes }),
+        body: JSON.stringify({ outcome, notes: trimmedNotes }),
       });
-      setMessage(taskFeedbackMessages[outcome]);
+      if (outcome === "couldnt_complete") {
+        await reviseTaskRequest(id, trimmedNotes, "couldnt_complete");
+        setMessage("Noted and revised the task around that blocker.");
+      } else {
+        setMessage(taskFeedbackMessages[outcome]);
+      }
       await load();
     } catch (feedbackError) {
       setError(
         feedbackError instanceof Error
           ? feedbackError.message
           : "Could not save task feedback.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reviseTaskRequest(
+    id: number,
+    instructions: string,
+    intent: "revise" | "couldnt_complete" = "revise",
+  ) {
+    return apiFetch<Task>(`/api/tasks/${id}/revise`, {
+      method: "POST",
+      body: JSON.stringify({ instructions, intent }),
+    });
+  }
+
+  async function reviseTask(id: number, instructions: string) {
+    const trimmedInstructions = instructions.trim();
+    if (!trimmedInstructions) {
+      setError("Tell FlowPath what should change about this task.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await reviseTaskRequest(id, trimmedInstructions);
+      setMessage("Task revised.");
+      await load();
+    } catch (revisionError) {
+      setError(
+        revisionError instanceof Error
+          ? revisionError.message
+          : "Could not revise task.",
       );
     } finally {
       setSaving(false);
@@ -315,27 +351,17 @@ export function TasksManager() {
                   key={task.id}
                   task={task}
                   rank={index + 1}
-                  editing={editingId === task.id}
-                  editingForm={editingForm}
-                  setEditingForm={setEditingForm}
-                  areas={areas}
-                  projects={projects}
                   saving={saving}
-                  onSave={() => saveTask(task.id, editingForm)}
                   onStart={() =>
                     saveTask(task.id, {
                       ...formFromTask(task),
                       status: "in_progress",
-                    })
+                    }, "Task started.")
                   }
+                  onRevise={(instructions) => reviseTask(task.id, instructions)}
                   onFeedback={(outcome, notes) =>
                     submitTaskFeedback(task.id, outcome, notes)
                   }
-                  onEdit={() => {
-                    setEditingId(task.id);
-                    setEditingForm(formFromTask(task));
-                  }}
-                  onCancel={() => setEditingId(null)}
                   onDelete={() => deleteTask(task.id)}
                 />
               ))}
@@ -376,27 +402,17 @@ export function TasksManager() {
                   <TaskCard
                     key={task.id}
                     task={task}
-                    editing={editingId === task.id}
-                    editingForm={editingForm}
-                    setEditingForm={setEditingForm}
-                    areas={areas}
-                    projects={projects}
                     saving={saving}
-                    onSave={() => saveTask(task.id, editingForm)}
                     onStart={() =>
                       saveTask(task.id, {
                         ...formFromTask(task),
                         status: "in_progress",
-                      })
+                      }, "Task started.")
                     }
+                    onRevise={(instructions) => reviseTask(task.id, instructions)}
                     onFeedback={(outcome, notes) =>
                       submitTaskFeedback(task.id, outcome, notes)
                     }
-                    onEdit={() => {
-                      setEditingId(task.id);
-                      setEditingForm(formFromTask(task));
-                    }}
-                    onCancel={() => setEditingId(null)}
                     onDelete={() => deleteTask(task.id)}
                   />
                 ))}
@@ -412,169 +428,132 @@ export function TasksManager() {
 function TaskCard({
   task,
   rank,
-  editing,
-  editingForm,
-  setEditingForm,
-  areas,
-  projects,
   saving,
-  onSave,
   onStart,
+  onRevise,
   onFeedback,
-  onEdit,
-  onCancel,
   onDelete,
 }: {
   task: Task;
   rank?: number;
-  editing: boolean;
-  editingForm: TaskForm;
-  setEditingForm: Dispatch<SetStateAction<TaskForm>>;
-  areas: LifeArea[];
-  projects: Project[];
   saving: boolean;
-  onSave: () => void;
   onStart: () => void;
+  onRevise: (instructions: string) => void;
   onFeedback: (outcome: TaskFeedbackOutcome, notes: string) => void;
-  onEdit: () => void;
-  onCancel: () => void;
   onDelete: () => void;
 }) {
   const frictionType = task.friction_type ?? "none";
-  const [feedbackNotes, setFeedbackNotes] = useState("");
+  const [revisionText, setRevisionText] = useState("");
   const canGiveFeedback = isActiveTask(task);
+  const hasRevisionText = revisionText.trim().length > 0;
 
   return (
     <div className={`rounded-md border border-slate-800 bg-slate-900/70 p-4 ${!canGiveFeedback ? "opacity-75" : ""}`}>
-      {editing ? (
-        <div className="grid gap-4">
-          <TaskFields
-            form={editingForm}
-            setForm={setEditingForm}
-            areas={areas}
-            projects={projects}
-          />
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={onSave} disabled={saving}>
-              <Save className="h-4 w-4" />
-              Save
-            </Button>
-            <Button type="button" variant="secondary" onClick={onCancel}>
-              <X className="h-4 w-4" />
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                {rank ? (
-                  <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--azure)] text-sm font-semibold text-white">
-                    {rank}
-                  </span>
-                ) : null}
-                <h2 className="text-lg font-semibold">{task.title}</h2>
-                <Badge>{statusLabels[task.status]}</Badge>
-                {task.situation_title ? <Badge>{task.situation_title}</Badge> : null}
-                {task.source_next_move_plan_id ? <Badge>Next Move plan</Badge> : null}
-                {frictionType !== "none" ? <Badge>{frictionLabels[frictionType]}</Badge> : null}
-              </div>
-              <p className="mt-2 text-sm text-slate-300">
-                {task.notes || "No notes."}
+      <div className="grid gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              {rank ? (
+                <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--azure)] text-sm font-semibold text-white">
+                  {rank}
+                </span>
+              ) : null}
+              <h2 className="text-lg font-semibold">{task.title}</h2>
+              <Badge>{statusLabels[task.status]}</Badge>
+              {task.situation_title ? <Badge>{task.situation_title}</Badge> : null}
+              {task.source_next_move_plan_id ? <Badge>Next Move plan</Badge> : null}
+              {frictionType !== "none" ? <Badge>{frictionLabels[frictionType]}</Badge> : null}
+            </div>
+            <p className="mt-2 text-sm text-slate-300">
+              {task.notes || "No notes."}
+            </p>
+            {task.rank_reason ? (
+              <p className="mt-2 text-sm text-[var(--azure-light)]">
+                Why ranked here: {task.rank_reason}
               </p>
-              {task.rank_reason ? (
-                <p className="mt-2 text-sm text-[var(--azure-light)]">
-                  Why ranked here: {task.rank_reason}
-                </p>
-              ) : null}
-              {task.friction_note ? (
-                <p className="mt-2 text-sm text-amber-100/90">
-                  Friction: {task.friction_note}
-                </p>
-              ) : null}
-            </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              {task.status !== "in_progress" && canGiveFeedback ? (
-                <Button type="button" variant="secondary" onClick={onStart} disabled={saving}>
-                  <Play className="h-4 w-4" />
-                  Start
-                </Button>
-              ) : null}
-              <Button type="button" variant="secondary" onClick={onEdit}>
-                <Pencil className="h-4 w-4" />
-                Edit
-              </Button>
-              <Button type="button" variant="danger" onClick={onDelete} disabled={saving}>
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
-            </div>
+            ) : null}
+            {task.friction_note ? (
+              <p className="mt-2 text-sm text-amber-100/90">
+                Friction: {task.friction_note}
+              </p>
+            ) : null}
           </div>
-          <div className="grid gap-3 text-sm sm:grid-cols-6">
-            <Info title="Importance" value={`${task.importance}/5`} />
-            <Info title="Effort" value={`${task.effort}/5`} />
-            <Info title="Friction" value={frictionLabels[frictionType]} />
-            <Info
-              title="Estimate"
-              value={task.estimated_minutes ? `${task.estimated_minutes} min` : "None"}
-            />
-            <Info title="Due date" value={task.due_date || "None"} />
-            <Info title="Status" value={statusLabels[task.status]} />
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {task.status !== "in_progress" && canGiveFeedback ? (
+              <Button type="button" variant="secondary" onClick={onStart} disabled={saving}>
+                <Play className="h-4 w-4" />
+                Start
+              </Button>
+            ) : null}
+            <Button type="button" variant="danger" onClick={onDelete} disabled={saving}>
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
           </div>
-          {canGiveFeedback ? (
-            <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
-              <div className="mb-2 text-sm font-medium text-white">Did you do this?</div>
-              <textarea
-                value={feedbackNotes}
-                onChange={(event) => setFeedbackNotes(event.target.value)}
-                maxLength={1200}
-                placeholder="Optional notes: what happened, what blocked it, or what help you need."
-                className="mb-3 min-h-20 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-[var(--azure)] focus:ring-2 focus:ring-[rgba(0,120,212,0.28)]"
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => onFeedback("completed", feedbackNotes)}
-                  disabled={saving}
-                >
-                  <Check className="h-4 w-4" />
-                  Completed
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => onFeedback("couldnt_complete", feedbackNotes)}
-                  disabled={saving}
-                >
-                  <Clock3 className="h-4 w-4" />
-                  Couldn&apos;t Complete
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => onFeedback("no_longer_relevant", feedbackNotes)}
-                  disabled={saving}
-                >
-                  <Ban className="h-4 w-4" />
-                  No Longer Relevant
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => onFeedback("need_help", feedbackNotes)}
-                  disabled={saving}
-                >
-                  <HelpCircle className="h-4 w-4" />
-                  Need Help
-                </Button>
-              </div>
-            </div>
-          ) : null}
         </div>
-      )}
+        <div className="grid gap-3 text-sm sm:grid-cols-6">
+          <Info title="Importance" value={`${task.importance}/5`} />
+          <Info title="Effort" value={`${task.effort}/5`} />
+          <Info title="Friction" value={frictionLabels[frictionType]} />
+          <Info
+            title="Estimate"
+            value={task.estimated_minutes ? `${task.estimated_minutes} min` : "None"}
+          />
+          <Info title="Due date" value={task.due_date || "None"} />
+          <Info title="Status" value={statusLabels[task.status]} />
+        </div>
+        {canGiveFeedback ? (
+          <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
+            <div className="mb-2 text-sm font-medium text-white">
+              Talk to FlowPath about this task
+            </div>
+            <TextArea
+              value={revisionText}
+              onChange={(event) => setRevisionText(event.target.value)}
+              maxLength={1200}
+              placeholder="Tell FlowPath what should change, or why this did not work."
+              className="mb-3 min-h-20"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => onRevise(revisionText)}
+                disabled={saving || !hasRevisionText}
+              >
+                <Clock3 className="h-4 w-4" />
+                {saving ? "Revising..." : "Ask FlowPath to revise"}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => onFeedback("completed", revisionText)}
+                disabled={saving}
+              >
+                <Check className="h-4 w-4" />
+                Completed
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => onFeedback("no_longer_relevant", revisionText)}
+                disabled={saving}
+              >
+                <Ban className="h-4 w-4" />
+                No Longer Relevant
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => onFeedback("couldnt_complete", revisionText)}
+                disabled={saving || !hasRevisionText}
+              >
+                <Clock3 className="h-4 w-4" />
+                Couldn&apos;t Complete
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

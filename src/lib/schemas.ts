@@ -270,6 +270,15 @@ export const taskFeedbackInputSchema = z.object({
   notes: text(1200),
 });
 
+export const taskRevisionInputSchema = z.object({
+  instructions: z
+    .string()
+    .trim()
+    .min(1, "Tell FlowPath what should change about this task.")
+    .max(1200, "Revision instructions must be 1200 characters or fewer."),
+  intent: z.enum(["revise", "couldnt_complete"]).default("revise"),
+});
+
 export const checkInInputSchema = z.object({
   energy_level: z.number().int().min(1).max(10),
   mood: text(1000),
@@ -546,6 +555,7 @@ export type LifeAreaInput = z.infer<typeof lifeAreaInputSchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type TaskFeedbackInput = z.infer<typeof taskFeedbackInputSchema>;
+export type TaskRevisionInput = z.infer<typeof taskRevisionInputSchema>;
 export type CheckInInput = z.infer<typeof checkInInputSchema>;
 export type ContextConstraintsInput = z.infer<typeof contextConstraintsInputSchema>;
 export type InferredContextItemInput = z.infer<

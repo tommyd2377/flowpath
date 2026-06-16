@@ -5,7 +5,13 @@ import type {
 } from "openai/resources/responses/responses";
 import { z } from "zod";
 
-import { dailyPlanSchema, interviewerOutputSchema, nextMovePlanSchema } from "./schemas";
+import {
+  TASK_NOTES_MAX,
+  TASK_TITLE_MAX,
+  dailyPlanSchema,
+  interviewerOutputSchema,
+  nextMovePlanSchema,
+} from "./schemas";
 import {
   buildCognitiveMetadata,
   buildRevisionInstruction,
@@ -31,6 +37,7 @@ import {
   FIRST_INTAKE_QUESTION_PURPOSES,
   type FirstIntakePlan,
 } from "./situation-routing";
+import { TASK_FRICTION_TYPES } from "./types";
 import type {
   CheckIn,
   DailyPlan,
@@ -54,6 +61,7 @@ export const DAILY_PLAN_MAX_OUTPUT_TOKENS = 8000;
 export const FIRST_INTAKE_QUESTION_MAX_OUTPUT_TOKENS = 1200;
 export const INTERVIEW_MAX_OUTPUT_TOKENS = 3000;
 export const NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS = 10000;
+export const TASK_REVISION_MAX_OUTPUT_TOKENS = 1600;
 
 const webSearchContextSizes = ["low", "medium", "high"] as const;
 type WebSearchContextSize = (typeof webSearchContextSizes)[number];
@@ -87,6 +95,8 @@ Avoid questions like "What do you most want to change about this situation?" or 
 const operatorPlanInstruction = `FlowPath is generating an operator plan. Do not write generic advice. The user needs the next move that actually changes the situation. Analyze the situation like a successful domain operator advising someone they care about who lacks access, context, or hidden knowledge. Identify the real bottleneck, not just the obvious problem. Name the naive path most people would take, the higher-leverage operator path, and the wasted motion to avoid. Use the user's constraints: time, money, location, energy, access, credentials, safety, deadlines, support, prior attempts, and current tradeoffs when available. Ask no more questions if there is enough signal to produce a useful plan. Produce one next move for the next 24-48 hours, one first 10-minute action, and 2-3 concrete task candidates. Include assumptions, confidence, and professional/safety boundaries where relevant. Do not overclaim certainty. Do not pretend to have secret access, guaranteed outcomes, credentials, or personal connections. Prefer practical sequencing over motivational language. If the situation is high stakes, stabilize first and route to human/professional support where appropriate. If the situation is vague, make a reasonable plan based on available signal and list assumptions instead of forcing endless intake.`;
 
 const strategistSystemPrompt = `You are FlowPath, a guided next-move engine. Your job is to identify the user's next best move based on their goals, constraints, resources, current reality, urgency, and risks. You are not a chatbot, generic productivity coach, therapy, legal advice, medical care, financial advice, social services, or emergency help. You separate leverage from busyness. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${operatorPlanInstruction} ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction} Your output should help the user act in the real world today.`;
+
+const taskRevisionSystemPrompt = `You are FlowPath's task revision engine. Revise exactly one task based on the user's typed or dictated instruction. Preserve the user's actual goal and the task's connection to the situation. Do not create multiple tasks, do not write a full plan, and do not add generic coaching prose. Make the task more concrete, more doable, or better aligned with the user's blocker. If the user says they could not complete it, reduce friction, name the blocker in friction_note, and turn the task into the smallest useful next attempt. Use practical language the user can act on today. Keep the task title short. Keep notes concise but specific. Do not invent facts, deadlines, people, URLs, or external resources. Do not ask for secrets, exact financial balances, passwords, account numbers, exact addresses, tax IDs, or payment details. FlowPath is planning support only, not legal, medical, financial, emergency, or crisis help.`;
 
 export function isOpenAIWebSearchEnabled() {
   const value = process.env.OPENAI_WEB_SEARCH_ENABLED?.trim().toLowerCase();
@@ -384,6 +394,51 @@ function taskCandidateJsonSchema() {
         ],
       },
       rank_reason: { type: "string" },
+      due_date: { type: ["string", "null"] },
+    },
+  };
+}
+
+const taskRevisionOutputSchema = z.object({
+  title: z.string().trim().min(1).max(TASK_TITLE_MAX),
+  notes: z.string().trim().min(1).max(TASK_NOTES_MAX),
+  importance: z.number().int().min(1).max(5),
+  effort: z.number().int().min(1).max(5),
+  friction_type: z.enum(TASK_FRICTION_TYPES),
+  friction_note: z.string().trim().max(1200),
+  estimated_minutes: z.number().int().min(1).max(480).nullable(),
+  due_date: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable(),
+});
+
+function taskRevisionJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "title",
+      "notes",
+      "importance",
+      "effort",
+      "friction_type",
+      "friction_note",
+      "estimated_minutes",
+      "due_date",
+    ],
+    properties: {
+      title: { type: "string" },
+      notes: { type: "string" },
+      importance: { type: "integer", minimum: 1, maximum: 5 },
+      effort: { type: "integer", minimum: 1, maximum: 5 },
+      friction_type: {
+        type: "string",
+        enum: [...TASK_FRICTION_TYPES],
+      },
+      friction_note: { type: "string" },
+      estimated_minutes: { type: ["integer", "null"], minimum: 1, maximum: 480 },
       due_date: { type: ["string", "null"] },
     },
   };
@@ -1192,6 +1247,69 @@ async function createStructuredResponse({
     usage: responseUsageMetadata(response.usage),
     usedWebSearch: responseUsedWebSearch(response),
     webSearchCallCount: countWebSearchCalls(response),
+  };
+}
+
+export type TaskRevisionIntent = "revise" | "couldnt_complete";
+
+export type TaskRevisionGenerationResult = {
+  revision: z.infer<typeof taskRevisionOutputSchema>;
+  model: string;
+  modelRole: ModelRole;
+  usage?: AiUsageMetadata;
+};
+
+export async function generateTaskRevision({
+  task,
+  instructions,
+  intent,
+}: {
+  task: Task;
+  instructions: string;
+  intent: TaskRevisionIntent;
+}): Promise<TaskRevisionGenerationResult> {
+  const modelRole: ModelRole = "revision_standard";
+  const { outputText, model, usage } = await createStructuredResponse({
+    system: taskRevisionSystemPrompt,
+    name: "flowpath_task_revision",
+    description: "A revised single FlowPath task.",
+    schema: taskRevisionJsonSchema(),
+    user: {
+      intent,
+      user_instruction: instructions,
+      current_task: {
+        title: task.title,
+        notes: task.notes,
+        status: task.status,
+        importance: task.importance,
+        effort: task.effort,
+        friction_type: task.friction_type,
+        friction_note: task.friction_note,
+        estimated_minutes: task.estimated_minutes ?? null,
+        due_date: task.due_date ?? null,
+        situation_title: task.situation_title ?? null,
+        source_plan_section: task.source_plan_section ?? null,
+        rank_reason: task.rank_reason ?? null,
+      },
+    },
+    maxOutputTokens: TASK_REVISION_MAX_OUTPUT_TOKENS,
+    model: getModelForRole(modelRole),
+    modelRole,
+  });
+
+  const parsed = taskRevisionOutputSchema.parse(
+    trimGeneratedRecordStrings(JSON.parse(outputText), {
+      title: TASK_TITLE_MAX,
+      notes: TASK_NOTES_MAX,
+      friction_note: 1200,
+    }),
+  );
+
+  return {
+    revision: parsed,
+    model,
+    modelRole,
+    usage,
   };
 }
 

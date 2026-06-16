@@ -322,6 +322,7 @@ export const GENERATION_FLOW_TYPES = [
   "plan_evaluator",
   "plan_revision",
   "task_generation",
+  "task_revision",
   "task_ranking",
   "today_dashboard",
 ] as const;

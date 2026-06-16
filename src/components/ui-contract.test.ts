@@ -54,12 +54,34 @@ test("New Situation uses a guided stepper and broad categories", () => {
   assert.doesNotMatch(source, /I want sexual connection safely and respectfully/);
 });
 
+test("New Situation shows saved plan state instead of quota CTA after generation", () => {
+  const source = readSource("src/components/next-move-flow.tsx");
+
+  assert.match(source, /Plan generated/);
+  assert.match(source, /Your Next Move Plan is saved and ranked tasks are ready below/);
+  assert.match(source, /!detail\.latestPlan/);
+  assert.doesNotMatch(source, /Generate updated plan/);
+});
+
 test("Task feedback gives deterministic confirmation copy", () => {
   const source = readSource("src/components/tasks-manager.tsx");
 
   assert.match(source, /Marked complete: it is out of the active queue/);
   assert.match(source, /blocked friction, not a failure/);
   assert.match(source, /ignored plan suggestions as lower priority/);
-  assert.match(source, /behind directly actionable work/);
+  assert.match(source, /Ask FlowPath to revise/);
+  assert.match(source, /Talk to FlowPath about this task/);
+  assert.doesNotMatch(source, /Need Help/);
+  assert.doesNotMatch(source, /<Pencil/);
   assert.doesNotMatch(source, /Task feedback saved/);
+});
+
+test("Task revision uses the cheap revision model role", () => {
+  const routeSource = readSource("src/app/api/tasks/[id]/revise/route.ts");
+  const modelSource = readSource("src/lib/flowpath-ai.ts");
+
+  assert.match(routeSource, /flow_type: "task_revision"/);
+  assert.match(routeSource, /model_role: "revision_standard"/);
+  assert.match(modelSource, /getModelForRole\(modelRole\)/);
+  assert.match(modelSource, /flowpath_task_revision/);
 });
