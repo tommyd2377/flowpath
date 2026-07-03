@@ -33,7 +33,7 @@ export function SituationsView() {
       setSituations(await apiFetch<Situation[]>(`/api/situations${suffix}`));
     } catch (loadError) {
       setError(
-        loadError instanceof Error ? loadError.message : "Could not load situations.",
+        loadError instanceof Error ? loadError.message : "Could not load boards.",
       );
     } finally {
       setLoading(false);
@@ -53,11 +53,11 @@ export function SituationsView() {
         method: "PUT",
         body: JSON.stringify({ ...situation, status: nextStatus }),
       });
-      setMessage(`Situation marked ${nextStatus}.`);
+      setMessage(`Board marked ${statusLabel(nextStatus)}.`);
       await load();
     } catch (saveError) {
       setError(
-        saveError instanceof Error ? saveError.message : "Could not update situation.",
+        saveError instanceof Error ? saveError.message : "Could not update board.",
       );
     } finally {
       setSaving(false);
@@ -80,13 +80,13 @@ export function SituationsView() {
         method: "DELETE",
       });
       setConfirmingDeleteId(null);
-      setMessage("Situation deleted.");
+      setMessage("Board deleted.");
       await load();
     } catch (deleteError) {
       setError(
         deleteError instanceof Error
           ? deleteError.message
-          : "Could not delete situation.",
+          : "Could not delete board.",
       );
     } finally {
       setSaving(false);
@@ -95,8 +95,8 @@ export function SituationsView() {
 
   return (
     <div>
-      <PageHeader eyebrow="Situations" title="Active Situations">
-        <p>View and manage the situations FlowPath is helping you move through.</p>
+      <PageHeader eyebrow="Boards" title="Active Boards">
+        <p>View the boards FlowPath is reading and recalculating with you.</p>
       </PageHeader>
 
       {message ? <div className="mb-4"><Notice tone="success">{message}</Notice></div> : null}
@@ -108,25 +108,25 @@ export function SituationsView() {
           onChange={(event) => setStatus(event.target.value)}
           className="sm:max-w-48"
         >
-          <option value="active">active</option>
-          <option value="resolved">resolved</option>
-          <option value="archived">archived</option>
-          <option value="all">all</option>
+          <option value="active">Active</option>
+          <option value="resolved">Resolved</option>
+          <option value="archived">Archived</option>
+          <option value="all">All</option>
         </SelectInput>
         <Link href="/next-move">
           <Button type="button">
             <Plus className="h-4 w-4" />
-            New Situation
+            New Board
           </Button>
         </Link>
       </div>
 
       {loading ? (
         <Card>
-          <div className="text-sm text-slate-400">Loading situations...</div>
+          <div className="text-sm text-slate-400">Loading boards...</div>
         </Card>
       ) : situations.length === 0 ? (
-        <EmptyState>No situations in this view.</EmptyState>
+        <EmptyState>No boards in this view.</EmptyState>
       ) : (
         <div className="grid gap-3">
           {situations.map((situation) => (
@@ -138,7 +138,7 @@ export function SituationsView() {
                       {situation.urgency} urgency
                     </span>
                     <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">
-                      {situation.status}
+                      {statusLabel(situation.status)}
                     </span>
                   </div>
                   <h2 className="mt-3 text-xl font-semibold text-white">
@@ -210,4 +210,14 @@ export function SituationsView() {
       )}
     </div>
   );
+}
+
+const statusLabels: Record<Situation["status"], string> = {
+  active: "Active",
+  resolved: "Resolved",
+  archived: "Archived",
+};
+
+function statusLabel(status: Situation["status"]) {
+  return statusLabels[status];
 }

@@ -19,7 +19,7 @@ test("prohibited data guard blocks obvious sensitive identifiers", () => {
 
 test("prohibited data guard allows broad constraints", () => {
   assert.doesNotThrow(() =>
-    assertNoProhibitedData("Runway is 1-3 months and location is NYC metro."),
+    assertNoProhibitedData("Runway is 1-3 months and location is a city metro."),
   );
   assert.doesNotThrow(() =>
     assertNoProhibitedData(

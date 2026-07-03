@@ -7,7 +7,12 @@ import type { ReactNode } from "react";
 
 import { apiFetch } from "@/lib/client-api";
 import { readClientQaMode } from "@/lib/qa-mode";
-import type { StoredNextMovePlan, Task, TaskConversionResponse } from "@/lib/types";
+import {
+  entryDomainTitle,
+  inferSecondaryDomainIds,
+  isEntryDomainId,
+} from "@/lib/entry-domains";
+import type { Situation, StoredNextMovePlan, Task, TaskConversionResponse } from "@/lib/types";
 import { Button, Card, EmptyState } from "./ui";
 
 export function modeLabel(mode: string) {
@@ -22,6 +27,7 @@ export function NextMovePlanCard({
   converting,
   tasksAdded,
   taskConfirmation,
+  situation,
 }: {
   plan: StoredNextMovePlan | null;
   fallbackTask?: Task | null;
@@ -30,6 +36,7 @@ export function NextMovePlanCard({
   converting?: boolean;
   tasksAdded?: boolean;
   taskConfirmation?: TaskConversionResponse | null;
+  situation?: Situation | null;
 }) {
   const showCognitiveDebug = useCognitiveDebugVisible();
   const displayedTask = primaryTask ?? fallbackTask ?? null;
@@ -55,8 +62,8 @@ export function NextMovePlanCard({
             <Brief title="Effort" value={`${fallbackTask.effort}/5`} />
           </div>
           <p className="text-sm text-slate-400">
-            This is the top related task for this situation. Generate a next move
-            plan when you want the fuller reasoning and step breakdown.
+            This is the top related task for this board. Generate a best move
+            when you want the fuller reasoning and step breakdown.
           </p>
         </Card>
       );
@@ -65,7 +72,7 @@ export function NextMovePlanCard({
     return (
       <Card>
         <EmptyState>
-          No next move plan yet. Complete a few intake answers or generate a plan now.
+          No best move yet. Complete a few intake answers or generate one now.
         </EmptyState>
       </Card>
     );
@@ -105,6 +112,8 @@ export function NextMovePlanCard({
           </span>
         </div>
       </div>
+
+      <BoardSnapshot plan={plan} situation={situation} />
 
       <TaskAction
         onConvert={onConvert}
@@ -491,6 +500,88 @@ function SuggestedNextAction({ plan }: { plan: StoredNextMovePlan }) {
   );
 }
 
+export function BoardSnapshot({
+  plan,
+  situation,
+}: {
+  plan: StoredNextMovePlan;
+  situation?: Situation | null;
+}) {
+  const primaryDomain = situation?.category ?? "";
+  const activeDomains = uniqueNonEmpty([
+    isEntryDomainId(primaryDomain) ? entryDomainTitle(primaryDomain) : "",
+    ...inferSecondaryDomainIds(
+      primaryDomain,
+      [
+        situation?.description ?? "",
+        plan.situation_read,
+        plan.situation_summary,
+        plan.context_used.map((item) => `${item.label} ${item.value}`).join(" "),
+        plan.task_candidates.map((task) => `${task.title} ${task.details}`).join(" "),
+      ].join(" "),
+    ).map(entryDomainTitle),
+  ]);
+  const assetSignals = plan.context_used
+    .filter((item) =>
+      [
+        "access_connections",
+        "support_network",
+        "career",
+        "goal",
+        "preference",
+        "other",
+      ].includes(item.category),
+    )
+    .map((item) => `${item.label}: ${item.value}`)
+    .slice(0, 4);
+
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-4">
+      <div className="mb-3 text-sm font-semibold uppercase text-[var(--azure-light)]">
+        Board Snapshot
+      </div>
+      <div className="grid gap-3 text-sm md:grid-cols-2">
+        <Brief title="Current position" value={plan.situation_summary} />
+        <Brief title="What you’re trying to figure out" value={plan.situation_read} />
+        <Brief
+          title="Primary domain"
+          value={isEntryDomainId(primaryDomain) ? entryDomainTitle(primaryDomain) : "Not set"}
+        />
+        <ListBlock
+          title="Active secondary domains"
+          items={
+            activeDomains.length > 1
+              ? activeDomains.slice(1)
+              : ["No secondary domain is active yet."]
+          }
+        />
+        <ListBlock title="Constraints" items={plan.key_constraints} />
+        <ListBlock
+          title="Assets"
+          items={assetSignals.length ? assetSignals : ["No clear assets captured yet."]}
+        />
+        <ListBlock
+          title="Assumptions"
+          items={plan.assumptions.length ? plan.assumptions : ["No major assumptions listed."]}
+        />
+        <Brief
+          title="Stability / urgency"
+          value={`${modeLabel(plan.mode)} mode with ${plan.safety_boundary.risk_level} safety risk.`}
+        />
+        <Brief title="What changed" value={plan.friction_pattern} />
+        <ListBlock
+          title="Missing information"
+          items={
+            plan.follow_up_questions_if_any.length
+              ? plan.follow_up_questions_if_any
+              : ["No missing information is blocking the next move."]
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
 function WhyThisResponseBlock({ plan }: { plan: StoredNextMovePlan }) {
   const metadata = plan.cognitive_metadata;
   if (!metadata) return null;
@@ -561,7 +652,7 @@ function TaskAction({
     <div>
       <Button type="button" onClick={onConvert} disabled={converting}>
         <CheckSquare className="h-4 w-4" />
-        {converting ? "Creating tasks..." : "Create ranked tasks from this plan"}
+        {converting ? "Creating tasks..." : "Create ranked tasks from this move"}
       </Button>
     </div>
   );
@@ -631,7 +722,7 @@ function ContextUsedBlock({ plan }: { plan: StoredNextMovePlan }) {
         href="/memory"
         className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)] hover:text-white"
       >
-        Edit or delete context in Memory
+        Correct context in Memory
       </Link>
     </details>
   );
@@ -668,8 +759,8 @@ function LocalScoutBlock({ plan }: { plan: StoredNextMovePlan }) {
       value={
         scout.missing_location_question ||
         (scout.used_web_search
-          ? "No useful local finding changed this plan."
-          : "No current local lookup was needed for this plan.")
+          ? "No useful local finding changed this move."
+          : "No current local lookup was used. If local specificity matters, make the next action a concrete search such as finding one recurring option near your location.")
       }
     />
   );
@@ -763,4 +854,10 @@ function isWebUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+function uniqueNonEmpty(items: string[]) {
+  return Array.from(
+    new Set(items.map((item) => item.trim()).filter((item) => item.length > 0)),
+  );
 }

@@ -279,6 +279,23 @@ export const taskRevisionInputSchema = z.object({
   intent: z.enum(["revise", "couldnt_complete"]).default("revise"),
 });
 
+export const boardUpdateInputSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, "Tell FlowPath what changed on this board.")
+    .max(INTAKE_ANSWER_MAX, `Board update must be ${INTAKE_ANSWER_MAX} characters or fewer.`),
+  client_message_id: z.string().trim().max(120).optional().default(""),
+});
+
+export const memoryCorrectionInputSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, "Tell FlowPath what is wrong, outdated, missing, or no longer true.")
+    .max(1600, "Memory correction must be 1600 characters or fewer."),
+});
+
 export const checkInInputSchema = z.object({
   energy_level: z.number().int().min(1).max(10),
   mood: text(1000),
@@ -556,6 +573,8 @@ export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type TaskFeedbackInput = z.infer<typeof taskFeedbackInputSchema>;
 export type TaskRevisionInput = z.infer<typeof taskRevisionInputSchema>;
+export type BoardUpdateInput = z.infer<typeof boardUpdateInputSchema>;
+export type MemoryCorrectionInput = z.infer<typeof memoryCorrectionInputSchema>;
 export type CheckInInput = z.infer<typeof checkInInputSchema>;
 export type ContextConstraintsInput = z.infer<typeof contextConstraintsInputSchema>;
 export type InferredContextItemInput = z.infer<

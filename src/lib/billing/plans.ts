@@ -5,6 +5,10 @@ export const BILLING_UPGRADE_MESSAGE =
 export const GUEST_UPGRADE_MESSAGE =
   "Create a free account to keep using FlowPath, or upgrade to Core for more monthly AI guidance.";
 
+export const PAYWALL_DISABLED = true;
+export const PAYWALL_DISABLED_MESSAGE =
+  "FlowPath is currently unlocked while the next-move engine is being rebuilt.";
+
 export const CORE_PRICE_CENTS = 1200;
 
 export const usageTypeLabels: Record<UsageType, string> = {
@@ -72,6 +76,12 @@ export const guestPlanLimits: PlanLimits = {
   lightweight_assist: 5,
 };
 
+export const unlockedPlanLimits: PlanLimits = {
+  today_checkin: null,
+  next_move_plan: null,
+  lightweight_assist: null,
+};
+
 export type BillingUserPlanSnapshot = {
   email: string | null;
   plan_tier: PlanTier;
@@ -110,6 +120,7 @@ export function getEffectivePlanTier(user: BillingUserPlanSnapshot): PlanTier {
 }
 
 export function canUseWebSearchForTier(planTier: PlanTier) {
+  if (PAYWALL_DISABLED) return true;
   return planTier !== "free";
 }
 

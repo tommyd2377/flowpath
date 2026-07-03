@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
+import { PAYWALL_DISABLED } from "@/lib/billing/plans";
 import type { BillingSummary, UsageType } from "@/lib/types";
 import { Button, Card, EmptyState, Notice, PageHeader } from "@/components/ui";
 
@@ -103,6 +104,27 @@ export function BillingPanel() {
     }
   }
 
+  if (PAYWALL_DISABLED) {
+    return (
+      <div>
+        <PageHeader eyebrow="Billing" title="Billing is disabled">
+          <p>
+            FlowPath is currently unlocked while the domain-general next-move
+            engine is being rebuilt.
+          </p>
+        </PageHeader>
+        <Card>
+          <h2 className="text-xl font-semibold text-white">Core app access is free for now.</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-300">
+            Usage limits, checkout, and upgrade prompts are dormant behind a
+            disabled paywall flag. Stripe code remains in the codebase for a
+            future pass, but no current app path needs payment to continue.
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
   const showCreateAccount = Boolean(summary?.is_guest);
   const showUpgrade = summary?.plan_tier === "free" && !summary.is_guest;
   const showManageBilling =
@@ -187,7 +209,7 @@ export function BillingPanel() {
 
             {summary.is_guest ? (
               <div className="mt-5 rounded-lg border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">
-                Guest mode includes one full situation intake and one Next Move
+                Guest mode includes one full board intake and one Next Move
                 plan. Create a free account to keep going after that.
               </div>
             ) : summary.plan_tier === "free" ? (
@@ -233,7 +255,7 @@ export function BillingPanel() {
             <p className="text-sm leading-6 text-slate-300">
               FlowPath helps you identify practical next moves. It is not emergency
               help, therapy, legal advice, medical care, financial advice, or a
-              replacement for human support. For high-stakes situations, contact
+              replacement for human support. For high-stakes boards, contact
               appropriate human or professional support.
             </p>
           </Card>

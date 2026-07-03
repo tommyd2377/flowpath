@@ -179,12 +179,13 @@ after(() => {
   fs.rmSync(dbPath, { force: true });
 });
 
-test("free user can use a feature within quota and is blocked after quota", async () => {
+test("paywall-disabled free user is not blocked by quota", async () => {
   await insertUser({ id: 1 });
 
   const firstDecision = await usage.canUseFeature(1, "next_move_plan");
   assert.equal(firstDecision.allowed, true);
-  assert.equal(firstDecision.remaining, 1);
+  assert.equal(firstDecision.limit, null);
+  assert.equal(firstDecision.remaining, null);
 
   await usage.incrementUsage(1, "next_move_plan", {
     inputTokens: 100,
@@ -192,29 +193,26 @@ test("free user can use a feature within quota and is blocked after quota", asyn
   });
 
   const secondDecision = await usage.canUseFeature(1, "next_move_plan");
-  assert.equal(secondDecision.allowed, false);
+  assert.equal(secondDecision.allowed, true);
   assert.equal(secondDecision.used, 1);
-  assert.equal(secondDecision.remaining, 0);
-  await assert.rejects(
-    () => usage.assertCanUseFeature(1, "next_move_plan"),
-    /free monthly FlowPath usage is used up/,
-  );
+  assert.equal(secondDecision.remaining, null);
+  await usage.assertCanUseFeature(1, "next_move_plan");
 });
 
-test("guest user gets guest limits and signup-oriented quota copy", async () => {
+test("paywall-disabled guest user gets unlocked limits", async () => {
   await insertUser({ id: 8, email: null, isGuest: 1 });
   await setUsage(8, "today_checkin", 1);
 
   const decision = await usage.canUseFeature(8, "today_checkin");
-  assert.equal(decision.allowed, false);
-  assert.equal(decision.limit, 1);
-  assert.match(decision.upgradeMessage, /Create a free account/);
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.limit, null);
+  assert.match(decision.upgradeMessage, /currently unlocked/);
 
   const summary = await usage.getBillingSummary(8);
   assert.equal(summary.is_guest, true);
   assert.equal(
     summary.usage.find((item) => item.usage_type === "today_checkin")?.limit,
-    1,
+    null,
   );
 });
 
@@ -235,8 +233,8 @@ test("guest can finish the first situation intake even after lightweight quota",
     [now, now],
   );
 
-  const blockedAssist = await usage.canUseFeature(18, "lightweight_assist");
-  assert.equal(blockedAssist.allowed, false);
+  const unlockedAssist = await usage.canUseFeature(18, "lightweight_assist");
+  assert.equal(unlockedAssist.allowed, true);
   assert.equal(await usage.canUseGuestFirstSituationIntake(18, 101), true);
   assert.equal(await usage.canUseFirstSituationFlow(18, 101), true);
   assert.equal(await usage.canUseGuestFirstSituationIntake(18, 102), false);
@@ -267,8 +265,8 @@ test("free user can finish one first situation flow before upgrade", async () =>
     [now, now],
   );
 
-  assert.equal((await usage.canUseFeature(19, "lightweight_assist")).allowed, false);
-  assert.equal((await usage.canUseFeature(19, "next_move_plan")).allowed, false);
+  assert.equal((await usage.canUseFeature(19, "lightweight_assist")).allowed, true);
+  assert.equal((await usage.canUseFeature(19, "next_move_plan")).allowed, true);
   assert.equal(await usage.canUseFirstSituationFlow(19, 201), true);
   assert.equal(await usage.canUseFirstSituationFlow(19, 202), false);
 
@@ -279,18 +277,19 @@ test("free user can finish one first situation flow before upgrade", async () =>
   assert.equal(await usage.canUseFirstSituationFlow(19, 201), false);
 });
 
-test("core user has the higher quota", async () => {
+test("core user is also unlocked while paywall is disabled", async () => {
   await insertUser({ id: 2, planTier: "core", billingStatus: "active" });
   await setUsage(2, "next_move_plan", 19);
 
   const beforeLimit = await usage.canUseFeature(2, "next_move_plan");
   assert.equal(beforeLimit.allowed, true);
-  assert.equal(beforeLimit.remaining, 1);
+  assert.equal(beforeLimit.remaining, null);
 
   await usage.incrementUsage(2, "next_move_plan");
-  const atLimit = await usage.canUseFeature(2, "next_move_plan");
-  assert.equal(atLimit.allowed, false);
-  assert.equal(atLimit.used, 20);
+  const afterUsage = await usage.canUseFeature(2, "next_move_plan");
+  assert.equal(afterUsage.allowed, true);
+  assert.equal(afterUsage.used, 20);
+  assert.equal(afterUsage.limit, null);
 });
 
 test("internal unlimited users are never blocked", async () => {

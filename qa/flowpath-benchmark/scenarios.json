@@ -11,7 +11,7 @@
   },
   {
     "id": "social-reentry-nyc",
-    "situation": "I moved to NYC and feel isolated. I want actual friends, not another vague plan to join a club.",
+    "situation": "I moved to a new city and feel isolated. I want actual friends, not another vague plan to join a club.",
     "expected": {
       "safety_route": false,
       "max_task_candidates": 3,
@@ -31,7 +31,7 @@
   },
   {
     "id": "current-local-resource",
-    "situation": "I need current local options for tenant help in Brooklyn this week.",
+    "situation": "I need current local options for tenant help in my city this week.",
     "expected": {
       "web_search_decision": "current_facts_needed",
       "safety_route": false,

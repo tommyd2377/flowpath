@@ -31,7 +31,7 @@ type Context = { params: Promise<{ id: string }> };
 
 async function situationDetail(userId: number, id: number, isQa = false) {
   const situation = await getSituation(userId, id);
-  if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+  if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
   const session =
     (await getLatestIntakeSession(userId, id)) ??
     (await getOrCreateIntakeSession(userId, id));
@@ -60,7 +60,7 @@ export async function GET(request: Request, context: Context) {
       await situationDetail(user.id, parseId(idParam), isQaRequest(request)),
     );
   } catch (error) {
-    return errorResponse(error, "Could not load situation.");
+    return errorResponse(error, "Could not load board.");
   }
 }
 
@@ -77,7 +77,7 @@ export async function PUT(request: Request, context: Context) {
     const hasUserAnswer = existingMessages.some((message) => message.role === "user");
     const existingSituation = await getSituation(user.id, id);
     const situation = await updateSituation(user.id, id, input);
-    if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
     if (existingSituation && !hasUserAnswer) {
       const planner = buildIntakeRoutingMetadata(situation);
       await createOutcomeHarnessEvent(user.id, {
@@ -100,7 +100,7 @@ export async function PUT(request: Request, context: Context) {
     }
     return dataResponse(await situationDetail(user.id, id, isQaRequest(request)));
   } catch (error) {
-    return errorResponse(error, "Could not update situation.");
+    return errorResponse(error, "Could not update board.");
   }
 }
 
@@ -109,9 +109,9 @@ export async function DELETE(_request: Request, context: Context) {
     const user = await requireUser();
     const { id: idParam } = await context.params;
     const deleted = await deleteSituation(user.id, parseId(idParam));
-    if (!deleted) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    if (!deleted) throw new ApiRequestError("Board not found.", 404, "not_found");
     return emptyResponse();
   } catch (error) {
-    return errorResponse(error, "Could not delete situation.");
+    return errorResponse(error, "Could not delete board.");
   }
 }

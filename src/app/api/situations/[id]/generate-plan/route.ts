@@ -80,7 +80,7 @@ export async function POST(request: Request, context: Context) {
         ? body.retry_count
         : 0;
     const situation = await getSituation(user.id, situationId);
-    if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
     const firstFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
       isQa,
     });

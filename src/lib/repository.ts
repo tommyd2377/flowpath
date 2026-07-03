@@ -70,6 +70,7 @@ import {
   mergeContextConstraints,
   sanitizeContextConstraintsForSession,
 } from "./constraints";
+import { inferBoardTitle } from "./entry-domains";
 import { assertSafeTextFields } from "./privacy";
 import { nowIso, todayIsoDate } from "./time";
 
@@ -197,7 +198,7 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 
 function deriveSituationTitle(title: string | undefined, description: string) {
   const candidate = (title || description).trim().replace(/\s+/g, " ");
-  if (!candidate) return "Untitled situation";
+  if (!candidate) return "New Board";
   if (candidate.length <= 120) return candidate;
   return `${candidate.slice(0, 117).trimEnd()}...`;
 }
@@ -2155,7 +2156,9 @@ export async function createSituation(
   assertSafeTextFields(input);
   const now = nowIso();
   const description = input.description || input.title;
-  const derivedTitle = deriveSituationTitle(input.title, description);
+  const derivedTitle = input.title
+    ? deriveSituationTitle(input.title, description)
+    : inferBoardTitle(input.category, description);
   const id = await insert(
     `INSERT INTO situations (
       user_id, title, description, category, status, urgency, is_qa, created_at, updated_at

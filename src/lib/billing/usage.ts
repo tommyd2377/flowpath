@@ -14,9 +14,12 @@ import {
   BILLING_UPGRADE_MESSAGE,
   CORE_PRICE_CENTS,
   GUEST_UPGRADE_MESSAGE,
+  PAYWALL_DISABLED,
+  PAYWALL_DISABLED_MESSAGE,
   getEffectivePlanTier,
   guestPlanLimits,
   planLimits,
+  unlockedPlanLimits,
   usageTypes,
 } from "./plans";
 
@@ -150,10 +153,12 @@ function usageSummaryForLimits(
 }
 
 function limitsForUser(user: BillingUser, planTier: PlanTier) {
+  if (PAYWALL_DISABLED) return unlockedPlanLimits;
   return user.is_guest ? guestPlanLimits : planLimits[planTier];
 }
 
 function upgradeMessageForUser(user: BillingUser) {
+  if (PAYWALL_DISABLED) return PAYWALL_DISABLED_MESSAGE;
   return user.is_guest ? GUEST_UPGRADE_MESSAGE : BILLING_UPGRADE_MESSAGE;
 }
 

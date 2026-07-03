@@ -95,7 +95,7 @@ export async function POST(request: Request, context: Context) {
       usageType: "lightweight_assist",
     });
     const situation = await getSituation(user.id, situationId);
-    if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
     const firstSituationFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
       isQa,
     });

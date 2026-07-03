@@ -1,6 +1,6 @@
 UPDATE profile
 SET personal_profile = ''
-WHERE personal_profile = 'Paste durable context about yourself, where you live or the places you need local advice for, your work, your health, your creative projects, your acting pipeline, your goals, and your constraints here.';
+WHERE personal_profile = 'Paste durable context about yourself, where you live or the places you need local advice for, your work, your relationships, your craft or practice goals, your current constraints, and what you want FlowPath to remember here.';
 
 UPDATE profile
 SET current_season = ''

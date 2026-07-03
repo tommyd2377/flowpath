@@ -32,16 +32,16 @@ const baseSituation: Situation = {
 
 const baseProfile: Profile = {
   id: 1,
-  personal_profile: "Works on FlowPath, a Next.js and TypeScript product.",
+  personal_profile: "Works on a structured planning project with a small technical stack.",
   current_season: "Trying to turn planning into execution.",
-  core_priorities: "Product usefulness, writing, and NYC social connection.",
+  core_priorities: "Useful work, craft progress, and local social connection.",
   constraints: "Low energy late at night; prefers one concrete next action.",
   operating_principles: "Avoid overlong generic advice.",
-  remember: "For coding questions, prefer repo-specific implementation steps.",
+  remember: "For implementation questions, prefer system-specific next steps.",
   challenge_on: "Challenge loops where more thinking replaces action.",
   context_constraints: {
     location: {
-      value: "NYC",
+      value: "city_or_metro",
       precision: "city_or_metro",
       persistence: "save_broad_constraint",
     },
@@ -54,7 +54,7 @@ const memoryItems: InferredContextItem[] = [
   {
     id: 1,
     label: "Project tooling",
-    value: "FlowPath uses Next.js App Router, TypeScript, Tailwind, libSQL, and OpenAI.",
+    value: "The current project uses a typed web stack, structured data, and model calls.",
     category: "work_career",
     sensitivity: "low",
     persistence: "saved_memory",
@@ -67,8 +67,8 @@ const memoryItems: InferredContextItem[] = [
   },
   {
     id: 2,
-    label: "Screenplay focus",
-    value: "Creative work should preserve character psychology and subtext.",
+    label: "Craft focus",
+    value: "Creative work should preserve emotional coherence and subtext.",
     category: "creative_personal_project",
     sensitivity: "low",
     persistence: "saved_memory",
@@ -82,7 +82,7 @@ const memoryItems: InferredContextItem[] = [
   {
     id: 3,
     label: "Social context",
-    value: "NYC location matters for social and dating recommendations.",
+    value: "City or metro location matters for social and dating recommendations.",
     category: "location",
     sensitivity: "moderate",
     persistence: "saved_memory",
@@ -111,19 +111,19 @@ test("state detector classifies core cognitive modes", () => {
     "rumination_mode",
   );
   assert.equal(
-    stateFor("Help me decide GTM and pricing for my startup MVP.").primary_state,
-    "product_strategy_mode",
+    stateFor("Help me decide positioning and pricing for a new service.").primary_state,
+    "opportunity_strategy_mode",
   );
   assert.equal(
-    stateFor("I'm a founder looping on landing-page polish instead of customer validation.").primary_state,
-    "product_strategy_mode",
+    stateFor("I'm looping on offer polish instead of customer validation.").primary_state,
+    "opportunity_strategy_mode",
   );
   assert.equal(
-    stateFor("Debug this Next.js TypeScript API route implementation.").primary_state,
-    "coding_mode",
+    stateFor("Debug this workflow implementation.").primary_state,
+    "implementation_mode",
   );
   assert.equal(
-    stateFor("Give me screenplay feedback on the character subtext.").primary_state,
+    stateFor("Give me story feedback on the character subtext.").primary_state,
     "creative_mode",
   );
   assert.equal(
@@ -142,7 +142,7 @@ test("rumination detection caps tasks and redirects to one action", () => {
       id: 1,
       session_id: 1,
       role: "user",
-      content: "What if I picked the wrong product direction?",
+      content: "What if I picked the wrong offer direction?",
       created_at: "2026-05-23T00:00:00.000Z",
     },
     {
@@ -156,7 +156,7 @@ test("rumination detection caps tasks and redirects to one action", () => {
       id: 3,
       session_id: 1,
       role: "user",
-      content: "What if I picked the wrong product direction again?",
+      content: "What if I picked the wrong offer direction again?",
       created_at: "2026-05-23T00:02:00.000Z",
     },
   ];
@@ -186,19 +186,19 @@ test("intervention selector handles execution and caution modes", () => {
 });
 
 test("memory selection stays compact and category-aware", () => {
-  const codingState = stateFor("Implement a TypeScript route in this Next.js app.");
+  const implementationState = stateFor("Implement a structured route in this web app.");
   const selection = selectRelevantMemory(
     {
-      userMessage: "Implement a TypeScript route in this Next.js app.",
+      userMessage: "Implement a structured route in this web app.",
       profile: baseProfile,
       inferredContextItems: memoryItems,
     },
-    codingState,
+    implementationState,
   );
 
   assert.ok(selection.selected_memories.length >= 3);
   assert.ok(selection.selected_memories.length <= 8);
-  assert.match(selection.selected_memories.map((item) => item.summary).join(" "), /Next\.js|TypeScript|FlowPath/i);
+  assert.match(selection.selected_memories.map((item) => item.summary).join(" "), /typed web stack|structured data|model calls/i);
 });
 
 test("web search gating turns on for volatile docs and off for pure creative work", () => {
@@ -211,10 +211,10 @@ test("web search gating turns on for volatile docs and off for pure creative wor
   );
   assert.equal(docsDecision.should_use_web_search, true);
 
-  const creativeState = stateFor("Rewrite this screenplay scene for more subtext.");
+  const creativeState = stateFor("Rewrite this story scene for more subtext.");
   const creativeIntervention = selectIntervention(creativeState, { userMessage: creativeState.user_intent });
   const creativeDecision = shouldUseWebSearch(
-    { userMessage: "Rewrite this screenplay scene for more subtext.", allowWebSearch: true },
+    { userMessage: "Rewrite this story scene for more subtext.", allowWebSearch: true },
     creativeState,
     creativeIntervention,
   );

@@ -4,16 +4,14 @@ import {
   isImmediateDangerText,
   isSocialConnectionSituation,
 } from "./social-connection";
+import { isEntryDomainId } from "./entry-domains";
 
 export const SITUATION_DOMAINS = [
-  "career_job_search",
-  "social_connection_dating",
-  "money_career_stabilization",
-  "creative_project_focus",
-  "recovery_energy_work",
-  "housing_high_stakes",
+  "work_money_career",
+  "people_community_belonging",
+  "craft_creativity_mastery",
+  "urgent_stability",
   "open_loops_prioritization",
-  "founder_product_validation",
   "crisis_safety",
   "unknown",
 ] as const;
@@ -83,7 +81,7 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
     /\bimmediate danger\b/,
     /\bunsafe right now\b/,
   ],
-  housing_high_stakes: [
+  urgent_stability: [
     /\bhousing\b/,
     /\brent\b/,
     /\blease\b/,
@@ -93,72 +91,6 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
     /\bapartment\b/,
     /\broommate\b/,
     /\bplace to live\b/,
-  ],
-  social_connection_dating: [
-    /\blonel(y|iness)\b/,
-    /\bisolat(e|ed|ion)\b/,
-    /\bfriend(s|ship)?\b/,
-    /\bdate\b/,
-    /\bdating\b/,
-    /\bromantic\b/,
-    /\bsexual connection\b/,
-    /\bsocial momentum\b/,
-    /\bremote work\b/,
-  ],
-  money_career_stabilization: [
-    /\bmoney pressure\b/,
-    /\bfinancial\b/,
-    /\blimited runway\b/,
-    /\brunway\b/,
-    /\bfreelance\b/,
-    /\bcut(ting)? expenses\b/,
-    /\bincome\b/,
-    /\bcash\b/,
-  ],
-  founder_product_validation: [
-    /\bfounder\b/,
-    /\bstartup\b/,
-    /\bai app\b/,
-    /\bbuilt an app\b/,
-    /\bproduct polish\b/,
-    /\bproduct strategy\b/,
-    /\bonboard(ing)?\b/,
-    /\buser testing\b/,
-    /\btry it out\b/,
-    /\bpricing\b/,
-    /\bprice\b/,
-    /\bfree\b/,
-    /\bcharge\b/,
-    /\bearly users?\b/,
-    /\btoken costs?\b/,
-    /\bapi costs?\b/,
-    /\bmarketing\b/,
-    /\breddit\b/,
-    /\bfeatures?\b/,
-  ],
-  career_job_search: [
-    /\bjob search\b/,
-    /\bjobs?\b/,
-    /\binterviews?\b/,
-    /\bresume\b/,
-    /\bportfolio\b/,
-    /\bnetwork(ing)?\b/,
-    /\bcareer change\b/,
-    /\bcredential\b/,
-  ],
-  creative_project_focus: [
-    /\bscreenplay\b/,
-    /\bcreative\b/,
-    /\bwriting\b/,
-    /\bscript\b/,
-    /\bcharacter\b/,
-    /\barc\b/,
-    /\brevis(e|ion)\b/,
-    /\bapp idea\b/,
-    /\bproject stuck\b/,
-    /\bkeep switching\b/,
-  ],
-  recovery_energy_work: [
     /\brebuild(ing)?\b/,
     /\brecovery\b/,
     /\brough period\b/,
@@ -170,6 +102,67 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
     /\bmedication\b/,
     /\bprescription\b/,
   ],
+  people_community_belonging: [
+    /\blonel(y|iness)\b/,
+    /\bisolat(e|ed|ion)\b/,
+    /\bfriend(s|ship)?\b/,
+    /\bdate\b/,
+    /\bdating\b/,
+    /\bromantic\b/,
+    /\bsexual connection\b/,
+    /\bsocial momentum\b/,
+    /\bremote work\b/,
+    /\bcommunity\b/,
+    /\bbelong(ing)?\b/,
+  ],
+  work_money_career: [
+    /\bmoney pressure\b/,
+    /\bfinancial\b/,
+    /\blimited runway\b/,
+    /\brunway\b/,
+    /\bfreelance\b/,
+    /\bcut(ting)? expenses\b/,
+    /\bincome\b/,
+    /\bcash\b/,
+    /\bjob search\b/,
+    /\bjobs?\b/,
+    /\binterviews?\b/,
+    /\bresume\b/,
+    /\bportfolio\b/,
+    /\bnetwork(ing)?\b/,
+    /\bcareer change\b/,
+    /\bcredential\b/,
+    /\bproduct polish\b/,
+    /\bproduct strategy\b/,
+    /\bonboard(ing)?\b/,
+    /\buser testing\b/,
+    /\btry it out\b/,
+    /\bpricing\b/,
+    /\bprice\b/,
+    /\bearly users?\b/,
+    /\bmarketing\b/,
+    /\bfeatures?\b/,
+    /\bbusiness\b/,
+    /\bopportunity\b/,
+    /\boffer\b/,
+    /\bmarket\b/,
+  ],
+  craft_creativity_mastery: [
+    /\bcreative\b/,
+    /\bwriting\b/,
+    /\bcharacter\b/,
+    /\barc\b/,
+    /\brevis(e|ion)\b/,
+    /\bapp idea\b/,
+    /\bproject stuck\b/,
+    /\bkeep switching\b/,
+    /\bcraft\b/,
+    /\bpractice\b/,
+    /\bmastery\b/,
+    /\bsport\b/,
+    /\bhobby\b/,
+    /\bfinish projects?\b/,
+  ],
   open_loops_prioritization: [
     /\bopen loops?\b/,
     /\btoo many\b/,
@@ -178,12 +171,11 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
     /\bhealth, work, money, and relationships\b/,
     /\bdon't know what actually matters first\b/,
     /\boverwhelm(ed)?\b/,
-    /\bprioriti[sz](e|ation)\b/,
   ],
 };
 
 function isMoneyCentral(text: string) {
-  return hasAny(text, domainPatterns.money_career_stabilization);
+  return hasAny(text, domainPatterns.work_money_career);
 }
 
 export function classifySituationDomain(
@@ -191,6 +183,14 @@ export function classifySituationDomain(
 ): SituationRoute {
   const text = fullText(situation);
   const category = situation.category.toLowerCase();
+
+  if (isEntryDomainId(situation.category)) {
+    return {
+      domain: situation.category,
+      confidence: "high",
+      reason: "The user selected this board as the primary entry domain.",
+    };
+  }
 
   if (
     situation.urgency === "crisis" ||
@@ -201,42 +201,6 @@ export function classifySituationDomain(
       domain: "crisis_safety",
       confidence: "high",
       reason: "Crisis or immediate safety language is present.",
-    };
-  }
-
-  if (category.includes("housing") || hasAny(text, domainPatterns.housing_high_stakes)) {
-    return {
-      domain: "housing_high_stakes",
-      confidence: "high",
-      reason: "Housing stability is central to the situation.",
-    };
-  }
-
-  if (isSocialConnectionSituation(situation)) {
-    return {
-      domain: "social_connection_dating",
-      confidence: "high",
-      reason: "Connection, isolation, friendship, romance, or dating is central.",
-    };
-  }
-
-  if (category.includes("money") || isMoneyCentral(text)) {
-    return {
-      domain: "money_career_stabilization",
-      confidence: "high",
-      reason: "Runway, money pressure, income, or expense tradeoffs are central.",
-    };
-  }
-
-  if (
-    category.includes("business") ||
-    category.includes("startup") ||
-    hasAny(text, domainPatterns.founder_product_validation)
-  ) {
-    return {
-      domain: "founder_product_validation",
-      confidence: "high",
-      reason: "The situation is about product, founder, or validation tradeoffs.",
     };
   }
 
@@ -256,38 +220,64 @@ export function classifySituationDomain(
     };
   }
 
+  if (isSocialConnectionSituation(situation)) {
+    return {
+      domain: "people_community_belonging",
+      confidence: "high",
+      reason: "Connection, isolation, friendship, romance, or dating is central.",
+    };
+  }
+
   if (
+    category.includes("work_money_career") ||
+    category.includes("money") ||
     category.includes("career") ||
     category.includes("work") ||
-    hasAny(text, domainPatterns.career_job_search)
+    isMoneyCentral(text)
   ) {
     return {
-      domain: "career_job_search",
+      domain: "work_money_career",
       confidence: "high",
-      reason: "Job search, career, resume, proof, or credential signals are central.",
+      reason: "Economic agency, work, income, opportunity, or career direction is central.",
     };
   }
 
   if (
-    category.includes("creative") ||
-    hasAny(text, domainPatterns.creative_project_focus)
-  ) {
-    return {
-      domain: "creative_project_focus",
-      confidence: "high",
-      reason: "Creative/project focus and finishing are central.",
-    };
-  }
-
-  if (
+    category.includes("urgent") ||
+    category.includes("stability") ||
     category.includes("health") ||
-    category.includes("recovery") ||
-    hasAny(text, domainPatterns.recovery_energy_work)
+    category.includes("housing") ||
+    hasAny(text, domainPatterns.urgent_stability)
   ) {
     return {
-      domain: "recovery_energy_work",
+      domain: "urgent_stability",
       confidence: "high",
-      reason: "Energy, sleep, recovery, or rebuilding capacity is central.",
+      reason: "Immediate stability, housing, health-adjacent capacity, or recovery is central.",
+    };
+  }
+
+  if (
+    category.includes("people_community_belonging") ||
+    category.includes("relationships") ||
+    category.includes("connection") ||
+    hasAny(text, domainPatterns.people_community_belonging)
+  ) {
+    return {
+      domain: "people_community_belonging",
+      confidence: "high",
+      reason: "People, community, belonging, or real-world connection is central.",
+    };
+  }
+
+  if (
+    category.includes("craft_creativity_mastery") ||
+    category.includes("creative") ||
+    hasAny(text, domainPatterns.craft_creativity_mastery)
+  ) {
+    return {
+      domain: "craft_creativity_mastery",
+      confidence: "high",
+      reason: "Craft, creativity, practice, mastery, or meaningful project progress is central.",
     };
   }
 

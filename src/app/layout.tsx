@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "FlowPath",
-  description: "A private AI prioritization dashboard for deciding what matters today.",
+  description: "A guided next-move engine for reading the board and choosing what to do next.",
 };
 
 export default function RootLayout({

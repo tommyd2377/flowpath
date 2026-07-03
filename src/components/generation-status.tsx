@@ -4,7 +4,7 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 
 export const nextMoveGenerationStages = [
-  "Reading your situation...",
+  "Reading your board...",
   "Checking constraints...",
   "Finding the bottleneck...",
   "Building the operator path...",
@@ -28,7 +28,7 @@ export const taskGenerationStages = [
 
 export const dailyGenerationStages = [
   "Reading today's check-in...",
-  "Reviewing tasks and active situations...",
+  "Reviewing tasks and active boards...",
   "Checking whether current web info is needed...",
   "Waiting for the model to finish today's briefing...",
   "Still working. Current or local plans can take about a minute...",
@@ -160,8 +160,8 @@ export function GenerationStatus({
         <div className={`grid gap-2 rounded-md border p-3 ${timeoutTone}`}>
           <div>
             {hardTimeoutIsFailure
-              ? "FlowPath did not get a complete response. You can retry, cancel, or edit the situation and try again."
-              : "FlowPath is still waiting for a complete response. You can keep waiting, cancel, or edit the situation and try again."}
+              ? "FlowPath did not get a complete response. You can retry, cancel, or edit the board and try again."
+              : "FlowPath is still waiting for a complete response. You can keep waiting, cancel, or edit the board and try again."}
           </div>
           <div className="flex flex-wrap gap-2">
             {!hardTimeoutIsFailure ? (
@@ -191,7 +191,7 @@ export function GenerationStatus({
                 onClick={onEdit}
                 className={`rounded-md border px-2 py-1 text-xs font-medium ${timeoutButtonTone}`}
               >
-                Edit situation
+                Edit board
               </button>
             ) : null}
             {onCancel ? (

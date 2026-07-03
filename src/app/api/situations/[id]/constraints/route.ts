@@ -25,7 +25,7 @@ export async function PATCH(request: Request, context: Context) {
     const { id: idParam } = await context.params;
     const situationId = parseId(idParam);
     const situation = await getSituation(user.id, situationId);
-    if (!situation) throw new ApiRequestError("Situation not found.", 404, "not_found");
+    if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
 
     const input = contextConstraintsInputSchema.parse(await readJson(request));
     const profile = await mergeProfileContextConstraints(

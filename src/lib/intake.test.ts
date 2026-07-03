@@ -14,8 +14,8 @@ test("intake routing metadata is classification-only and does not create questio
   });
 
   assert.deepEqual(metadata, {
-    domain: "founder_product_validation",
-    subtype: "founder_product_validation",
+    domain: "work_money_career",
+    subtype: "work_money_career",
     questionPurpose: "clarify_goal",
   });
   assert.equal("question" in metadata, false);

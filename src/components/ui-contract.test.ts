@@ -12,9 +12,13 @@ test("Today no longer renders the daily check-in workflow", () => {
 
   assert.doesNotMatch(source, /Daily Check-In/);
   assert.doesNotMatch(source, /Save Check-In/);
-  assert.match(source, /Your next move/);
+  assert.match(source, /What are you trying to figure out\?/);
+  assert.match(source, /ENTRY_DOMAINS/);
   assert.match(source, /Do this next/);
   assert.match(source, /Task Queue/);
+  assert.match(source, /hasStarted/);
+  assert.match(source, /Active Boards/);
+  assert.doesNotMatch(source, /Active Situations/);
   assert.doesNotMatch(source, /Recent Next Move plan/);
 });
 
@@ -22,44 +26,70 @@ test("primary navigation is simplified and secondary destinations are demoted", 
   const source = readSource("src/components/app-shell.tsx");
 
   assert.match(source, /label: "Today"/);
-  assert.match(source, /label: "Situations"/);
+  assert.match(source, /label: "Boards"/);
   assert.match(source, /label: "Tasks"/);
   assert.match(source, /label: "Memory"/);
+  assert.doesNotMatch(source, /label: "Situations"/);
   assert.doesNotMatch(source, /label: "Find My Next Move"/);
   assert.doesNotMatch(source, /Memory \/ Profile/);
+  assert.doesNotMatch(source, /label: "Billing"/);
+  assert.doesNotMatch(source, /Presented by Thomas DeVito/);
   assert.match(source, /secondaryLinks/);
 });
 
-test("Memory is card-first and manual editing is secondary", () => {
+test("Memory is one bank with conversational correction", () => {
   const source = readSource("src/components/profile-editor.tsx");
 
-  assert.match(source, /What FlowPath knows/);
-  assert.match(source, /Proposed Memory/);
-  assert.match(source, /Saved Memory/);
-  assert.match(source, /Situation Notes/);
-  assert.match(source, /placeholders, not saved memory/);
+  assert.match(source, /What FlowPath Knows/);
+  assert.match(source, /one coherent memory/i);
+  assert.match(source, /Tell FlowPath what is wrong, outdated, missing, or no longer true/);
+  assert.match(source, /Keep/);
+  assert.match(source, /This is wrong/);
+  assert.match(source, /Forget/);
+  assert.doesNotMatch(source, /Proposed Memory/);
+  assert.doesNotMatch(source, /Saved Memory/);
+  assert.doesNotMatch(source, /Situation Notes/);
+  assert.doesNotMatch(source, /Manual profile notes/);
+  assert.doesNotMatch(source, /Edit broad constraints/);
 });
 
-test("New Situation uses a guided stepper and broad categories", () => {
+test("New board uses selected-domain intake without manual title or urgency", () => {
   const source = readSource("src/components/next-move-flow.tsx");
 
-  assert.match(source, /Category/);
-  assert.match(source, /Description/);
-  assert.match(source, /Intake/);
-  assert.match(source, /Plan/);
-  assert.match(source, /Work \/ Career/);
-  assert.match(source, /Money \/ Stability/);
-  assert.match(source, /Relationships \/ Connection/);
-  assert.match(source, /Something Else/);
+  assert.match(source, /Domain/);
+  assert.match(source, /Current position/);
+  assert.match(source, /Interview/);
+  assert.match(source, /Best move/);
+  assert.match(source, /What are you trying to figure out\?/);
+  assert.match(source, /ENTRY_DOMAINS/);
+  assert.match(source, /domainFirstQuestions/);
+  assert.match(source, /domainFirstAnswerPlaceholders/);
+  assert.match(source, /Change domain/);
+  assert.match(source, /SelectedDomainForm/);
+  assert.doesNotMatch(source, /Optional short title/);
+  assert.doesNotMatch(source, /Optional urgency/);
+  assert.doesNotMatch(source, /SITUATION_TITLE_MAX/);
+  assert.doesNotMatch(source, /Something Else/);
+  assert.doesNotMatch(source, /Next Move limit reached/);
   assert.doesNotMatch(source, /I want sexual connection safely and respectfully/);
 });
 
 test("New Situation shows saved plan state instead of quota CTA after generation", () => {
   const source = readSource("src/components/next-move-flow.tsx");
 
-  assert.match(source, /Plan generated/);
-  assert.match(source, /Your Next Move Plan is saved and ranked tasks are ready below/);
+  assert.match(source, /Best move generated/);
+  assert.match(source, /Your best move is saved and ranked tasks are ready below/);
   assert.match(source, /!detail\.latestPlan/);
+  assert.doesNotMatch(source, /Generate updated plan/);
+});
+
+test("Board detail supports conversational board updates", () => {
+  const source = readSource("src/components/situation-detail-view.tsx");
+
+  assert.match(source, /Tell FlowPath what changed/);
+  assert.match(source, /board-update/);
+  assert.match(source, /Update board and recalculate/);
+  assert.match(source, /BoardSnapshot/);
   assert.doesNotMatch(source, /Generate updated plan/);
 });
 

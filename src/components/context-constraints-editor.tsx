@@ -453,7 +453,7 @@ function ConstraintFields({
           options={precisionOptions}
           labels={locationLabels}
         />
-        <Field label="Location value" hint="Example: United States, New York, or NYC metro. No exact address.">
+        <Field label="Location value" hint="Example: United States, state/province, or city/metro. No exact address.">
           <TextInput
             value={current.value ?? ""}
             onChange={(event) =>

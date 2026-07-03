@@ -5,35 +5,41 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  Briefcase,
   CheckCircle2,
   CheckSquare,
   Info,
   MessageSquare,
+  Palette,
   Plus,
   Sparkles,
+  Users,
 } from "lucide-react";
 
 import { ApiClientError, apiFetch } from "@/lib/client-api";
+import {
+  ENTRY_DOMAINS,
+  domainFirstAnswerPlaceholders,
+  domainFirstQuestions,
+  entryDomainTitle,
+  isEntryDomainId,
+  type EntryDomainId,
+} from "@/lib/entry-domains";
 import { readClientQaMode } from "@/lib/qa-mode";
 import {
   INTAKE_ANSWER_MAX,
   SITUATION_DESCRIPTION_MAX,
-  SITUATION_TITLE_MAX,
 } from "@/lib/schemas";
 import type { FirstIntakePlan } from "@/lib/situation-routing";
 import type {
-  ContextConstraints,
-  BillingSummary,
   IntakeMessage,
   IntakeSession,
   PlanGenerationResponse,
   Situation,
-  SituationUrgency,
   StoredNextMovePlan,
   Task,
   TaskConversionResponse,
 } from "@/lib/types";
-import { ContextConstraintsEditor } from "./context-constraints-editor";
 import {
   GenerationStatus,
   intakeGenerationStages,
@@ -48,7 +54,6 @@ import {
   Field,
   Notice,
   PageHeader,
-  SelectInput,
   TextArea,
 } from "./ui";
 
@@ -69,15 +74,11 @@ type ActiveGeneration = {
   retryCount: number;
 };
 
-const templates = [
-  ["work_career", "Work / Career"],
-  ["money_stability", "Money / Stability"],
-  ["relationships_connection", "Relationships / Connection"],
-  ["health_recovery", "Health / Recovery"],
-  ["creative_project", "Creative / Personal Project"],
-  ["overwhelm", "Overwhelm / Too Many Open Loops"],
-  ["something_else", "Something Else"],
-] as const;
+const entryDomainIcons: Record<EntryDomainId, typeof Briefcase> = {
+  work_money_career: Briefcase,
+  people_community_belonging: Users,
+  craft_creativity_mastery: Palette,
+};
 
 const primaryTaskStatuses = new Set<Task["status"]>([
   "in_progress",
@@ -90,20 +91,24 @@ function isPrimaryTask(task: Task) {
 }
 
 function planGenerationMessage(result?: TaskConversionResponse | null) {
-  if (!result) return "Next Move Plan generated.";
+  if (!result) return "Best move generated.";
   if (result.alreadyExisted) {
-    return "Next Move Plan generated. Ranked tasks were already added.";
+    return "Best move generated. Ranked tasks were already added.";
   }
   const label = result.items.length === 1 ? "task" : "tasks";
-  return `Next Move Plan generated and ${result.items.length} ranked ${label} added.`;
+  return `Best move generated and ${result.items.length} ranked ${label} added.`;
 }
 
-export function NextMoveFlow() {
+type NextMoveFlowProps = {
+  initialDomain?: EntryDomainId | null;
+};
+
+export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
   const [detail, setDetail] = useState<SituationDetail | null>(null);
   const [description, setDescription] = useState("");
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState("custom");
-  const [urgency, setUrgency] = useState<SituationUrgency>("medium");
+  const [category, setCategory] = useState<EntryDomainId | "">(
+    initialDomain ?? "",
+  );
   const [answer, setAnswer] = useState("");
   const [lastAnswerAttempt, setLastAnswerAttempt] = useState<{
     content: string;
@@ -115,8 +120,6 @@ export function NextMoveFlow() {
   const [activeGeneration, setActiveGeneration] = useState<ActiveGeneration | null>(null);
   const [taskConfirmation, setTaskConfirmation] =
     useState<TaskConversionResponse | null>(null);
-  const [savingConstraints, setSavingConstraints] = useState(false);
-  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [debugVisible, setDebugVisible] = useState(false);
@@ -141,21 +144,18 @@ export function NextMoveFlow() {
     return nextDetail;
   }, []);
 
-  const loadBillingSummary = useCallback(async () => {
-    try {
-      setBillingSummary(await apiFetch<BillingSummary>("/api/billing/summary"));
-    } catch {
-      setBillingSummary(null);
-    }
-  }, []);
-
   const initialLoad = useCallback(async () => {
     setError(null);
     try {
-      const requestedSituationId =
+      const searchParams =
         typeof window === "undefined"
-          ? NaN
-          : Number(new URLSearchParams(window.location.search).get("situationId"));
+          ? new URLSearchParams()
+          : new URLSearchParams(window.location.search);
+      const requestedSituationId = Number(searchParams.get("situationId"));
+      const requestedDomain = searchParams.get("domain");
+      if (isEntryDomainId(requestedDomain)) {
+        setCategory(requestedDomain);
+      }
       if (Number.isInteger(requestedSituationId) && requestedSituationId > 0) {
         await loadDetail(requestedSituationId);
       } else {
@@ -169,10 +169,6 @@ export function NextMoveFlow() {
   useEffect(() => {
     void Promise.resolve().then(initialLoad);
   }, [initialLoad]);
-
-  useEffect(() => {
-    void Promise.resolve().then(loadBillingSummary);
-  }, [loadBillingSummary]);
 
   useEffect(() => {
     function refreshDebugVisible() {
@@ -233,24 +229,26 @@ export function NextMoveFlow() {
 
   async function createSituation(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!category) {
+      setError("Choose one board before starting intake.");
+      return;
+    }
     setWorking(true);
     setError(null);
     setMessage(null);
     try {
       const created = await apiFetch<{ situation: Situation }>("/api/situations", {
         method: "POST",
-        body: JSON.stringify({ title, description, category, urgency }),
+        body: JSON.stringify({ description, category }),
       });
       setDescription("");
-      setTitle("");
-      setCategory("custom");
-      setUrgency("medium");
+      setCategory("");
       setTaskConfirmation(null);
       await loadDetail(created.situation.id);
-      setMessage("Situation started. Answer one question at a time.");
+      setMessage("Board started. Answer one question at a time.");
     } catch (createError) {
       setError(
-        formatError(createError, "Could not start situation."),
+        formatError(createError, "Could not start board."),
       );
     } finally {
       setWorking(false);
@@ -305,10 +303,6 @@ export function NextMoveFlow() {
 
   async function generatePlan(retryCount = 0) {
     if (!detail) return;
-    if (isNextMovePlanQuotaExhausted) {
-      setError(nextMovePlanQuotaMessage);
-      return;
-    }
     const situationId = detail.situation.id;
     const previousPlanId = detail.latestPlan?.id ?? null;
     const { id, controller } = startGeneration("plan", retryCount);
@@ -328,10 +322,8 @@ export function NextMoveFlow() {
       if (latestGenerationIdRef.current !== id) return;
       setTaskConfirmation(generated.taskConversion ?? null);
       await loadDetail(situationId);
-      await loadBillingSummary();
       setMessage(planGenerationMessage(generated.taskConversion));
     } catch (generateError) {
-      await loadBillingSummary();
       if (controller.signal.aborted) return;
       if (latestGenerationIdRef.current !== id) return;
       try {
@@ -340,13 +332,13 @@ export function NextMoveFlow() {
           reconciledDetail.latestPlan &&
           reconciledDetail.latestPlan.id !== previousPlanId
         ) {
-          setMessage("Next Move Plan generated. It finished after the connection took a while.");
+          setMessage("Best move generated. It finished after the connection took a while.");
           return;
         }
       } catch {
         // Keep the original generation error visible if reconciliation also fails.
       }
-      setError(formatError(generateError, "Could not generate next move plan."));
+      setError(formatError(generateError, "Could not generate the best move."));
     } finally {
       if (generationRef.current?.id === id) {
         generationRef.current = null;
@@ -389,42 +381,12 @@ export function NextMoveFlow() {
     }
   }
 
-  async function saveConstraintContext(context_constraints: ContextConstraints) {
-    if (!detail) return;
-    setSavingConstraints(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await apiFetch(`/api/situations/${detail.situation.id}/constraints`, {
-        method: "PATCH",
-        body: JSON.stringify({ context_constraints }),
-      });
-      await loadDetail(detail.situation.id);
-      setMessage("Constraint context saved.");
-    } catch (saveError) {
-      setError(
-        saveError instanceof Error
-          ? saveError.message
-          : "Could not save constraint context.",
-      );
-    } finally {
-      setSavingConstraints(false);
-    }
-  }
-
   const lastAssistant = detail?.messages
     .filter((item) => item.role === "assistant")
     .at(-1);
   const isReadyToGenerate = Boolean(
     detail?.session.is_complete || detail?.session.current_stage === "ready_to_generate",
   );
-  const nextMovePlanUsage = billingSummary?.usage.find(
-    (usage) => usage.usage_type === "next_move_plan",
-  );
-  const isNextMovePlanQuotaExhausted = nextMovePlanUsage?.remaining === 0;
-  const nextMovePlanQuotaMessage =
-    billingSummary?.upgrade_message ??
-    "Your monthly Next Move plan usage is used up.";
   const latestPlanHasTasks = Boolean(
     detail?.latestPlan &&
       detail.tasks.some(
@@ -445,18 +407,19 @@ export function NextMoveFlow() {
     detail?.tasks[0] ??
     null;
   const workflowStep: IntakeStep = !detail
-    ? description.trim()
-      ? "description"
+    ? category
+      ? "position"
       : "category"
     : detail.latestPlan || isReadyToGenerate
-      ? "plan"
+      ? "move"
       : "intake";
 
   return (
     <div>
-      <PageHeader eyebrow="New Situation" title="Intake to next move">
+      <PageHeader eyebrow="New board" title="What are you trying to figure out?">
         <p>
-          Move through one guided flow: category, description, intake, then plan.
+          Pick one domain, describe the current position, answer FlowPath one
+          question at a time, then review the board and best next move.
         </p>
       </PageHeader>
 
@@ -468,81 +431,17 @@ export function NextMoveFlow() {
       <div className="grid gap-5">
         {!detail ? (
           <Card>
-            <h2 className="mb-3 text-xl font-semibold">Start a situation</h2>
-            <p className="mb-4 text-sm text-slate-400">
-              Pick the broad lane, then describe what is going on in plain language.
-            </p>
-            <div className="mb-4 grid gap-2">
-              {templates.map(([templateCategory, label]) => (
-                <button
-                  key={templateCategory}
-                  type="button"
-                  onClick={() => {
-                    setCategory(templateCategory);
-                  }}
-                  className={`rounded-md border px-3 py-2 text-left text-sm transition ${
-                    category === templateCategory
-                      ? "border-[var(--azure)] bg-[rgba(0,120,212,0.16)] text-white"
-                      : "border-slate-800 bg-slate-900 text-slate-200 hover:border-[var(--azure)]"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <form className="grid gap-4" onSubmit={createSituation}>
-              <Field label="What is going on?">
-                <TextArea
-                  value={description}
-                  maxLength={SITUATION_DESCRIPTION_MAX}
-                  onChange={(event) => setDescription(event.target.value)}
-                  required
-                  placeholder="Example: I have been applying to jobs for months and nothing is happening."
-                />
-                <CharacterCount value={description} max={SITUATION_DESCRIPTION_MAX} />
-              </Field>
-              <details className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
-                <summary className="cursor-pointer text-sm font-medium text-slate-200">
-                  Optional short title
-                </summary>
-                <div className="mt-3">
-                  <Field label="Short title">
-                    <TextArea
-                      value={title}
-                      maxLength={SITUATION_TITLE_MAX}
-                      onChange={(event) => setTitle(event.target.value)}
-                      placeholder="Example: Job search stuck"
-                      className="min-h-20"
-                    />
-                    <CharacterCount value={title} max={SITUATION_TITLE_MAX} />
-                  </Field>
-                </div>
-              </details>
-              <details className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
-                <summary className="cursor-pointer text-sm font-medium text-slate-200">
-                  Optional urgency
-                </summary>
-                <div className="mt-3">
-                  <Field label="Urgency">
-                    <SelectInput
-                      value={urgency}
-                      onChange={(event) =>
-                        setUrgency(event.target.value as SituationUrgency)
-                      }
-                    >
-                      <option value="low">low</option>
-                      <option value="medium">medium</option>
-                      <option value="high">high</option>
-                      <option value="crisis">crisis</option>
-                    </SelectInput>
-                  </Field>
-                </div>
-              </details>
-              <Button type="submit" disabled={working}>
-                <Plus className="h-4 w-4" />
-                {working ? "Starting..." : "Start intake"}
-              </Button>
-            </form>
+            {category ? (
+              <SelectedDomainForm
+                category={category}
+                description={description}
+                setDescription={setDescription}
+                working={working}
+                onSubmit={createSituation}
+              />
+            ) : (
+              <DomainPicker onSelect={setCategory} />
+            )}
           </Card>
         ) : null}
 
@@ -553,7 +452,7 @@ export function NextMoveFlow() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium uppercase text-[var(--azure-light)]">
-                      {detail.situation.urgency} urgency · {detail.situation.category}
+                      Board: {entryDomainTitle(detail.situation.category)}
                     </div>
                     <h2 className="mt-1 text-2xl font-semibold">
                       {detail.situation.title}
@@ -572,7 +471,7 @@ export function NextMoveFlow() {
                     href={`/situations/${detail.situation.id}`}
                     className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:border-[var(--azure)]"
                   >
-                    Detail
+                    Board detail
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                 </div>
@@ -610,14 +509,14 @@ export function NextMoveFlow() {
                     <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.12)] p-4 text-sm text-blue-100">
                       <div className="mb-1 flex items-center gap-2 font-medium text-white">
                         <CheckCircle2 className="h-4 w-4" />
-                        {detail.latestPlan ? "Plan generated" : "Ready for a plan"}
+                        {detail.latestPlan ? "Best move generated" : "Ready for a best move"}
                       </div>
                       <p>
                         {detail.latestPlan
                           ? latestPlanHasTasks
-                            ? "Your Next Move Plan is saved and ranked tasks are ready below."
-                            : "Your Next Move Plan is saved. You can add ranked tasks below."
-                          : "FlowPath has enough context to turn this into a Next Move Plan."}
+                            ? "Your best move is saved and ranked tasks are ready below."
+                            : "Your best move is saved. You can add ranked tasks below."
+                          : "FlowPath has enough context to read the board and recommend a best move."}
                       </p>
                     </div>
                     {!detail.latestPlan ? (
@@ -625,18 +524,13 @@ export function NextMoveFlow() {
                         <Button
                           type="button"
                           onClick={() => generatePlan()}
-                          disabled={generating || isNextMovePlanQuotaExhausted}
+                          disabled={generating}
                         >
                           <Sparkles className="h-4 w-4" />
-                          {isNextMovePlanQuotaExhausted
-                            ? "Next Move limit reached"
-                            : generating
+                          {generating
                               ? "Generating plan..."
-                              : "Generate plan"}
+                              : "Generate best move"}
                         </Button>
-                        {isNextMovePlanQuotaExhausted ? (
-                          <QuotaNotice message={nextMovePlanQuotaMessage} />
-                        ) : null}
                       </>
                     ) : null}
                     {generating && activeGeneration?.type === "plan" ? (
@@ -670,19 +564,14 @@ export function NextMoveFlow() {
                         type="button"
                         variant="secondary"
                         onClick={() => generatePlan()}
-                        disabled={generating || isNextMovePlanQuotaExhausted}
+                        disabled={generating}
                       >
                         <Sparkles className="h-4 w-4" />
-                        {isNextMovePlanQuotaExhausted
-                          ? "Next Move limit reached"
-                          : generating
+                        {generating
                             ? "Generating plan..."
-                            : "I’ve given enough context / Generate now"}
+                            : "I’ve given enough context / Recalculate"}
                       </Button>
                     </div>
-                    {isNextMovePlanQuotaExhausted ? (
-                      <QuotaNotice message={nextMovePlanQuotaMessage} />
-                    ) : null}
                     {working && activeGeneration?.type === "intake" ? (
                       <GenerationStatus
                         stages={intakeGenerationStages}
@@ -714,29 +603,6 @@ export function NextMoveFlow() {
                 )}
               </Card>
 
-              <Card className="bg-slate-950/70">
-                <div className="mb-4">
-                  <h2 className="text-xl font-semibold">Context FlowPath can use</h2>
-                  <p className="mt-1 text-sm text-slate-400">
-                    This is optional. FlowPath will infer useful constraints through
-                    the intake; use this only to correct or add something material.
-                  </p>
-                </div>
-                <details>
-                  <summary className="cursor-pointer text-sm font-medium text-[var(--azure-light)]">
-                    Review or edit constraints
-                  </summary>
-                  <div className="mt-4">
-                    <ContextConstraintsEditor
-                      key={detail.session.updated_at}
-                      value={detail.session.context_constraints ?? {}}
-                      onSave={saveConstraintContext}
-                      saving={savingConstraints}
-                    />
-                  </div>
-                </details>
-              </Card>
-
               <RelatedTasksCard tasks={detail.tasks} />
 
               {converting && activeGeneration?.type === "tasks" ? (
@@ -760,6 +626,7 @@ export function NextMoveFlow() {
                 converting={converting}
                 tasksAdded={latestPlanHasTasks}
                 taskConfirmation={taskConfirmation}
+                situation={detail.situation}
               />
             </>
           ) : null}
@@ -769,30 +636,14 @@ export function NextMoveFlow() {
   );
 }
 
-function QuotaNotice({ message }: { message: string }) {
-  return (
-    <Notice tone="warning">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span>{message}</span>
-        <Link
-          href="/billing"
-          className="font-medium text-amber-50 underline underline-offset-4"
-        >
-          View billing
-        </Link>
-      </div>
-    </Notice>
-  );
-}
-
-type IntakeStep = "category" | "description" | "intake" | "plan";
+type IntakeStep = "category" | "position" | "intake" | "move";
 
 function IntakeStepper({ current }: { current: IntakeStep }) {
   const steps: Array<{ id: IntakeStep; label: string }> = [
-    { id: "category", label: "Category" },
-    { id: "description", label: "Description" },
-    { id: "intake", label: "Intake" },
-    { id: "plan", label: "Plan" },
+    { id: "category", label: "Domain" },
+    { id: "position", label: "Current position" },
+    { id: "intake", label: "Interview" },
+    { id: "move", label: "Best move" },
   ];
   const currentIndex = steps.findIndex((step) => step.id === current);
 
@@ -912,6 +763,88 @@ function RelatedTasksCard({ tasks }: { tasks: Task[] }) {
         </Link>
       ) : null}
     </Card>
+  );
+}
+
+function DomainPicker({ onSelect }: { onSelect: (domain: EntryDomainId) => void }) {
+  return (
+    <>
+      <h2 className="mb-3 text-xl font-semibold">Start a board</h2>
+      <p className="mb-4 text-sm text-slate-400">
+        Choose one entry point. It sets the starting board, not a rigid box.
+      </p>
+      <div className="grid gap-3 md:grid-cols-3">
+        {ENTRY_DOMAINS.map((domain) => {
+          const Icon = entryDomainIcons[domain.id];
+          return (
+            <button
+              key={domain.id}
+              type="button"
+              onClick={() => onSelect(domain.id)}
+              className="rounded-lg border border-slate-800 bg-slate-900 p-4 text-left text-slate-200 transition hover:border-[var(--azure)]"
+            >
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-950 text-[var(--azure-light)]">
+                <Icon className="h-5 w-5" />
+              </div>
+              <div className="font-semibold text-white">{domain.title}</div>
+              <p className="mt-2 text-sm text-slate-300">{domain.subtitle}</p>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function SelectedDomainForm({
+  category,
+  description,
+  setDescription,
+  working,
+  onSubmit,
+}: {
+  category: EntryDomainId;
+  description: string;
+  setDescription: (value: string) => void;
+  working: boolean;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  const Icon = entryDomainIcons[category];
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.1)] p-3">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-950 text-[var(--azure-light)]">
+            <Icon className="h-5 w-5" />
+          </span>
+          <div>
+            <div className="text-xs font-medium uppercase text-[var(--azure-light)]">
+              Board
+            </div>
+            <div className="font-semibold text-white">{entryDomainTitle(category)}</div>
+          </div>
+        </div>
+        <Link href="/" className="text-sm font-medium text-[var(--azure-light)] hover:text-white">
+          Change domain
+        </Link>
+      </div>
+      <form className="grid gap-4" onSubmit={onSubmit}>
+        <Field label={domainFirstQuestions[category]}>
+          <TextArea
+            value={description}
+            maxLength={SITUATION_DESCRIPTION_MAX}
+            onChange={(event) => setDescription(event.target.value)}
+            required
+            placeholder={domainFirstAnswerPlaceholders[category]}
+          />
+          <CharacterCount value={description} max={SITUATION_DESCRIPTION_MAX} />
+        </Field>
+        <Button type="submit" disabled={working}>
+          <Plus className="h-4 w-4" />
+          {working ? "Starting..." : "Start intake"}
+        </Button>
+      </form>
+    </div>
   );
 }
 

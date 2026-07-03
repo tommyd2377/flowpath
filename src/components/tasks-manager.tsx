@@ -341,7 +341,7 @@ export function TasksManager() {
             <div className="text-sm text-slate-400">Loading tasks...</div>
           ) : activeTasks.length === 0 ? (
             <EmptyState>
-              No tasks yet. Start with a situation and FlowPath will turn the plan
+              No tasks yet. Start with a board and FlowPath will turn the move
               into ranked next actions.
             </EmptyState>
           ) : (

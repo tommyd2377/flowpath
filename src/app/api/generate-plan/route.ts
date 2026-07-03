@@ -20,7 +20,7 @@ export async function POST() {
   try {
     await requireUser();
     throw new ApiRequestError(
-      "Daily FlowPath generation is deprecated. Start with a situation to generate a Next Move plan.",
+      "Daily FlowPath generation is deprecated. Start with a board to generate a best move.",
       410,
       "daily_plan_deprecated",
     );

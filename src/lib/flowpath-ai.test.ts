@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  boardNextMoveInstruction,
   buildFirstIntakeQuestionPromptInput,
   firstIntakeQuestionSystemPrompt,
   intakeInferredMemoryInstruction,
@@ -35,6 +36,19 @@ test("privacy-aware prompt instructs least-sensitive constraint collection", () 
   assert.match(privacyAwareConstraintInstruction, /parents did for a living/i);
 });
 
+test("board prompt frames FlowPath as a domain-general next-move engine", () => {
+  assert.match(boardNextMoveInstruction, /system-led next-move engine/i);
+  assert.match(boardNextMoveInstruction, /current position/i);
+  assert.match(boardNextMoveInstruction, /constraints/i);
+  assert.match(boardNextMoveInstruction, /assets/i);
+  assert.match(boardNextMoveInstruction, /legal moves/i);
+  assert.match(boardNextMoveInstruction, /Board Snapshot/i);
+  assert.match(boardNextMoveInstruction, /Work\/Money\/Career/i);
+  assert.match(boardNextMoveInstruction, /People\/Community\/Belonging/i);
+  assert.match(boardNextMoveInstruction, /Craft\/Creativity\/Personal Mastery/i);
+  assert.match(boardNextMoveInstruction, /urgent stability/i);
+});
+
 test("intake memory prompt requires inferred constraints and small task candidates", () => {
   assert.match(intakeInferredMemoryInstruction, /infer practical constraints/i);
   assert.match(intakeInferredMemoryInstruction, /separate profile form/i);
@@ -59,7 +73,7 @@ test("social connection prompt includes consent, boundaries, non-manipulation, a
 });
 
 test("first intake prompt requires a situation-specific question", () => {
-  assert.match(firstIntakeQuestionSystemPrompt, /specific to the submitted situation/i);
+  assert.match(firstIntakeQuestionSystemPrompt, /specific to the submitted board position/i);
   assert.match(firstIntakeQuestionSystemPrompt, /concrete nouns, verbs, places, roles, artifacts/i);
   assert.match(firstIntakeQuestionSystemPrompt, /3-5 plausible lanes/i);
   assert.match(firstIntakeQuestionSystemPrompt, /Do not invent facts/i);

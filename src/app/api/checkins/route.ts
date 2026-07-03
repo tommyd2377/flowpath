@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   try {
     await request.text();
     throw new ApiRequestError(
-      "Daily check-ins are deprecated. Start with a situation to find your next move.",
+      "Daily check-ins are deprecated. Start with a board to find your next move.",
       410,
       "daily_checkin_deprecated",
     );

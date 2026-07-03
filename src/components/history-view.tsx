@@ -32,10 +32,9 @@ export function HistoryView() {
 
   return (
     <div>
-      <PageHeader eyebrow="History" title="Previous Next Move plans">
+      <PageHeader eyebrow="History" title="Previous best moves">
         <p>
-          Review the situations FlowPath has helped you move through and the plans it
-          generated.
+          Review the boards FlowPath has helped you read and the moves it generated.
         </p>
       </PageHeader>
 
@@ -46,7 +45,7 @@ export function HistoryView() {
           <div className="text-sm text-slate-400">Loading history...</div>
         </Card>
       ) : plans.length === 0 ? (
-        <EmptyState>No Next Move plans yet.</EmptyState>
+        <EmptyState>No best moves yet.</EmptyState>
       ) : (
         <div className="grid gap-3">
           {plans.map((plan) => (

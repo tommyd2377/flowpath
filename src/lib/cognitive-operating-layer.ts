@@ -66,8 +66,8 @@ const stateLabels: Record<FlowPathState, string> = {
   rumination_mode: "rumination",
   anxiety_mode: "anxiety",
   creative_mode: "creative",
-  product_strategy_mode: "product strategy",
-  coding_mode: "coding",
+  opportunity_strategy_mode: "opportunity strategy",
+  implementation_mode: "implementation",
   social_real_world_mode: "social / real world",
   health_caution_mode: "health caution",
   legal_financial_caution_mode: "legal / financial caution",
@@ -98,10 +98,8 @@ function hasAny(text: string, patterns: RegExp[]) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
-function hasProductStrategySignal(text: string) {
+function hasOpportunityStrategySignal(text: string) {
   return hasAny(text, [
-    /\bstartup\b/,
-    /\bfounder\b/,
     /\bgtm\b/,
     /\bgo[-\s]?to[-\s]?market\b/,
     /\bproduct strategy\b/,
@@ -117,6 +115,9 @@ function hasProductStrategySignal(text: string) {
     /\bpilot\b/,
     /\bvalidation\b/,
     /\bsales discovery\b/,
+    /\boffer\b/,
+    /\bmarket\b/,
+    /\bcustomer discovery\b/,
   ]);
 }
 
@@ -330,13 +331,11 @@ function stateForText(text: string, repeatedTopic: boolean): FlowPathState {
       /\bmigration\b/,
     ])
   ) {
-    return "coding_mode";
+    return "implementation_mode";
   }
 
   if (
     hasAny(text, [
-      /\bscreenplay\b/,
-      /\bscript\b/,
       /\bscene\b/,
       /\bcharacter\b/,
       /\bnovel\b/,
@@ -350,11 +349,15 @@ function stateForText(text: string, repeatedTopic: boolean): FlowPathState {
     return "creative_mode";
   }
 
-  if (hasProductStrategySignal(text)) {
-    return "product_strategy_mode";
+  if (repeatedTopic) {
+    return "rumination_mode";
   }
 
-  if (repeatedTopic || hasRuminationSignal(text)) {
+  if (hasOpportunityStrategySignal(text)) {
+    return "opportunity_strategy_mode";
+  }
+
+  if (hasRuminationSignal(text)) {
     return "rumination_mode";
   }
 
@@ -396,11 +399,17 @@ function secondaryStatesForText(
     states.push("anxiety_mode");
   }
   if (needsCurrentFacts(text) && primary !== "research_mode") states.push("research_mode");
-  if (hasProductStrategySignal(text) && primary !== "product_strategy_mode") {
-    states.push("product_strategy_mode");
+  if (
+    hasOpportunityStrategySignal(text) &&
+    primary !== "opportunity_strategy_mode"
+  ) {
+    states.push("opportunity_strategy_mode");
   }
-  if (hasAny(text, [/\bcode\b/, /\bdebug\b/, /\bimplement\b/]) && primary !== "coding_mode") {
-    states.push("coding_mode");
+  if (
+    hasAny(text, [/\bdebug\b/, /\bimplement\b/, /\bfix\b/, /\bsystem\b/]) &&
+    primary !== "implementation_mode"
+  ) {
+    states.push("implementation_mode");
   }
   if (inferActionReadiness(text) === "high" && primary !== "execution_mode") {
     states.push("execution_mode");
@@ -428,8 +437,8 @@ function recommendedInterventionForState(primary: FlowPathState): string {
     rumination_mode: "stop_rumination_redirect_to_action",
     anxiety_mode: "emotional_stabilization",
     creative_mode: "creative_feedback",
-    product_strategy_mode: "challenge_assumption",
-    coding_mode: "step_by_step_debugging",
+    opportunity_strategy_mode: "challenge_assumption",
+    implementation_mode: "implementation_path",
     social_real_world_mode: "one_next_action",
     health_caution_mode: "health_caution",
     legal_financial_caution_mode: "financial_or_legal_caution",
@@ -470,7 +479,13 @@ export function detectUserState(input: CognitiveLayerInput): StateDetection {
     needs_memory: needsMemory,
     needs_task_creation:
       actionReadiness === "high" ||
-      ["execution_mode", "coding_mode", "product_strategy_mode", "creative_mode", "social_real_world_mode"].includes(primary),
+      [
+        "execution_mode",
+        "implementation_mode",
+        "opportunity_strategy_mode",
+        "creative_mode",
+        "social_real_world_mode",
+      ].includes(primary),
     needs_escalation:
       riskFlags.length > 0 ||
       hasAny(text, [/\bdeep analysis\b/, /\bcomplex\b/, /\barchitecture\b/, /\bhigh stakes\b/]),
@@ -516,13 +531,13 @@ function baseIntervention(state: StateDetection, text: string): InterventionSele
     mustAvoid.push("Generic creativity encouragement");
     successCriteria.push("Turns creative feedback into a writing or revision action.");
   }
-  if (primary === "product_strategy_mode") {
-    mustInclude.push("Tradeoffs", "Implementation path", "Wasted motion to avoid");
-    successCriteria.push("Identifies the product or GTM bottleneck.");
+  if (primary === "opportunity_strategy_mode") {
+    mustInclude.push("Tradeoffs", "Access path", "Wasted motion to avoid");
+    successCriteria.push("Identifies the opportunity, market, or credibility bottleneck.");
   }
-  if (primary === "coding_mode") {
-    mustInclude.push("Implementation/debugging path", "System or file-level specificity when available");
-    successCriteria.push("Produces testable engineering steps.");
+  if (primary === "implementation_mode") {
+    mustInclude.push("Implementation or debugging path", "System-level specificity when available");
+    successCriteria.push("Produces testable implementation steps.");
   }
   if (primary === "research_mode") {
     mustInclude.push("State whether current facts or web search changed the answer");
@@ -546,7 +561,7 @@ function baseIntervention(state: StateDetection, text: string): InterventionSele
         ? "clinical"
         : primary === "creative_mode"
           ? "creative"
-          : primary === "product_strategy_mode" || primary === "rumination_mode"
+          : primary === "opportunity_strategy_mode" || primary === "rumination_mode"
             ? "challenging"
             : state.emotional_temperature === "high"
               ? "calm"
@@ -646,9 +661,9 @@ function statePreferenceKeywords(state: FlowPathState) {
     research_mode: ["location", "tool", "preference", "project"],
     rumination_mode: ["challenge", "pattern", "avoid", "energy", "working style"],
     anxiety_mode: ["energy", "support", "safety", "constraint", "time"],
-    creative_mode: ["screenplay", "creative", "writing", "story", "project", "draft"],
-    product_strategy_mode: ["product", "startup", "user", "gtm", "pricing", "validation", "tool"],
-    coding_mode: ["code", "repo", "typescript", "project", "tool", "architecture"],
+    creative_mode: ["creative", "writing", "story", "project", "draft", "practice"],
+    opportunity_strategy_mode: ["opportunity", "customer", "market", "pricing", "validation", "proof"],
+    implementation_mode: ["implementation", "debug", "system", "project", "tool", "architecture"],
     social_real_world_mode: ["location", "nyc", "social", "dating", "connection", "community"],
     health_caution_mode: ["health", "energy", "recovery", "safety", "constraint"],
     legal_financial_caution_mode: ["money", "financial", "housing", "legal", "deadline", "runway"],
@@ -758,6 +773,23 @@ export function shouldUseWebSearch(
   if (hasAny(text, [/\bapi docs?\b/, /\bdocs?\b/, /\blibrary\b/, /\bversion\b/])) {
     triggers.push("software_docs_may_have_changed");
   }
+  if (
+    hasAny(text, [
+      /\b\d{5}(?:-\d{4})?\b/,
+      /\bnear me\b/,
+      /\bnearby\b/,
+      /\bneighborhood\b/,
+      /\blocal\b/,
+      /\bmeetups?\b/,
+      /\bclasses\b/,
+      /\bclinics\b/,
+      /\bevents\b/,
+      /\bavailability\b/,
+      /\brecurring\b/,
+    ])
+  ) {
+    triggers.push("local_resource_needed");
+  }
   if (state.primary_state === "health_caution_mode") triggers.push("health_factual_caution");
   if (state.primary_state === "legal_financial_caution_mode") {
     triggers.push("legal_financial_current_guidance");
@@ -801,8 +833,8 @@ export function shouldEscalateModel(
     return true;
   }
   if (
-    intervention.intervention_type === "code_architecture" ||
-    (state.primary_state === "coding_mode" && /\barchitecture|migration|security|data model\b/i.test(text))
+    intervention.intervention_type === "systems_debugging" ||
+    (state.primary_state === "implementation_mode" && /\barchitecture|migration|security|data model\b/i.test(text))
   ) {
     return true;
   }

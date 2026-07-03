@@ -11,11 +11,14 @@ import {
   ClipboardList,
   History,
   Info,
+  MessageSquare,
   Sparkles,
   Trash2,
 } from "lucide-react";
 
 import { apiFetch } from "@/lib/client-api";
+import { entryDomainTitle } from "@/lib/entry-domains";
+import { INTAKE_ANSWER_MAX } from "@/lib/schemas";
 import type {
   IntakeMessage,
   IntakeSession,
@@ -29,8 +32,8 @@ import {
   GenerationStatus,
   nextMoveGenerationStages,
 } from "./generation-status";
-import { modeLabel } from "./next-move-plan-card";
-import { Button, Card, EmptyState, Notice, PageHeader } from "./ui";
+import { BoardSnapshot, modeLabel } from "./next-move-plan-card";
+import { Button, Card, CharacterCount, EmptyState, Notice, PageHeader, TextArea } from "./ui";
 
 type SituationDetail = {
   situation: Situation;
@@ -54,6 +57,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [boardUpdate, setBoardUpdate] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,7 +66,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       setDetail(await apiFetch<SituationDetail>(`/api/situations/${situationId}`));
     } catch (loadError) {
       setError(
-        loadError instanceof Error ? loadError.message : "Could not load situation.",
+        loadError instanceof Error ? loadError.message : "Could not load board.",
       );
     } finally {
       setLoading(false);
@@ -87,10 +91,10 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
         },
       );
       setDetail(updated);
-      setMessage(`Situation marked ${nextStatus}.`);
+      setMessage(`Board marked ${statusLabel(nextStatus)}.`);
     } catch (saveError) {
       setError(
-        saveError instanceof Error ? saveError.message : "Could not update situation.",
+        saveError instanceof Error ? saveError.message : "Could not update board.",
       );
     } finally {
       setSaving(false);
@@ -115,7 +119,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       setError(
         generateError instanceof Error
           ? generateError.message
-          : "Could not generate updated plan.",
+          : "Could not recalculate board.",
       );
     } finally {
       setGenerating(false);
@@ -171,7 +175,7 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       setError(
         deleteError instanceof Error
           ? deleteError.message
-          : "Could not delete situation.",
+          : "Could not delete board.",
       );
     } finally {
       setDeleting(false);
@@ -181,13 +185,13 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
   if (loading && !detail) {
     return (
       <Card>
-        <div className="text-sm text-slate-400">Loading situation...</div>
+        <div className="text-sm text-slate-400">Loading board...</div>
       </Card>
     );
   }
 
   if (!detail) {
-    return <Notice tone="error">{error || "Situation not found."}</Notice>;
+    return <Notice tone="error">{error || "Board not found."}</Notice>;
   }
 
   const latestPlanHasTasks = Boolean(
@@ -209,12 +213,52 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
     detail.tasks[0] ??
     null;
 
+  async function submitBoardUpdate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detail) return;
+    const trimmed = boardUpdate.trim();
+    if (!trimmed) {
+      setError("Tell FlowPath what changed on this board.");
+      return;
+    }
+    setSaving(true);
+    setGenerating(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiFetch(`/api/situations/${detail.situation.id}/board-update`, {
+        method: "POST",
+        body: JSON.stringify({
+          content: trimmed,
+          client_message_id: `board-update-${Date.now()}`,
+        }),
+      });
+      setBoardUpdate("");
+      const generated = await apiFetch<PlanGenerationResponse>(
+        `/api/situations/${detail.situation.id}/generate-plan`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      setTaskConfirmation(generated.taskConversion ?? null);
+      await load();
+      setMessage("Board updated and recalculated.");
+    } catch (updateError) {
+      setError(
+        updateError instanceof Error
+          ? updateError.message
+          : "Could not update this board.",
+      );
+    } finally {
+      setSaving(false);
+      setGenerating(false);
+    }
+  }
+
   return (
     <div>
-      <PageHeader eyebrow="Situation" title={detail.situation.title}>
+      <PageHeader eyebrow="Board" title={detail.situation.title}>
         <p>
-          {detail.situation.category} · {detail.situation.urgency} urgency ·{" "}
-          {detail.situation.status}
+          {entryDomainTitle(detail.situation.category)} ·{" "}
+          {statusLabel(detail.situation.status)} · {detail.situation.urgency} urgency
           {detail.latestPlan ? ` · ${modeLabel(detail.latestPlan.mode)} mode` : ""}
         </p>
         {detail.situation.description &&
@@ -230,10 +274,10 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
         <Button type="button" onClick={generatePlan} disabled={generating || deleting}>
           <Sparkles className="h-4 w-4" />
           {generating
-            ? "Generating plan..."
+            ? "Recalculating..."
             : detail.latestPlan
-              ? "Generate updated plan"
-              : "Generate plan"}
+              ? "Recalculate board"
+              : "Generate best move"}
         </Button>
         {detail.latestPlan && !latestPlanHasTasks ? (
           <Button
@@ -302,6 +346,35 @@ export function SituationDetailView({ situationId }: { situationId: number }) {
       ) : null}
 
       <div className="grid gap-5">
+        <Card>
+          <form className="grid gap-3" onSubmit={submitBoardUpdate}>
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-[var(--azure-light)]" />
+              <h2 className="text-xl font-semibold">
+                Tell FlowPath what changed
+              </h2>
+            </div>
+            <TextArea
+              value={boardUpdate}
+              maxLength={INTAKE_ANSWER_MAX}
+              onChange={(event) => setBoardUpdate(event.target.value)}
+              placeholder="Actually, I care more about meeting people. I can only do weekends. I already tried this and it didn’t work. Cash is more urgent now."
+              className="min-h-24"
+            />
+            <CharacterCount value={boardUpdate} max={INTAKE_ANSWER_MAX} />
+            <div>
+              <Button type="submit" disabled={saving || generating || !boardUpdate.trim()}>
+                <Sparkles className="h-4 w-4" />
+                {saving || generating ? "Updating..." : "Update board and recalculate"}
+              </Button>
+            </div>
+          </form>
+        </Card>
+
+        {detail.latestPlan ? (
+          <BoardSnapshot plan={detail.latestPlan} situation={detail.situation} />
+        ) : null}
+
         <div className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
           <RecommendedMoveCard
             plan={detail.latestPlan}
@@ -347,6 +420,16 @@ const taskStatusLabels: Record<Task["status"], string> = {
   done: "Completed",
   ignored: "No Longer Relevant",
 };
+
+const boardStatusLabels: Record<Situation["status"], string> = {
+  active: "Active",
+  resolved: "Resolved",
+  archived: "Archived",
+};
+
+function statusLabel(status: Situation["status"]) {
+  return boardStatusLabels[status];
+}
 
 const primaryTaskStatuses = new Set<Task["status"]>([
   "in_progress",
@@ -416,7 +499,7 @@ function RecommendedMoveCard({
           </div>
         </div>
       ) : (
-        <EmptyState>No recommendation yet. Continue intake or generate a plan.</EmptyState>
+        <EmptyState>No recommendation yet. Continue intake or generate a best move.</EmptyState>
       )}
     </Card>
   );
@@ -497,7 +580,7 @@ function PlanSection({
   converting: boolean;
   onConvert?: () => void;
 }) {
-  if (!plan) return <EmptyState>No plan generated yet.</EmptyState>;
+  if (!plan) return <EmptyState>No best move generated yet.</EmptyState>;
 
   return (
     <div className="grid gap-4 text-sm">

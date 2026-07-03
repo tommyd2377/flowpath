@@ -21,11 +21,11 @@ const now = new Date().toISOString();
 
 const profile = {
   personal_profile:
-    "I am using FlowPath as a private operating dashboard. Include my city, region/state/province, and country here when I want location-specific advice. I care about work momentum, health, creative output, acting opportunities, money stability, relationships, and keeping life administratively sane.",
+    "I am using FlowPath to decide what to do next. Include my city, region/state/province, and country only when I want location-specific advice. I care about useful work, financial stability, real-world connection, creative or craft progress, and keeping life manageable.",
   current_season:
-    "A building season: ship useful projects, rebuild energy and body trust, and keep creative pipelines alive without creating a fantasy workload.",
+    "A decision season: choose sustainable next moves, protect stability, build useful proof, and keep meaningful goals moving without creating a fantasy workload.",
   core_priorities:
-    "Protect health, grow FlowTime, make FlowPath useful, keep screenwriting and acting moving through concrete next steps, and avoid drifting into planning as a substitute for distribution.",
+    "Protect stability, improve work and money options, build real-world connection, make progress on meaningful craft, and avoid drifting into planning as a substitute for action.",
   constraints:
     "Energy varies day to day. The plan should respect body status, sleep, real deadlines, and emotional resistance. No calendar, Notion, or external memory access is assumed.",
   operating_principles:
@@ -37,23 +37,19 @@ const profile = {
 };
 
 const lifeAreas = [
-  ["FlowTime", "Work and distribution around FlowTime.", "high", "Create steady traction and useful shipping cadence.", "Turning product work into visible distribution."],
-  ["Health", "Recovery, body signals, sleep, stress, and medical basics.", "high", "Feel physically trustworthy and stable.", "Balancing ambition with actual capacity."],
-  ["Fitness", "Strength, mobility, conditioning, and sustainable training.", "medium", "Rebuild consistency without overreaching.", "Finding the smallest reliable workout floor."],
-  ["Screenwriting", "Scripts, story development, rewrites, and creative output.", "medium", "Keep writing projects alive through concrete pages and decisions.", "Reducing vague creative pressure into a next scene or beat."],
-  ["Acting", "Auditions, student films, practice, reels, and acting pipeline.", "medium", "Create real reps and visible opportunities.", "Moving from intention to outreach and submissions."],
-  ["Money", "Income, runway, spending, and business fundamentals.", "high", "Increase financial stability and decision clarity.", "Avoiding ambiguity around highest leverage money moves."],
-  ["Social / Relationships", "Friendships, family, dating, community, and connection.", "medium", "Stay meaningfully connected without overextending.", "Initiating simply and consistently."],
-  ["Admin / Life Maintenance", "Errands, systems, paperwork, home, and logistics.", "low", "Keep life from becoming friction.", "Letting small maintenance tasks pile up."],
+  ["Work / Money / Career", "Jobs, income, freelancing, business ideas, skill-building, proof, and opportunity.", "high", "Increase economic agency and decision clarity.", "Choosing the next move that creates stability or future options."],
+  ["People / Community / Belonging", "Friendship, dating, professional peers, collaborators, community, and real-world connection.", "medium", "Build more repeatable human connection.", "Finding realistic environments and follow-up moves."],
+  ["Craft / Creativity / Personal Mastery", "Writing, art, music, design, sports, serious hobbies, learning, and meaningful practice.", "medium", "Make steady progress without assuming professionalization.", "Reducing vague ambition into the next practice or project move."],
+  ["Stability", "Urgent obligations, housing, health-adjacent capacity, deadlines, and basic needs.", "high", "Protect the board before adding risky moves.", "Separating immediate risk reduction from longer-range strategy."],
+  ["Life Maintenance", "Errands, systems, paperwork, home, and logistics.", "low", "Keep small obligations from becoming friction.", "Letting maintenance tasks pile up."],
 ];
 
 const projectSeeds = [
-  ["FlowTime", "FlowTime", "active", "Primary work/product focus.", "Identify and execute the next highest-leverage distribution or product move.", "Choosing distribution versus product polish.", "It is a core work bet."],
-  ["FlowPath", "FlowTime", "active", "Personal AI prioritization dashboard.", "Get a private MVP online and actually use it for daily decisions.", "Keeping v1 simple enough to ship.", "It helps choose better days instead of collecting more tasks."],
-  ["Under the Arcadian Sky", "Screenwriting", "active", "Screenwriting project.", "Define or complete the next concrete story beat, scene, or revision pass.", "Avoiding vague creative fog.", "It keeps a meaningful creative project moving."],
-  ["Lovelacers", "Screenwriting", "paused", "Creative project to keep warm.", "Clarify the next decision when it becomes active again.", "Competing creative attention.", "It may become an important future creative lane."],
-  ["Acting / student film pipeline", "Acting", "active", "Build reps through student films and practical acting opportunities.", "Find or submit to one concrete opportunity.", "Turning interest into external action.", "Reps and footage compound."],
-  ["Health rebuild", "Health", "active", "Rebuild health, energy, and body confidence.", "Pick the safest useful health action for today.", "Overcorrecting or under-listening to body signals.", "Everything else gets easier when health is steadier."],
+  ["Income lane test", "Work / Money / Career", "active", "Compare one practical income path against current constraints.", "Run a small two-week test with clear feedback.", "Avoiding broad career rumination.", "It can create stability and future options."],
+  ["Proof asset", "Work / Money / Career", "active", "Create one credible artifact aimed at a specific opportunity type.", "Choose the proof target and make a rough first version.", "Building proof before asking for access.", "Proof makes outreach more realistic."],
+  ["Recurring social container", "People / Community / Belonging", "active", "Find a repeatable real-world setting where connection can compound.", "Choose one setting to attend three times before judging.", "Avoiding one-off events with no follow-up path.", "Repeated exposure creates more realistic relationships."],
+  ["Craft practice block", "Craft / Creativity / Personal Mastery", "active", "Protect a meaningful practice without assuming it must become paid work.", "Define the next 90-minute practice or project move.", "Letting the goal stay too abstract.", "Practice compounds when the move is small enough to start."],
+  ["Stability check", "Stability", "active", "Name the immediate risk or obligation that needs protection.", "Pick the smallest move that lowers risk this week.", "Confusing urgent stability with long-range strategy.", "A safer board creates better future moves."],
 ];
 
 ensureLocalDirectory(databaseUrl);

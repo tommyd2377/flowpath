@@ -124,7 +124,7 @@ export async function GET(request: Request) {
     const status = searchParams.get("status") || undefined;
     return dataResponse(await listSituations(user.id, status, { isQa: isQaRequest(request) }));
   } catch (error) {
-    return errorResponse(error, "Could not load situations.");
+    return errorResponse(error, "Could not load boards.");
   }
 }
 
@@ -211,6 +211,6 @@ export async function POST(request: Request) {
       201,
     );
   } catch (error) {
-    return errorResponse(error, "Could not create situation.");
+    return errorResponse(error, "Could not create board.");
   }
 }

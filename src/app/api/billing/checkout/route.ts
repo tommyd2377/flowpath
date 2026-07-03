@@ -1,5 +1,6 @@
 import { ApiRequestError, dataResponse, errorResponse } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { PAYWALL_DISABLED } from "@/lib/billing/plans";
 import { createCheckoutSession } from "@/lib/billing/stripe";
 
 export const runtime = "nodejs";
@@ -7,6 +8,13 @@ export const dynamic = "force-dynamic";
 
 export async function POST() {
   try {
+    if (PAYWALL_DISABLED) {
+      throw new ApiRequestError(
+        "Billing is disabled while FlowPath is unlocked.",
+        404,
+        "billing_disabled",
+      );
+    }
     const user = await requireUser();
     if (user.isGuest) {
       throw new ApiRequestError(

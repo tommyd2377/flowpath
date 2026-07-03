@@ -43,7 +43,11 @@ async function applyMigrations() {
 
 function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
   return {
+    generation_mode: "operator_plan",
     mode: "growth",
+    situation_read: "A focused situation needs one next action.",
+    likely_bottleneck: "The next action needs to be concrete.",
+    key_constraints: ["Keep the first move small."],
     situation_summary: "A focused situation needs one next action.",
     core_bottleneck: "The next action needs to be concrete.",
     highest_leverage_move_today: {
@@ -53,6 +57,10 @@ function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
       success_condition: "The action is done.",
     },
     why_this_move: "It creates useful progress.",
+    first_10_minute_action: {
+      title,
+      details: "Start the smallest useful version.",
+    },
     first_30_minutes: [{ title, details: "Do the smallest useful version." }],
     next_24_hours: [{ title: "Review result", details: "Write what changed." }],
     next_7_days: [{ title: "Repeat if useful", details: "Use the signal." }],
@@ -88,6 +96,17 @@ function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
       do_not_rely_on_ai_for: "Do not rely on FlowPath for emergency decisions.",
       urgent_support_guidance: "Use emergency services for immediate danger.",
     },
+    context_used: [
+      {
+        id: null,
+        label: "Need action",
+        value: "The board needs one concrete next move.",
+        category: "goal",
+        sensitivity: "low",
+        source: "situation",
+        persistence: "session_only",
+      },
+    ],
     inferred_context_items: [],
     task_candidates: [
       {
@@ -141,7 +160,11 @@ test("new profiles do not store manual memory explainer text", async () => {
 
 test("converts stored plan steps to tasks without re-blocking generated plan text", async () => {
   const plan: NextMovePlanInput = {
+    generation_mode: "operator_plan",
     mode: "stability",
+    situation_read: "User needs a safer broad plan for money pressure.",
+    likely_bottleneck: "The next step needs to stay practical and non-sensitive.",
+    key_constraints: ["Avoid storing exact sensitive account details."],
     situation_summary: "User needs a safer broad plan for money pressure.",
     core_bottleneck: "The next step needs to stay practical and non-sensitive.",
     highest_leverage_move_today: {
@@ -151,6 +174,10 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
       success_condition: "The next action is written down.",
     },
     why_this_move: "It creates a concrete next action without needing exact details.",
+    first_10_minute_action: {
+      title: "Write the broad constraint",
+      details: "Use a safe range for the pressure and leave out exact balances.",
+    },
     first_30_minutes: [
       {
         title: "Write the broad constraint",
@@ -207,6 +234,17 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
       urgent_support_guidance:
         "If there is immediate danger, contact emergency support.",
     },
+    context_used: [
+      {
+        id: null,
+        label: "Broad money pressure",
+        value: "Money pressure is tight, without exact account details.",
+        category: "money",
+        sensitivity: "moderate",
+        source: "situation",
+        persistence: "session_only",
+      },
+    ],
     inferred_context_items: [
       {
         label: "Broad money pressure",
@@ -285,6 +323,7 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
 
   const situation = await repository.createSituation(1, {
     title: "I am facing a money problem",
+    description: "I am facing a money problem and need one action.",
     category: "money",
     urgency: "medium",
   });
@@ -357,6 +396,7 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
 test("telemetry task conversion creates tasks once and records generated counts", async () => {
   const situation = await repository.createSituation(1, {
     title: "I need a compact next action",
+    description: "I need a compact next action.",
     category: "work_career",
     urgency: "medium",
   });
@@ -420,6 +460,7 @@ test("telemetry task conversion creates tasks once and records generated counts"
 test("inferred context items downgrade model-saved memory and can be updated or deleted", async () => {
   const situation = await repository.createSituation(1, {
     title: "I need career direction",
+    description: "I need career direction.",
     category: "work_career",
     urgency: "medium",
   });
@@ -552,6 +593,7 @@ test("sensitive inferred context is not silently saved", async () => {
 test("inferred context creation dedupes repeated notes in the same situation", async () => {
   const situation = await repository.createSituation(1, {
     title: "I need to clean up repeated memory cards",
+    description: "I need to clean up repeated memory cards.",
     category: "work_career",
     urgency: "medium",
   });
@@ -662,6 +704,7 @@ test("ignored suggested actions are detected lazily without user-facing spam", a
     1,
     {
       title: "Outcome harness stale action",
+      description: "Outcome harness stale action.",
       category: "work_career",
       urgency: "medium",
     },

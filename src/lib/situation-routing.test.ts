@@ -44,7 +44,7 @@ test("money and housing fixtures use domain-specific routes", () => {
       category: "money_stability",
       urgency: "medium",
     }).domain,
-    "money_career_stabilization",
+    "work_money_career",
   );
   assert.equal(
     classifySituationDomain({
@@ -53,7 +53,7 @@ test("money and housing fixtures use domain-specific routes", () => {
       category: "housing",
       urgency: "medium",
     }).domain,
-    "housing_high_stakes",
+    "urgent_stability",
   );
 });
 
@@ -68,7 +68,7 @@ test("self-harm-adjacent language routes to crisis safety", () => {
   assert.equal(result.domain, "crisis_safety");
 });
 
-test("product onboarding language routes to founder/product validation", () => {
+test("product onboarding language routes to work and opportunity strategy", () => {
   const result = classifySituationDomain({
     title: "I built an app and need friend groups to try it out.",
     description: "Reddit one-on-one outreach is not working for onboarding.",
@@ -76,5 +76,5 @@ test("product onboarding language routes to founder/product validation", () => {
     urgency: "medium",
   });
 
-  assert.equal(result.domain, "founder_product_validation");
+  assert.equal(result.domain, "work_money_career");
 });
