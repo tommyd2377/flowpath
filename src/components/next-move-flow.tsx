@@ -7,7 +7,6 @@ import {
   ArrowRight,
   Briefcase,
   CheckCircle2,
-  CheckSquare,
   Info,
   MessageSquare,
   Palette,
@@ -17,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { ApiClientError, apiFetch } from "@/lib/client-api";
+import type { Board } from "@/lib/boards";
 import {
   ENTRY_DOMAINS,
   domainFirstAnswerPlaceholders,
@@ -35,18 +35,14 @@ import type {
   IntakeMessage,
   IntakeSession,
   PlanGenerationResponse,
-  Situation,
   StoredNextMovePlan,
   Task,
-  TaskConversionResponse,
 } from "@/lib/types";
 import {
   GenerationStatus,
   intakeGenerationStages,
   nextMoveGenerationStages,
-  taskGenerationStages,
 } from "./generation-status";
-import { NextMovePlanCard } from "./next-move-plan-card";
 import {
   Button,
   Card,
@@ -58,8 +54,8 @@ import {
 } from "./ui";
 
 type BoardDetail = {
-  board?: Situation;
-  situation: Situation;
+  board?: Board;
+  situation: Board;
   session: IntakeSession;
   messages: IntakeMessage[];
   latestPlan: StoredNextMovePlan | null;
@@ -70,7 +66,7 @@ type BoardDetail = {
 
 type ActiveGeneration = {
   id: string;
-  type: "intake" | "plan" | "tasks";
+  type: "intake" | "plan";
   startedAt: number;
   retryCount: number;
 };
@@ -81,23 +77,13 @@ const entryDomainIcons: Record<EntryDomainId, typeof Briefcase> = {
   craft_creativity_mastery: Palette,
 };
 
-const primaryTaskStatuses = new Set<Task["status"]>([
-  "in_progress",
-  "open",
-  "blocked",
-]);
-
-function isPrimaryTask(task: Task) {
-  return primaryTaskStatuses.has(task.status);
+function openBoardMoveMap(boardId: number) {
+  if (typeof window === "undefined") return;
+  window.location.assign(`/boards/${boardId}`);
 }
 
-function planGenerationMessage(result?: TaskConversionResponse | null) {
-  if (!result) return "Best move generated.";
-  if (result.alreadyExisted) {
-    return "Best move generated. Ranked tasks were already added.";
-  }
-  const label = result.items.length === 1 ? "task" : "tasks";
-  return `Best move generated and ${result.items.length} ranked ${label} added.`;
+function boardFromDetail(detail: BoardDetail) {
+  return detail.board ?? detail.situation;
 }
 
 type NextMoveFlowProps = {
@@ -117,10 +103,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
   } | null>(null);
   const [working, setWorking] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [converting, setConverting] = useState(false);
   const [activeGeneration, setActiveGeneration] = useState<ActiveGeneration | null>(null);
-  const [taskConfirmation, setTaskConfirmation] =
-    useState<TaskConversionResponse | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [debugVisible, setDebugVisible] = useState(false);
@@ -219,7 +202,6 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     setActiveGeneration(null);
     setWorking(false);
     setGenerating(false);
-    setConverting(false);
     setMessage("Generation canceled. No completed result was added.");
   }
 
@@ -238,13 +220,12 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     setError(null);
     setMessage(null);
     try {
-      const created = await apiFetch<{ board: Situation; situation?: Situation }>("/api/boards", {
+      const created = await apiFetch<{ board: Board; situation?: Board }>("/api/boards", {
         method: "POST",
         body: JSON.stringify({ description, category }),
       });
       setDescription("");
       setCategory("");
-      setTaskConfirmation(null);
       await loadDetail(created.board.id);
       setMessage("Board started. Answer one question at a time.");
     } catch (createError) {
@@ -275,7 +256,8 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch(`/api/boards/${detail.situation.id}/messages`, {
+      const boardId = boardFromDetail(detail).id;
+      await apiFetch(`/api/boards/${boardId}/messages`, {
         method: "POST",
         signal: controller.signal,
         body: JSON.stringify({
@@ -288,7 +270,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
       if (latestGenerationIdRef.current !== id) return;
       setAnswer("");
       setLastAnswerAttempt(null);
-      await loadDetail(detail.situation.id);
+      await loadDetail(boardId);
     } catch (submitError) {
       if (controller.signal.aborted) return;
       if (latestGenerationIdRef.current !== id) return;
@@ -304,16 +286,15 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
 
   async function generatePlan(retryCount = 0) {
     if (!detail) return;
-    const situationId = detail.situation.id;
+    const boardId = boardFromDetail(detail).id;
     const previousPlanId = detail.latestPlan?.id ?? null;
     const { id, controller } = startGeneration("plan", retryCount);
     setGenerating(true);
     setError(null);
     setMessage(null);
-    setTaskConfirmation(null);
     try {
-      const generated = await apiFetch<PlanGenerationResponse>(
-        `/api/boards/${situationId}/generate-plan`,
+      await apiFetch<PlanGenerationResponse>(
+        `/api/boards/${boardId}/generate-plan`,
         {
           method: "POST",
           signal: controller.signal,
@@ -321,19 +302,20 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
         },
       );
       if (latestGenerationIdRef.current !== id) return;
-      setTaskConfirmation(generated.taskConversion ?? null);
-      await loadDetail(situationId);
-      setMessage(planGenerationMessage(generated.taskConversion));
+      await loadDetail(boardId);
+      setMessage("Board ready. Opening the Move Map...");
+      openBoardMoveMap(boardId);
     } catch (generateError) {
       if (controller.signal.aborted) return;
       if (latestGenerationIdRef.current !== id) return;
       try {
-        const reconciledDetail = await loadDetail(situationId);
+        const reconciledDetail = await loadDetail(boardId);
         if (
           reconciledDetail.latestPlan &&
           reconciledDetail.latestPlan.id !== previousPlanId
         ) {
-          setMessage("Best move generated. It finished after the connection took a while.");
+          setMessage("Board ready. Opening the Move Map...");
+          openBoardMoveMap(boardId);
           return;
         }
       } catch {
@@ -349,64 +331,13 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     }
   }
 
-  async function convertPlan() {
-    if (!detail?.latestPlan) return;
-    const { id, controller } = startGeneration("tasks");
-    setConverting(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await apiFetch<TaskConversionResponse>(`/api/next-move-plans/${detail.latestPlan.id}/tasks`, {
-        method: "POST",
-        signal: controller.signal,
-        body: JSON.stringify({}),
-      });
-      if (latestGenerationIdRef.current !== id) return;
-      setTaskConfirmation(result);
-      await loadDetail(detail.situation.id);
-      setMessage(
-        result.alreadyExisted
-          ? "These tasks were already added. No duplicates created."
-          : `Added ${result.items.length} ranked tasks.`,
-      );
-    } catch (convertError) {
-      if (controller.signal.aborted) return;
-      if (latestGenerationIdRef.current !== id) return;
-      setError(formatError(convertError, "Could not create tasks."));
-    } finally {
-      if (generationRef.current?.id === id) {
-        generationRef.current = null;
-        setActiveGeneration(null);
-      }
-      setConverting(false);
-    }
-  }
-
   const lastAssistant = detail?.messages
     .filter((item) => item.role === "assistant")
     .at(-1);
   const isReadyToGenerate = Boolean(
     detail?.session.is_complete || detail?.session.current_stage === "ready_to_generate",
   );
-  const latestPlanHasTasks = Boolean(
-    detail?.latestPlan &&
-      detail.tasks.some(
-        (task) => task.source_next_move_plan_id === detail.latestPlan?.id,
-      ),
-  );
-  const latestPlanTasks =
-    detail?.latestPlan
-      ? detail.tasks.filter(
-          (task) =>
-            task.source_next_move_plan_id === detail.latestPlan?.id &&
-            isPrimaryTask(task),
-        )
-      : [];
-  const primaryTask =
-    latestPlanTasks[0] ??
-    detail?.tasks.find(isPrimaryTask) ??
-    detail?.tasks[0] ??
-    null;
+  const currentBoard = detail ? boardFromDetail(detail) : null;
   const workflowStep: IntakeStep = !detail
     ? category
       ? "position"
@@ -420,7 +351,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
       <PageHeader eyebrow="New board" title="What are you trying to figure out?">
         <p>
           Pick one domain, describe the current position, answer FlowPath one
-          question at a time, then review the board and best next move.
+          question at a time, then open the board’s Move Map.
         </p>
       </PageHeader>
 
@@ -447,21 +378,21 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
         ) : null}
 
         <div className="grid gap-5">
-          {detail ? (
+          {detail && currentBoard ? (
             <>
               <Card>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium uppercase text-[var(--azure-light)]">
-                      Board: {entryDomainTitle(detail.situation.category)}
+                      Board: {entryDomainTitle(currentBoard.category)}
                     </div>
                     <h2 className="mt-1 text-2xl font-semibold">
-                      {detail.situation.title}
+                      {currentBoard.title}
                     </h2>
-                    {detail.situation.description &&
-                    detail.situation.description !== detail.situation.title ? (
+                    {currentBoard.description &&
+                    currentBoard.description !== currentBoard.title ? (
                       <p className="mt-2 text-sm text-slate-300">
-                        {detail.situation.description}
+                        {currentBoard.description}
                       </p>
                     ) : null}
                     <p className="mt-2 text-sm text-slate-400">
@@ -469,7 +400,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
                     </p>
                   </div>
                   <Link
-                    href={`/boards/${detail.situation.id}`}
+                    href={`/boards/${currentBoard.id}`}
                     className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:border-[var(--azure)]"
                   >
                     Board detail
@@ -510,17 +441,23 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
                     <div className="rounded-lg border border-[rgba(0,120,212,0.45)] bg-[rgba(0,120,212,0.12)] p-4 text-sm text-blue-100">
                       <div className="mb-1 flex items-center gap-2 font-medium text-white">
                         <CheckCircle2 className="h-4 w-4" />
-                        {detail.latestPlan ? "Best move generated" : "Ready for a best move"}
+                        {detail.latestPlan ? "Move Map ready" : "Ready for a Move Map"}
                       </div>
                       <p>
                         {detail.latestPlan
-                          ? latestPlanHasTasks
-                            ? "Your best move is saved and ranked tasks are ready below."
-                            : "Your best move is saved. You can add ranked tasks below."
-                          : "FlowPath has enough context to read the board and recommend a best move."}
+                          ? "Your Move Map is ready. Open the board to choose a path and take the next action."
+                          : "FlowPath has enough context to read the board and build a Move Map."}
                       </p>
                     </div>
-                    {!detail.latestPlan ? (
+                    {detail.latestPlan ? (
+                      <Link
+                        href={`/boards/${currentBoard.id}`}
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[var(--azure)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--azure-light)]"
+                      >
+                        Open Move Map
+                        <ArrowRight className="h-4 w-4" />
+                      </Link>
+                    ) : (
                       <>
                         <Button
                           type="button"
@@ -530,10 +467,10 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
                           <Sparkles className="h-4 w-4" />
                           {generating
                               ? "Generating plan..."
-                              : "Generate best move"}
+                              : "Generate Move Map"}
                         </Button>
                       </>
-                    ) : null}
+                    )}
                     {generating && activeGeneration?.type === "plan" ? (
                       <GenerationStatus
                         stages={nextMoveGenerationStages}
@@ -603,32 +540,6 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
                   </form>
                 )}
               </Card>
-
-              <RelatedTasksCard tasks={detail.tasks} />
-
-              {converting && activeGeneration?.type === "tasks" ? (
-                <GenerationStatus
-                  stages={taskGenerationStages}
-                  startedAt={activeGeneration.startedAt}
-                  softWarningSeconds={10}
-                  hardTimeoutSeconds={45}
-                  onCancel={cancelActiveGeneration}
-                  onTimeout={handleGenerationTimeout}
-                />
-              ) : null}
-
-              <NextMovePlanCard
-                plan={detail.latestPlan}
-                fallbackTask={detail.tasks[0] ?? null}
-                primaryTask={primaryTask}
-                onConvert={
-                  detail.latestPlan && !latestPlanHasTasks ? convertPlan : undefined
-                }
-                converting={converting}
-                tasksAdded={latestPlanHasTasks}
-                taskConfirmation={taskConfirmation}
-                situation={detail.situation}
-              />
             </>
           ) : null}
         </div>
@@ -644,7 +555,7 @@ function IntakeStepper({ current }: { current: IntakeStep }) {
     { id: "category", label: "Domain" },
     { id: "position", label: "Current position" },
     { id: "intake", label: "Interview" },
-    { id: "move", label: "Best move" },
+    { id: "move", label: "Move Map" },
   ];
   const currentIndex = steps.findIndex((step) => step.id === current);
 
@@ -733,37 +644,6 @@ function DebugBrief({ title, value }: { title: string; value: string }) {
       <div className="text-xs uppercase text-slate-500">{title}</div>
       <div className="mt-1 text-slate-200">{value}</div>
     </div>
-  );
-}
-
-function RelatedTasksCard({ tasks }: { tasks: Task[] }) {
-  if (tasks.length === 0) return null;
-
-  return (
-    <Card>
-      <div className="mb-3 flex items-center gap-2">
-        <CheckSquare className="h-4 w-4 text-[var(--azure-light)]" />
-        <h2 className="text-xl font-semibold">Related tasks</h2>
-      </div>
-      <div className="grid gap-2">
-        {tasks.slice(0, 6).map((task) => (
-          <div key={task.id} className="rounded-md border border-slate-800 bg-slate-900 p-3 text-sm">
-            <div className="font-medium text-white">{task.title}</div>
-            <div className="text-slate-400">
-              {task.status} · importance {task.importance}/5 · effort {task.effort}/5
-            </div>
-          </div>
-        ))}
-      </div>
-      {tasks.length > 6 ? (
-        <Link
-          href={`/boards/${tasks[0].situation_id ?? ""}`}
-          className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)]"
-        >
-          View all related tasks
-        </Link>
-      ) : null}
-    </Card>
   );
 }
 

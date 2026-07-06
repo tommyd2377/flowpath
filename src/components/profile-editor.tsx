@@ -228,12 +228,12 @@ export function ProfileEditor() {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch("/api/memory/correction", {
+      const result = await apiFetch<{ message?: string }>("/api/memory/correction", {
         method: "POST",
         body: JSON.stringify({ content: trimmed }),
       });
       setCorrection("");
-      setMessage("Memory updated.");
+      setMessage(result.message ?? "Memory updated.");
       await load();
     } catch (correctionError) {
       setError(

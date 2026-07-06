@@ -16,6 +16,7 @@ import type {
   HighestLeverageMove,
   InferredContextItem,
   InferredContextPersistence,
+  InferredContextStatus,
   InterventionEffectivenessSummary,
   IntakeMessage,
   IntakeSession,
@@ -235,6 +236,14 @@ type InferredContextRefs = Pick<
   "situation_id" | "intake_session_id" | "next_move_plan_id"
 >;
 
+type InferredContextStatusUpdateInput = {
+  status: InferredContextStatus;
+  superseded_by_id?: number | null;
+  confidence?: InferredContextItem["confidence"] | null;
+  reconciliation_note?: string | null;
+  last_confirmed_at?: string | null;
+};
+
 const sensitivityRank: Record<InferredContextItem["sensitivity"], number> = {
   low: 1,
   moderate: 2,
@@ -319,6 +328,22 @@ function isDuplicateInferredContextItem(
   );
 }
 
+function activeInferredContextClause(alias = "inferred_context_items") {
+  return `AND COALESCE(${alias}.status, 'active') = 'active'`;
+}
+
+function rowToInferredContextItem(row: InferredContextItemRow): InferredContextItem {
+  const item = withoutUserId(row) as InferredContextItem;
+  return {
+    ...item,
+    status: item.status ?? "active",
+    confidence: item.confidence ?? "medium",
+    superseded_by_id: item.superseded_by_id ?? null,
+    last_confirmed_at: item.last_confirmed_at ?? null,
+    reconciliation_note: item.reconciliation_note ?? null,
+  };
+}
+
 async function findDuplicateInferredContextItem(
   userId: number,
   candidate: SanitizedInferredContextItem,
@@ -345,6 +370,7 @@ async function findDuplicateInferredContextItem(
     WHERE inferred_context_items.user_id = ?
       AND inferred_context_items.category = ?
       AND inferred_context_items.persistence = ?
+      ${activeInferredContextClause("inferred_context_items")}
       ${qaClause("inferred_context_items", isQa)}
       AND ${situationClause}
     ORDER BY inferred_context_items.updated_at DESC`,
@@ -381,6 +407,7 @@ async function updateDuplicateInferredContextItem(
       sensitivity = ?,
       intake_session_id = ?,
       next_move_plan_id = ?,
+      status = 'active',
       updated_at = ?
     WHERE id = ? AND user_id = ?`,
     [nextSensitivity, nextIntakeSessionId, nextMovePlanId, nowIso(), existing.id, userId],
@@ -1235,7 +1262,10 @@ export async function updateProfile(
 
 export async function listInferredContextItems(
   userId: number,
-  { isQa = false }: { isQa?: boolean } = {},
+  {
+    isQa = false,
+    includeInactive = false,
+  }: { isQa?: boolean; includeInactive?: boolean } = {},
 ): Promise<InferredContextItem[]> {
   const rows = await all<InferredContextItemRow>(
     `SELECT
@@ -1247,6 +1277,7 @@ export async function listInferredContextItems(
       AND situations.user_id = inferred_context_items.user_id
     WHERE inferred_context_items.user_id = ?
       ${qaClause("inferred_context_items", isQa)}
+      ${includeInactive ? "" : activeInferredContextClause("inferred_context_items")}
     ORDER BY
       CASE inferred_context_items.persistence
         WHEN 'proposed_memory' THEN 1
@@ -1256,7 +1287,7 @@ export async function listInferredContextItems(
       inferred_context_items.updated_at DESC`,
     [userId],
   );
-  return withoutUserIds(rows) as InferredContextItem[];
+  return rows.map(rowToInferredContextItem);
 }
 
 export async function getInferredContextItem(
@@ -1275,7 +1306,7 @@ export async function getInferredContextItem(
       AND inferred_context_items.user_id = ?`,
     [id, userId],
   );
-  return row ? (withoutUserId(row) as InferredContextItem) : null;
+  return row ? rowToInferredContextItem(row) : null;
 }
 
 export async function createInferredContextItem(
@@ -1305,8 +1336,9 @@ export async function createInferredContextItem(
   const id = await insert(
     `INSERT INTO inferred_context_items (
       user_id, label, value, category, sensitivity, persistence, source,
-      situation_id, intake_session_id, next_move_plan_id, is_qa, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      status, confidence, situation_id, intake_session_id, next_move_plan_id,
+      is_qa, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'medium', ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       safe.label,
@@ -1383,6 +1415,8 @@ export async function updateInferredContextItem(
       category = ?,
       sensitivity = ?,
       persistence = ?,
+      status = 'active',
+      last_confirmed_at = ?,
       updated_at = ?
     WHERE id = ? AND user_id = ?`,
     [
@@ -1392,11 +1426,170 @@ export async function updateInferredContextItem(
       merged.sensitivity,
       merged.persistence,
       nowIso(),
+      nowIso(),
       id,
       userId,
     ],
   );
   return getInferredContextItem(userId, id);
+}
+
+export async function updateInferredContextItemFromReconciliation(
+  userId: number,
+  id: number,
+  input: InferredContextItemUpdate & {
+    confidence?: InferredContextItem["confidence"];
+    reconciliation_note?: string | null;
+  },
+): Promise<InferredContextItem | null> {
+  const existing = await getInferredContextItem(userId, id);
+  if (!existing) return null;
+  const merged = sanitizeInferredContextItem(
+    {
+      label: input.label ?? existing.label,
+      value: input.value ?? existing.value,
+      category: input.category ?? existing.category,
+      sensitivity: input.sensitivity ?? existing.sensitivity,
+      persistence: input.persistence ?? existing.persistence,
+      source: existing.source,
+    },
+    { allowSavedMemory: true },
+  );
+  const now = nowIso();
+  await run(
+    `UPDATE inferred_context_items SET
+      label = ?,
+      value = ?,
+      category = ?,
+      sensitivity = ?,
+      persistence = ?,
+      confidence = ?,
+      status = 'active',
+      superseded_by_id = NULL,
+      reconciliation_note = ?,
+      last_confirmed_at = ?,
+      updated_at = ?
+    WHERE id = ? AND user_id = ?`,
+    [
+      merged.label,
+      merged.value,
+      merged.category,
+      merged.sensitivity,
+      merged.persistence,
+      input.confidence ?? existing.confidence ?? "medium",
+      input.reconciliation_note ?? null,
+      now,
+      now,
+      id,
+      userId,
+    ],
+  );
+  return getInferredContextItem(userId, id);
+}
+
+export async function setInferredContextItemStatus(
+  userId: number,
+  id: number,
+  input: InferredContextStatusUpdateInput,
+) {
+  const now = nowIso();
+  const result = await run(
+    `UPDATE inferred_context_items SET
+      status = ?,
+      superseded_by_id = ?,
+      confidence = COALESCE(?, confidence),
+      reconciliation_note = ?,
+      last_confirmed_at = COALESCE(?, last_confirmed_at),
+      updated_at = ?
+    WHERE id = ? AND user_id = ?`,
+    [
+      input.status,
+      input.superseded_by_id ?? null,
+      input.confidence ?? null,
+      input.reconciliation_note ?? null,
+      input.last_confirmed_at ?? (input.status === "active" ? now : null),
+      now,
+      id,
+      userId,
+    ],
+  );
+  return result.rowsAffected > 0;
+}
+
+export async function markInferredContextItemStale(
+  userId: number,
+  id: number,
+  reason: string,
+  confidence: InferredContextItem["confidence"] = "medium",
+) {
+  return setInferredContextItemStatus(userId, id, {
+    status: "stale",
+    confidence,
+    reconciliation_note: reason,
+  });
+}
+
+export async function markInferredContextItemDeleted(
+  userId: number,
+  id: number,
+  reason: string,
+  confidence: InferredContextItem["confidence"] = "medium",
+) {
+  return setInferredContextItemStatus(userId, id, {
+    status: "deleted",
+    confidence,
+    reconciliation_note: reason,
+  });
+}
+
+export async function mergeInferredContextItems(
+  userId: number,
+  input: {
+    memory_ids: number[];
+    label: string;
+    value: string;
+    category: InferredContextItem["category"];
+    sensitivity: InferredContextItem["sensitivity"];
+    persistence: InferredContextItem["persistence"];
+    reason: string;
+    confidence: InferredContextItem["confidence"];
+    situation_id?: number | null;
+    intake_session_id?: number | null;
+    next_move_plan_id?: number | null;
+    isQa?: boolean;
+  },
+): Promise<InferredContextItem | null> {
+  const uniqueIds = [...new Set(input.memory_ids)].filter((id) => Number.isInteger(id));
+  if (uniqueIds.length < 2) return null;
+
+  const created = await createInferredContextItem(
+    userId,
+    {
+      label: input.label,
+      value: input.value,
+      category: input.category,
+      sensitivity: input.sensitivity,
+      persistence: input.persistence,
+      source: "manual",
+      situation_id: input.situation_id ?? null,
+      intake_session_id: input.intake_session_id ?? null,
+      next_move_plan_id: input.next_move_plan_id ?? null,
+    },
+    { allowSavedMemory: true, isQa: input.isQa },
+  );
+  const now = nowIso();
+  await run(
+    `UPDATE inferred_context_items SET
+      status = 'merged',
+      superseded_by_id = ?,
+      confidence = ?,
+      reconciliation_note = ?,
+      updated_at = ?
+    WHERE user_id = ?
+      AND id IN (${uniqueIds.map(() => "?").join(",")})`,
+    [created.id, input.confidence, input.reason, now, userId, ...uniqueIds],
+  );
+  return getInferredContextItem(userId, created.id);
 }
 
 export async function deleteInferredContextItem(userId: number, id: number) {

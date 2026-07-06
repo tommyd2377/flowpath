@@ -11,16 +11,20 @@ import {
   operatorPlanInstruction,
   parseFirstIntakeQuestionOutput,
   privacyAwareConstraintInstruction,
+  reconciliationJsonSchema,
+  reconciliationSystemPrompt,
   socialConnectionInstruction,
 } from "./flowpath-ai";
 import { buildFallbackDecisionTree } from "./decision-tree";
 import {
   DEFAULT_SAFETY_BOUNDARY,
   nextMovePlanSchema,
+  reconciliationResultSchema,
   safetyBoundarySchema,
   type NextMovePlanInput,
 } from "./schemas";
 import type { Situation } from "./types";
+import { nextMovePlanPromptModules } from "./prompts/flowpath-plan-prompts";
 
 const baseSituation: Situation = {
   id: 1,
@@ -56,30 +60,98 @@ test("board prompt frames FlowPath as a domain-general next-move engine", () => 
 
 test("operator prompt requires decision tree branches and honest search status", () => {
   assert.match(operatorPlanInstruction, /decision_tree/i);
-  assert.match(operatorPlanInstruction, /recursive decision_tree/i);
-  assert.match(operatorPlanInstruction, /2-5 available strategic branches/i);
-  assert.match(operatorPlanInstruction, /recommended\/selected branch/i);
-  assert.match(operatorPlanInstruction, /first action for every branch/i);
+  assert.match(operatorPlanInstruction, /Move Map/i);
+  assert.match(operatorPlanInstruction, /2-5 strategic branch options/i);
+  assert.match(operatorPlanInstruction, /Recommend one line/i);
+  assert.match(operatorPlanInstruction, /first_action/i);
   assert.match(operatorPlanInstruction, /which path should I take/i);
-  assert.match(operatorPlanInstruction, /Do not put sequential tasks/i);
+  assert.match(operatorPlanInstruction, /not sequential tasks/i);
   assert.match(operatorPlanInstruction, /next_steps/i);
-  assert.match(operatorPlanInstruction, /kind decision/i);
-  assert.match(operatorPlanInstruction, /kind action/i);
-  assert.match(operatorPlanInstruction, /can_explore true/i);
-  assert.match(operatorPlanInstruction, /explicitly explores/i);
-  assert.match(operatorPlanInstruction, /search_status honestly/i);
-  assert.match(operatorPlanInstruction, /invented local options/i);
+  assert.match(operatorPlanInstruction, /action leaf/i);
+  assert.match(operatorPlanInstruction, /search_status searched only when web search was actually used/i);
+  assert.match(operatorPlanInstruction, /do not imply "I found"/i);
+});
+
+test("next move plan prompt modules separate board, move map, action, memory, search, and safety jobs", () => {
+  assert.match(nextMovePlanPromptModules.boardSnapshotPrompt, /current position/i);
+  assert.match(nextMovePlanPromptModules.boardSnapshotPrompt, /primary domain/i);
+  assert.match(nextMovePlanPromptModules.boardSnapshotPrompt, /constraints/i);
+  assert.match(nextMovePlanPromptModules.boardSnapshotPrompt, /assets/i);
+  assert.match(nextMovePlanPromptModules.boardSnapshotPrompt, /assumptions/i);
+
+  assert.match(nextMovePlanPromptModules.moveMapRootPrompt, /root Move Map/i);
+  assert.match(nextMovePlanPromptModules.moveMapRootPrompt, /2-5 strategic branch options/i);
+  assert.match(nextMovePlanPromptModules.moveMapRootPrompt, /sixth only when genuinely needed/i);
+  assert.doesNotMatch(nextMovePlanPromptModules.moveMapRootPrompt, /exactly three/i);
+
+  assert.match(nextMovePlanPromptModules.taskExtractionInstruction, /subordinate to the selected Move Map line/i);
+  assert.match(nextMovePlanPromptModules.memoryExtractionInstruction, /Do not duplicate existing memory/i);
+  assert.match(nextMovePlanPromptModules.safetyBoundaryInstruction, /urgent housing instability/i);
+  assert.match(nextMovePlanPromptModules.outputSchemaInstruction, /schema requires/i);
+  assert.doesNotMatch(operatorPlanInstruction, /life areas/i);
+  assert.doesNotMatch(operatorPlanInstruction, /projects/i);
+  assert.doesNotMatch(operatorPlanInstruction, /operator analysis/i);
+  assert.doesNotMatch(operatorPlanInstruction, /full plan/i);
+});
+
+test("branch quality module forbids sequential task lists as root branches", () => {
+  const instruction = nextMovePlanPromptModules.branchQualityInstruction;
+  assert.match(instruction, /strategic alternatives/i);
+  assert.match(instruction, /not sequential tasks/i);
+  assert.match(instruction, /search local options/i);
+  assert.match(instruction, /send one message/i);
+  assert.match(instruction, /peer branches/i);
+  assert.match(instruction, /Do not force exactly three branches/i);
+  assert.match(instruction, /professional networking/i);
+  assert.match(instruction, /local belonging/i);
+  assert.match(instruction, /not dating/i);
+});
+
+test("action leaf module requires concrete executable actions", () => {
+  const instruction = nextMovePlanPromptModules.actionLeafInstruction;
+  assert.match(instruction, /executable verb/i);
+  assert.match(instruction, /object of action/i);
+  assert.match(instruction, /scope or quantity/i);
+  assert.match(instruction, /success condition/i);
+  assert.match(instruction, /if-blocked fallback/i);
+  assert.match(instruction, /Avoid vague actions/i);
+  assert.match(instruction, /Network more/i);
+  assert.match(instruction, /memory corrections/i);
+  assert.match(instruction, /Recalculate this board/i);
+});
+
+test("search honesty module forbids local verification claims without search", () => {
+  const instruction = nextMovePlanPromptModules.searchHonestyInstruction;
+  assert.match(instruction, /web_search_call_count is zero/i);
+  assert.match(instruction, /do not imply "I found"/i);
+  assert.match(instruction, /Use search_status searched only when web search was actually used/i);
+  assert.match(instruction, /mark search_status needed/i);
+  assert.match(instruction, /concrete search\/check step/i);
+});
+
+test("social tone module avoids dating assumptions and manipulative language", () => {
+  const instruction = nextMovePlanPromptModules.toneAndRealismInstruction;
+  assert.match(instruction, /do not assume dating/i);
+  assert.match(instruction, /friends\/community/i);
+  assert.match(instruction, /pickup-artist/i);
+  assert.match(instruction, /manipulation/i);
+  assert.match(instruction, /repeatable real-world containers/i);
+  assert.match(instruction, /preserve dignity and agency/i);
+  assert.match(instruction, /deficient, broken, or socially failing/i);
+  assert.match(instruction, /not trying to date/i);
 });
 
 test("branch expansion prompt is scoped to one selected path and avoids fake forks", () => {
   assert.match(branchExpansionSystemPrompt, /one selected branch/i);
-  assert.match(branchExpansionSystemPrompt, /not writing a full plan/i);
+  assert.match(branchExpansionSystemPrompt, /not writing a complete board plan/i);
   assert.match(branchExpansionSystemPrompt, /decision node/i);
   assert.match(branchExpansionSystemPrompt, /action leaf/i);
   assert.match(branchExpansionSystemPrompt, /2-5 options/i);
   assert.match(branchExpansionSystemPrompt, /Do not force exactly three/i);
   assert.match(branchExpansionSystemPrompt, /sequential steps/i);
   assert.match(branchExpansionSystemPrompt, /Do not hallucinate local\/current\/external facts/i);
+  assert.match(branchExpansionSystemPrompt, /friendship\/community/i);
+  assert.match(branchExpansionSystemPrompt, /not dating/i);
 });
 
 test("branch expansion JSON schema requires branch metadata and search status", () => {
@@ -94,6 +166,84 @@ test("branch expansion JSON schema requires branch metadata and search status", 
   assert.match(schema, /search_needed/);
 });
 
+test("reconciliation prompt prevents append-only contradictory memory", () => {
+  assert.match(reconciliationSystemPrompt, /reconciliation engine/i);
+  assert.match(reconciliationSystemPrompt, /Do not merely append/i);
+  assert.match(reconciliationSystemPrompt, /updated, merged, marked stale, or forgotten/i);
+  assert.match(reconciliationSystemPrompt, /direct user corrections as authoritative/i);
+  assert.match(reconciliationSystemPrompt, /requires_user_confirmation/i);
+  assert.match(reconciliationSystemPrompt, /selected Move Map path is still valid/i);
+  assert.match(reconciliationSystemPrompt, /recommended_followup_action/i);
+  assert.match(reconciliationSystemPrompt, /No action needed/i);
+  assert.match(reconciliationSystemPrompt, /recalculate, or continue/i);
+});
+
+test("reconciliation JSON schema exposes memory ids and board move-map effects", () => {
+  const schema = JSON.stringify(reconciliationJsonSchema);
+  assert.match(schema, /update_memory/);
+  assert.match(schema, /merge_memory/);
+  assert.match(schema, /mark_stale/);
+  assert.match(schema, /delete_memory/);
+  assert.match(schema, /memory_id/);
+  assert.match(schema, /memory_ids/);
+  assert.match(schema, /board_updates/);
+  assert.match(schema, /move_map_effect/);
+  assert.match(schema, /recommended_followup_action/);
+});
+
+test("reconciliation schema accepts update operations and move-map invalidation", () => {
+  const parsed = reconciliationResultSchema.parse({
+    summary: "Weekend availability changed the board.",
+    confidence: "high",
+    requires_user_confirmation: false,
+    operations: [
+      {
+        type: "update_memory",
+        memory_id: "1",
+        label: "Availability",
+        value: "Weekends are the only realistic time.",
+        category: "time",
+        sensitivity: "low",
+        persistence: "saved_memory",
+        confidence: "high",
+        reason: "The user directly corrected availability.",
+      },
+    ],
+    board_updates: {
+      title: "",
+      description: "",
+      category: "",
+      status: null,
+      urgency: "medium",
+      current_position_summary: "The board now has a weekend-only constraint.",
+      constraints_to_add: ["Weekend-only availability"],
+      constraints_to_remove: ["Weekday availability"],
+      assets_to_add: [],
+      assets_to_remove: [],
+      goals_to_add: [],
+      goals_to_remove: [],
+      assumptions_to_add: [],
+      assumptions_to_remove: [],
+    },
+    move_map_effect: {
+      selected_path_still_valid: false,
+      invalidated_node_ids: ["node_1"],
+      invalidated_option_ids: ["weekday_option"],
+      reason: "The selected path assumed weekday availability.",
+      should_recalculate: true,
+      should_preserve_existing_tree: false,
+    },
+    user_visible_explanation: "Updated the board with weekend-only availability.",
+    recommended_followup_action:
+      "Recalculate this board using weekend-only availability. Success: the Move Map only shows weekend-compatible options. If blocked, choose the current branch only if it can happen on a weekend.",
+    follow_up_question: "",
+  });
+
+  assert.equal(parsed.operations[0].type, "update_memory");
+  assert.equal(parsed.move_map_effect?.should_recalculate, true);
+  assert.match(parsed.recommended_followup_action, /Recalculate this board/i);
+});
+
 test("intake memory prompt requires inferred constraints and small task candidates", () => {
   assert.match(intakeInferredMemoryInstruction, /infer practical constraints/i);
   assert.match(intakeInferredMemoryInstruction, /separate profile form/i);
@@ -104,6 +254,9 @@ test("intake memory prompt requires inferred constraints and small task candidat
 
 test("social connection prompt includes consent, boundaries, non-manipulation, and age safety", () => {
   assert.match(socialConnectionInstruction, /social isolation from loneliness/i);
+  assert.match(socialConnectionInstruction, /professional networking/i);
+  assert.match(socialConnectionInstruction, /local belonging/i);
+  assert.match(socialConnectionInstruction, /not dating/i);
   assert.match(socialConnectionInstruction, /consent/i);
   assert.match(socialConnectionInstruction, /boundaries/i);
   assert.match(socialConnectionInstruction, /pickup-artist tactics/i);

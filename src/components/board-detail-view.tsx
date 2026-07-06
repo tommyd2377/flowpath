@@ -309,13 +309,16 @@ export function BoardDetailView({ boardId }: { boardId: number }) {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch(`/api/boards/${detail.situation.id}/board-update`, {
-        method: "POST",
-        body: JSON.stringify({
-          content: trimmed,
-          client_message_id: `board-update-${Date.now()}`,
-        }),
-      });
+      const updateResult = await apiFetch<{ reconciliation_message?: string }>(
+        `/api/boards/${detail.situation.id}/board-update`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            content: trimmed,
+            client_message_id: `board-update-${Date.now()}`,
+          }),
+        },
+      );
       setBoardUpdate("");
       const generated = await apiFetch<PlanGenerationResponse>(
         `/api/boards/${detail.situation.id}/generate-plan`,
@@ -323,7 +326,9 @@ export function BoardDetailView({ boardId }: { boardId: number }) {
       );
       setTaskConfirmation(generated.taskConversion ?? null);
       await load();
-      setMessage("Board updated and recalculated.");
+      setMessage(
+        updateResult.reconciliation_message ?? "Board updated and recalculated.",
+      );
     } catch (updateError) {
       setError(
         updateError instanceof Error

@@ -10,6 +10,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import { canUseWebSearchForTier } from "@/lib/billing/plans";
 import { canUseFeature, incrementUsage } from "@/lib/billing/usage";
+import { getBoard, listTasksForBoard } from "@/lib/boards";
 import {
   buildCognitivePlanContext,
   compactProfileForMemorySelection,
@@ -38,11 +39,9 @@ import {
   getLatestIntakeSession,
   getNextMovePlan,
   getProfile,
-  getSituation,
   listInferredContextItems,
   listIntakeMessages,
   listNextMovePlans,
-  listTasksForSituation,
   startGenerationEvent,
   updateNextMovePlanDecisionTree,
 } from "@/lib/repository";
@@ -101,7 +100,7 @@ export async function POST(request: Request, context: Context) {
     const user = await requireUser();
     const { id: idParam } = await context.params;
     const boardId = parseId(idParam);
-    const board = await getSituation(user.id, boardId);
+    const board = await getBoard(user.id, boardId);
     if (!board) throw new ApiRequestError("Board not found.", 404, "not_found");
 
     const input = expandMoveMapSchema.parse(await readJson(request));
@@ -161,7 +160,7 @@ export async function POST(request: Request, context: Context) {
             getProfile(user.id),
             listInferredContextItems(user.id, { isQa: isQaRequest(request) }),
             session ? listIntakeMessages(user.id, session.id) : Promise.resolve([]),
-            listTasksForSituation(user.id, boardId, { isQa: isQaRequest(request) }),
+            listTasksForBoard(user.id, boardId, { isQa: isQaRequest(request) }),
             listNextMovePlans(user.id, 3, boardId, { isQa: isQaRequest(request) }),
           ]);
         const cognitiveContext = buildCognitivePlanContext({

@@ -10,9 +10,10 @@ import { canUseWebSearchForTier } from "@/lib/billing/plans";
 import {
   assertCanUseFeature,
   canUseFeature,
-  canUseFirstSituationFlow,
+  canUseFirstSituationFlow as canUseFirstBoardFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
+import { getBoard } from "@/lib/boards";
 import {
   buildCognitivePlanContext,
   compactProfileForMemorySelection,
@@ -31,7 +32,6 @@ import {
   getInterventionEffectivenessForContext,
   getLatestIntakeSession,
   getProfile,
-  getSituation,
   isGenerationAbandoned,
   listCheckIns,
   listInferredContextItems,
@@ -79,9 +79,9 @@ export async function POST(request: Request, context: Context) {
       typeof body?.retry_count === "number" && Number.isInteger(body.retry_count)
         ? body.retry_count
         : 0;
-    const situation = await getSituation(user.id, situationId);
+    const situation = await getBoard(user.id, situationId);
     if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
-    const firstFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
+    const firstFlowPass = await canUseFirstBoardFlow(user.id, situationId, {
       isQa,
     });
     const usageDecision = await canUseFeature(user.id, "next_move_plan");

@@ -492,6 +492,114 @@ export const inferredContextItemUpdateSchema = z
     message: "At least one field is required.",
   });
 
+const reconciliationMemoryIdSchema = z.string().trim().min(1).max(80);
+
+const reconciliationBaseOperationSchema = z.object({
+  confidence: z.enum(CONFIDENCE_LEVELS).default("medium"),
+  reason: z.string().trim().min(1).max(1000),
+});
+
+export const createMemoryReconciliationOperationSchema =
+  reconciliationBaseOperationSchema.extend({
+    type: z.literal("create_memory"),
+    label: z.string().trim().min(1).max(MEMORY_LABEL_MAX),
+    value: z.string().trim().min(1).max(MEMORY_VALUE_MAX),
+    category: z.enum(INFERRED_CONTEXT_CATEGORIES),
+    sensitivity: z.enum(CONSTRAINT_SENSITIVITIES),
+    persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE),
+  });
+
+export const updateMemoryReconciliationOperationSchema =
+  reconciliationBaseOperationSchema.extend({
+    type: z.literal("update_memory"),
+    memory_id: reconciliationMemoryIdSchema,
+    label: z.string().trim().min(1).max(MEMORY_LABEL_MAX).optional().default(""),
+    value: z.string().trim().min(1).max(MEMORY_VALUE_MAX).optional().default(""),
+    category: z.enum(INFERRED_CONTEXT_CATEGORIES).optional().nullable().default(null),
+    sensitivity: z.enum(CONSTRAINT_SENSITIVITIES).optional().nullable().default(null),
+    persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE).optional().nullable().default(null),
+  });
+
+export const mergeMemoryReconciliationOperationSchema =
+  reconciliationBaseOperationSchema.extend({
+    type: z.literal("merge_memory"),
+    memory_ids: z.array(reconciliationMemoryIdSchema).min(2).max(8),
+    label: z.string().trim().min(1).max(MEMORY_LABEL_MAX),
+    value: z.string().trim().min(1).max(MEMORY_VALUE_MAX),
+    category: z.enum(INFERRED_CONTEXT_CATEGORIES),
+    sensitivity: z.enum(CONSTRAINT_SENSITIVITIES),
+    persistence: z.enum(INFERRED_CONTEXT_PERSISTENCE),
+  });
+
+export const markStaleMemoryReconciliationOperationSchema =
+  reconciliationBaseOperationSchema.extend({
+    type: z.literal("mark_stale"),
+    memory_id: reconciliationMemoryIdSchema,
+  });
+
+export const deleteMemoryReconciliationOperationSchema =
+  reconciliationBaseOperationSchema.extend({
+    type: z.literal("delete_memory"),
+    memory_id: reconciliationMemoryIdSchema,
+  });
+
+export const noopMemoryReconciliationOperationSchema = z.object({
+  type: z.literal("noop"),
+  reason: z.string().trim().min(1).max(1000),
+});
+
+export const reconciliationOperationSchema = z.discriminatedUnion("type", [
+  createMemoryReconciliationOperationSchema,
+  updateMemoryReconciliationOperationSchema,
+  mergeMemoryReconciliationOperationSchema,
+  markStaleMemoryReconciliationOperationSchema,
+  deleteMemoryReconciliationOperationSchema,
+  noopMemoryReconciliationOperationSchema,
+]);
+
+export const boardReconciliationUpdatesSchema = z.object({
+  title: z.string().trim().max(SITUATION_TITLE_MAX).optional().default(""),
+  description: z
+    .string()
+    .trim()
+    .max(SITUATION_DESCRIPTION_MAX)
+    .optional()
+    .default(""),
+  category: z.string().trim().max(120).optional().default(""),
+  status: z.enum(SITUATION_STATUSES).optional().nullable().default(null),
+  urgency: z.enum(SITUATION_URGENCIES).optional().nullable().default(null),
+  current_position_summary: z.string().trim().max(2000).optional().default(""),
+  constraints_to_add: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  constraints_to_remove: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  assets_to_add: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  assets_to_remove: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  goals_to_add: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  goals_to_remove: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  assumptions_to_add: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  assumptions_to_remove: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+});
+
+export const moveMapEffectSchema = z.object({
+  selected_path_still_valid: z.boolean().default(true),
+  invalidated_node_ids: z.array(z.string().trim().min(1).max(120)).max(12).default([]),
+  invalidated_option_ids: z.array(z.string().trim().min(1).max(120)).max(12).default([]),
+  reason: z.string().trim().max(1000).optional().default(""),
+  should_recalculate: z.boolean().default(false),
+  should_preserve_existing_tree: z.boolean().default(true),
+});
+
+export const reconciliationResultSchema = z.object({
+  summary: z.string().trim().min(1).max(1600),
+  confidence: z.enum(CONFIDENCE_LEVELS),
+  requires_user_confirmation: z.boolean().default(false),
+  operations: z.array(reconciliationOperationSchema).max(12).default([]),
+  board_updates: boardReconciliationUpdatesSchema.optional().nullable().default(null),
+  move_map_effect: moveMapEffectSchema.optional().nullable().default(null),
+  user_visible_explanation: z.string().trim().max(1200).optional().default(""),
+  recommended_followup_action: z.string().trim().max(700).optional().default(""),
+  follow_up_question: z.string().trim().max(500).optional().default(""),
+});
+
 export const nextMoveStepSchema = z.object({
   title: z.string().trim().min(1).max(180),
   details: z.string().trim().min(1).max(3000),
@@ -762,4 +870,8 @@ export type SituationUpdate = z.infer<typeof situationUpdateSchema>;
 export type IntakeAnswerInput = z.infer<typeof intakeAnswerInputSchema>;
 export type InterviewerOutput = z.infer<typeof interviewerOutputSchema>;
 export type BranchExpansionResultInput = z.infer<typeof branchExpansionResultSchema>;
+export type ReconciliationResultInput = z.infer<typeof reconciliationResultSchema>;
+export type ReconciliationOperationInput = z.infer<
+  typeof reconciliationOperationSchema
+>;
 export type NextMovePlanInput = z.infer<typeof nextMovePlanSchema>;

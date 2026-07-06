@@ -1,0 +1,260 @@
+import type { EvalScenario } from "./types";
+
+export const evalScenarios: EvalScenario[] = [
+  {
+    id: "tennis_local_community",
+    name: "Tennis / local community",
+    description:
+      "Craft-selected board where tennis is the activity, but community is an important secondary aim.",
+    entryDomain: "craft_creativity_mastery",
+    userInputs: [
+      "I want to start playing tennis, but also meet people in my neighborhood by playing tennis. I am around Bed-Stuy / 11216.",
+      "I am a beginner and would rather not jump straight into intense competitive games.",
+    ],
+    expected: {
+      primaryDomain: "craft_creativity_mastery",
+      secondaryDomains: ["people_community_belonging"],
+      titleKeywords: ["tennis", "community"],
+      goalKeywords: ["tennis", "people"],
+      constraintKeywords: ["beginner", "Bed-Stuy"],
+      branchKeywordGroups: [
+        ["clinic", "group"],
+        ["coach"],
+        ["solo", "practice"],
+        ["casual", "games"],
+      ],
+      recommendedBranchKeywords: ["clinic", "group"],
+      downgradedBranchKeywords: ["solo", "casual"],
+      actionKeywords: ["contact", "beginner"],
+      recurringContainerPreferred: true,
+      noUnverifiedLocalClaims: true,
+      preservePrimaryDomain: true,
+    },
+  },
+  {
+    id: "yoga_social_connection",
+    name: "Yoga / social connection",
+    description:
+      "Beginner-friendly social board where the user wants connection through yoga without high social pressure.",
+    entryDomain: "people_community_belonging",
+    userInputs: [
+      "I want to meet people through yoga, but I am shy and need something beginner-friendly.",
+      "I would like a recurring class more than a one-off event.",
+    ],
+    expected: {
+      primaryDomain: "people_community_belonging",
+      secondaryDomains: ["craft_creativity_mastery"],
+      titleKeywords: ["yoga", "people"],
+      goalKeywords: ["yoga", "meet"],
+      constraintKeywords: ["shy", "beginner"],
+      branchKeywordGroups: [
+        ["recurring", "class"],
+        ["workshop"],
+        ["community"],
+        ["walk"],
+      ],
+      recommendedBranchKeywords: ["recurring", "beginner"],
+      actionKeywords: ["message", "class"],
+      recurringContainerPreferred: true,
+      noUnverifiedLocalClaims: true,
+    },
+  },
+  {
+    id: "career_no_cold_application_traction",
+    name: "Career / no cold-application traction",
+    description:
+      "Career board where repeated LinkedIn applications have not produced interviews.",
+    entryDomain: "work_money_career",
+    userInputs: [
+      "I have applied to a lot of jobs on LinkedIn and gotten no interviews.",
+      "I need a better path to income or opportunity, but I am tired of sending applications into the void.",
+    ],
+    expected: {
+      primaryDomain: "work_money_career",
+      titleKeywords: ["traction", "applications"],
+      goalKeywords: ["income", "opportunity"],
+      constraintKeywords: ["no interviews", "LinkedIn"],
+      branchKeywordGroups: [
+        ["warm", "network"],
+        ["proof", "asset"],
+        ["freelance", "service"],
+        ["targeted", "applications"],
+        ["stabilization"],
+      ],
+      recommendedBranchKeywords: ["warm", "network"],
+      downgradedBranchKeywords: ["cold", "applications"],
+      actionKeywords: ["send", "specific"],
+    },
+  },
+  {
+    id: "first_time_entrepreneur",
+    name: "First-time entrepreneur",
+    description:
+      "Business board where the user has an idea but no customer proof yet.",
+    entryDomain: "work_money_career",
+    userInputs: [
+      "I have an idea for a small software product, but I have no customers yet.",
+      "I am tempted to build the whole thing first because I know how to code.",
+    ],
+    expected: {
+      primaryDomain: "work_money_career",
+      titleKeywords: ["validate", "idea"],
+      goalKeywords: ["customers", "idea"],
+      constraintKeywords: ["no customers"],
+      assetKeywords: ["code"],
+      branchKeywordGroups: [
+        ["customer", "interviews"],
+        ["manual", "service"],
+        ["landing", "page"],
+        ["insider", "conversations"],
+        ["build", "product"],
+      ],
+      recommendedBranchKeywords: ["customer", "interviews"],
+      downgradedBranchKeywords: ["build", "product"],
+      actionKeywords: ["conversation", "customer"],
+    },
+  },
+  {
+    id: "creative_professionalization_too_early",
+    name: "Creative work / professionalization too early",
+    description:
+      "Creative board where the user wants professionalization before proof and feedback loops are strong.",
+    entryDomain: "craft_creativity_mastery",
+    userInputs: [
+      "I want to become paid for my writing eventually, but I have not finished many pieces or gotten much feedback.",
+      "I do not want to be told the goal is impossible.",
+    ],
+    expected: {
+      primaryDomain: "craft_creativity_mastery",
+      secondaryDomains: ["work_money_career"],
+      titleKeywords: ["writing", "paid"],
+      goalKeywords: ["writing", "paid"],
+      constraintKeywords: ["not finished", "feedback"],
+      branchKeywordGroups: [
+        ["finish", "small"],
+        ["feedback"],
+        ["publish", "proof"],
+        ["professional", "submission"],
+      ],
+      recommendedBranchKeywords: ["feedback"],
+      downgradedBranchKeywords: ["professional", "submission"],
+      actionKeywords: ["piece", "feedback"],
+    },
+  },
+  {
+    id: "community_not_dating",
+    name: "People/community/dating distinction",
+    description:
+      "Social board where the user explicitly wants friends/community rather than dating.",
+    entryDomain: "people_community_belonging",
+    userInputs: [
+      "I want to meet people and make friends, but I am not trying to date.",
+      "I want regular real-world connection, ideally around activities or community.",
+    ],
+    expected: {
+      primaryDomain: "people_community_belonging",
+      titleKeywords: ["friends", "community"],
+      goalKeywords: ["friends", "community"],
+      constraintKeywords: ["not trying to date"],
+      branchKeywordGroups: [
+        ["recurring", "group"],
+        ["volunteering"],
+        ["friend", "friend"],
+        ["class"],
+      ],
+      recommendedBranchKeywords: ["recurring"],
+      actionKeywords: ["join", "recurring"],
+      mustAvoidDatingAssumption: true,
+    },
+  },
+  {
+    id: "rural_community_constraint",
+    name: "Rural community constraint",
+    description:
+      "Community board where local density is limited and the plan must not assume urban abundance.",
+    entryDomain: "people_community_belonging",
+    userInputs: [
+      "I live in a rural area and want more community, but there are not many local options nearby.",
+      "I can drive 30 minutes once a week, but not every night.",
+    ],
+    expected: {
+      primaryDomain: "people_community_belonging",
+      titleKeywords: ["rural", "community"],
+      goalKeywords: ["community"],
+      constraintKeywords: ["rural", "drive 30 minutes"],
+      branchKeywordGroups: [
+        ["regional", "group"],
+        ["volunteer"],
+        ["library", "adult"],
+        ["online", "offline"],
+      ],
+      recommendedBranchKeywords: ["regional", "recurring"],
+      actionKeywords: ["search", "within 30 minutes"],
+      noUnverifiedLocalClaims: true,
+    },
+  },
+  {
+    id: "urgent_eviction_pressure",
+    name: "Urgent stability / eviction-like pressure",
+    description:
+      "Urgent board where normal strategy should yield to immediate risk reduction.",
+    entryDomain: "work_money_career",
+    userInputs: [
+      "I might be evicted next week and I do not know what to do first.",
+      "I need to reduce immediate housing risk before thinking about long-term career moves.",
+    ],
+    expected: {
+      primaryDomain: "work_money_career",
+      titleKeywords: ["housing", "urgent"],
+      goalKeywords: ["housing", "risk"],
+      constraintKeywords: ["next week", "evicted"],
+      branchKeywordGroups: [
+        ["housing", "support"],
+        ["legal", "aid"],
+        ["cash", "stability"],
+        ["safe", "place"],
+      ],
+      recommendedBranchKeywords: ["housing", "support"],
+      actionKeywords: ["call", "housing"],
+      urgentStability: true,
+      noUnverifiedLocalClaims: true,
+    },
+  },
+  {
+    id: "memory_correction_private_writing",
+    name: "Memory correction / private writing",
+    description:
+      "Memory correction where old professionalization memory should be stale or removed.",
+    entryDomain: "craft_creativity_mastery",
+    userInputs: [
+      "Forget that I wanted to monetize my writing. I want to keep it private for now.",
+    ],
+    expected: {
+      primaryDomain: "craft_creativity_mastery",
+      titleKeywords: ["private", "writing"],
+      goalKeywords: ["writing", "private"],
+      activeMemoryLabels: ["Writing privacy"],
+      staleMemoryLabels: ["Monetize writing"],
+      actionKeywords: ["private", "writing", "session"],
+    },
+  },
+  {
+    id: "board_update_weekends_only",
+    name: "Board update invalidates active path",
+    description:
+      "Board update where weekday assumptions should no longer drive the Move Map.",
+    entryDomain: "people_community_belonging",
+    userInputs: [
+      "Actually, I can only do weekends.",
+    ],
+    expected: {
+      primaryDomain: "people_community_belonging",
+      titleKeywords: ["weekend"],
+      goalKeywords: ["weekend"],
+      constraintKeywords: ["weekends only"],
+      activeMemoryLabels: ["Weekend availability"],
+      moveMapShouldRecalculate: true,
+      actionKeywords: ["weekend", "recalculate"],
+    },
+  },
+];

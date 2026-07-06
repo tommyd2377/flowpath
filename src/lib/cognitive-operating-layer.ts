@@ -645,13 +645,15 @@ function profileMemoryCandidates(profile?: Profile | null): MemoryCandidate[] {
 }
 
 function inferredMemoryCandidates(items: InferredContextItem[] = []): MemoryCandidate[] {
-  return items.map((item) => ({
-    id: `memory.${item.id}`,
-    text: `${item.label}: ${item.value}`,
-    sensitivity: sensitivityFor(item.sensitivity),
-    category: item.category,
-    source: item.source,
-  }));
+  return items
+    .filter((item) => (item.status ?? "active") === "active")
+    .map((item) => ({
+      id: `memory.${item.id}`,
+      text: `${item.label}: ${item.value}`,
+      sensitivity: sensitivityFor(item.sensitivity),
+      category: item.category,
+      source: item.source,
+    }));
 }
 
 function statePreferenceKeywords(state: FlowPathState) {

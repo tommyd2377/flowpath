@@ -7,20 +7,19 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import {
+  deleteBoard,
+  getBoard,
+  getBoardDetail,
+  updateBoard,
+} from "@/lib/boards";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import { isQaRequest } from "@/lib/qa-mode";
 import {
   createOutcomeHarnessEvent,
-  deleteSituation as deleteBoard,
   getLatestIntakeSession,
-  getLatestNextMovePlan,
-  getOrCreateIntakeSession,
-  getSituation as getBoard,
   listIntakeMessages,
-  listNextMovePlans,
-  listTasksForSituation as listTasksForBoard,
   recordIgnoredSuggestedActions,
-  updateSituation as updateBoard,
 } from "@/lib/repository";
 import { situationUpdateSchema } from "@/lib/schemas";
 
@@ -30,26 +29,9 @@ export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
 
 async function boardDetail(userId: number, id: number, isQa = false) {
-  const board = await getBoard(userId, id);
-  if (!board) throw new ApiRequestError("Board not found.", 404, "not_found");
-  const session =
-    (await getLatestIntakeSession(userId, id)) ??
-    (await getOrCreateIntakeSession(userId, id));
-  const [messages, latestPlan, plans, tasks] = await Promise.all([
-    listIntakeMessages(userId, session.id),
-    getLatestNextMovePlan(userId, id, { isQa }),
-    listNextMovePlans(userId, 10, id, { isQa }),
-    listTasksForBoard(userId, id, { isQa }),
-  ]);
-  return {
-    board,
-    situation: board,
-    session,
-    messages,
-    latestPlan,
-    plans,
-    tasks,
-  };
+  const detail = await getBoardDetail(userId, id, { isQa });
+  if (!detail) throw new ApiRequestError("Board not found.", 404, "not_found");
+  return detail;
 }
 
 export async function GET(request: Request, context: Context) {

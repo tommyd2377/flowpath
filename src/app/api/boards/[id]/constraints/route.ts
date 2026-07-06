@@ -6,9 +6,9 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { getBoard } from "@/lib/boards";
 import {
   getOrCreateIntakeSession,
-  getSituation,
   mergeProfileContextConstraints,
   updateIntakeSessionConstraints,
 } from "@/lib/repository";
@@ -24,7 +24,7 @@ export async function PATCH(request: Request, context: Context) {
     const user = await requireUser();
     const { id: idParam } = await context.params;
     const situationId = parseId(idParam);
-    const situation = await getSituation(user.id, situationId);
+    const situation = await getBoard(user.id, situationId);
     if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
 
     const input = contextConstraintsInputSchema.parse(await readJson(request));

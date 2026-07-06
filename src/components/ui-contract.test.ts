@@ -59,7 +59,7 @@ test("New board uses selected-domain intake without manual title or urgency", ()
   assert.match(source, /Domain/);
   assert.match(source, /Current position/);
   assert.match(source, /Interview/);
-  assert.match(source, /Best move/);
+  assert.match(source, /Move Map/);
   assert.match(source, /What are you trying to figure out\?/);
   assert.match(source, /ENTRY_DOMAINS/);
   assert.match(source, /domainFirstQuestions/);
@@ -74,13 +74,32 @@ test("New board uses selected-domain intake without manual title or urgency", ()
   assert.doesNotMatch(source, /I want sexual connection safely and respectfully/);
 });
 
-test("New board shows saved plan state instead of quota CTA after generation", () => {
+test("New board opens the board detail Move Map after generation", () => {
   const source = readSource("src/components/next-move-flow.tsx");
 
-  assert.match(source, /Best move generated/);
-  assert.match(source, /Your best move is saved and ranked tasks are ready below/);
-  assert.match(source, /!detail\.latestPlan/);
+  assert.match(source, /openBoardMoveMap/);
+  assert.match(source, /Board ready\. Opening the Move Map/);
+  assert.match(source, /Open Move Map/);
+  assert.match(source, /Move Map ready/);
+  assert.match(source, /Generate Move Map/);
+  assert.doesNotMatch(source, /NextMovePlanCard/);
+  assert.doesNotMatch(source, /RelatedTasksCard/);
+  assert.doesNotMatch(source, /Your best move is saved and ranked tasks are ready below/);
   assert.doesNotMatch(source, /Generate updated plan/);
+});
+
+test("Board API routes use the Board adapter boundary", () => {
+  const collectionRoute = readSource("src/app/api/boards/route.ts");
+  const detailRoute = readSource("src/app/api/boards/[id]/route.ts");
+  const adapter = readSource("src/lib/boards.ts");
+
+  assert.match(collectionRoute, /from "@\/lib\/boards"/);
+  assert.match(detailRoute, /from "@\/lib\/boards"/);
+  assert.match(adapter, /export type Board = Situation/);
+  assert.match(adapter, /getBoardDetail/);
+  assert.match(adapter, /situation: board/);
+  assert.doesNotMatch(collectionRoute, /createSituation as createBoard/);
+  assert.doesNotMatch(detailRoute, /getSituation as getBoard/);
 });
 
 test("Board detail supports conversational board updates", () => {

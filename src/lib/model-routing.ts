@@ -230,6 +230,8 @@ export function selectModelForGeneration(
 
   if (input.flowType === "dictation") {
     modelRole = "dictation";
+  } else if (input.flowType === "memory_reconciliation" || input.flowType === "board_reconciliation") {
+    modelRole = "memory_model";
   } else if (input.flowType === "first_intake_question" || input.flowType === "followup_intake_question") {
     modelRole = highStakes || complexityScore >= 0.62 ? "intake_escalated" : "intake_fast";
   } else if (input.flowType === "plan_evaluator") {

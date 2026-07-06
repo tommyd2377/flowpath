@@ -51,8 +51,17 @@ const baseProfile: Profile = {
   updated_at: "2026-05-23T00:00:00.000Z",
 };
 
+const activeMemoryDefaults = {
+  status: "active",
+  confidence: "medium",
+  superseded_by_id: null,
+  last_confirmed_at: null,
+  reconciliation_note: null,
+} as const;
+
 const memoryItems: InferredContextItem[] = [
   {
+    ...activeMemoryDefaults,
     id: 1,
     label: "Project tooling",
     value: "The current project uses a typed web stack, structured data, and model calls.",
@@ -67,6 +76,7 @@ const memoryItems: InferredContextItem[] = [
     updated_at: "2026-05-23T00:00:00.000Z",
   },
   {
+    ...activeMemoryDefaults,
     id: 2,
     label: "Craft focus",
     value: "Creative work should preserve emotional coherence and subtext.",
@@ -81,6 +91,7 @@ const memoryItems: InferredContextItem[] = [
     updated_at: "2026-05-23T00:00:00.000Z",
   },
   {
+    ...activeMemoryDefaults,
     id: 3,
     label: "Social context",
     value: "City or metro location matters for social and dating recommendations.",
@@ -207,6 +218,41 @@ test("memory selection stays compact and category-aware", () => {
   assert.ok(selection.selected_memories.length >= 3);
   assert.ok(selection.selected_memories.length <= 8);
   assert.match(selection.selected_memories.map((item) => item.summary).join(" "), /typed web stack|structured data|model calls/i);
+});
+
+test("memory selection ignores stale inferred memory if passed by mistake", () => {
+  const state = stateFor("I need local community ideas.");
+  const selection = selectRelevantMemory(
+    {
+      userMessage: "I need local community ideas.",
+      profile: baseProfile,
+      inferredContextItems: [
+        ...memoryItems,
+        {
+          ...activeMemoryDefaults,
+          id: 999,
+          status: "stale",
+          label: "Old location",
+          value: "The user lives in a place that is no longer current.",
+          category: "location",
+          sensitivity: "moderate",
+          persistence: "saved_memory",
+          source: "manual",
+          situation_id: null,
+          intake_session_id: null,
+          next_move_plan_id: null,
+          created_at: "2026-05-23T00:00:00.000Z",
+          updated_at: "2026-05-23T00:00:00.000Z",
+        },
+      ],
+    },
+    state,
+  );
+
+  assert.equal(
+    selection.selected_memories.some((item) => item.id === "memory.999"),
+    false,
+  );
 });
 
 test("web search gating turns on for volatile docs and off for pure creative work", () => {

@@ -21,6 +21,8 @@ process.env.APP_TIMEZONE = "UTC";
 
 let db: Awaited<typeof import("@/lib/db")>;
 let repository: Awaited<typeof import("./repository")>;
+let boards: Awaited<typeof import("./boards")>;
+let reconciliation: Awaited<typeof import("./reconciliation")>;
 let taskConversion: Awaited<typeof import("./task-conversion")>;
 
 function splitStatements(sql: string) {
@@ -150,6 +152,8 @@ function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
 before(async () => {
   db = await import("@/lib/db");
   repository = await import("./repository");
+  boards = await import("./boards");
+  reconciliation = await import("./reconciliation");
   taskConversion = await import("./task-conversion");
   await applyMigrations();
 });
@@ -169,6 +173,42 @@ test("new profiles do not store manual memory explainer text", async () => {
   assert.equal(profile.operating_principles, "");
   assert.equal(profile.remember, "");
   assert.equal(profile.challenge_on, "");
+});
+
+test("board adapter wraps situation storage without changing persisted records", async () => {
+  const board = await boards.createBoard(
+    1,
+    {
+      title: "",
+      description: "I want to choose a practical next move for a board.",
+      category: "work_money_career",
+      urgency: "medium",
+    },
+    { isQa: true },
+  );
+
+  assert.equal(board.status, "active");
+  assert.equal(board.category, "work_money_career");
+
+  const loaded = await boards.getBoard(1, board.id);
+  assert.equal(loaded?.id, board.id);
+
+  const listed = await boards.listBoards(1, "active", { isQa: true });
+  assert.ok(listed.some((item) => item.id === board.id));
+
+  const detail = await boards.getBoardDetail(1, board.id, { isQa: true });
+  assert.equal(detail?.board.id, board.id);
+  assert.equal(detail?.situation.id, board.id);
+  assert.equal(detail?.latestPlan, null);
+
+  const resolved = await boards.resolveBoard(1, board.id);
+  assert.equal(resolved?.status, "resolved");
+
+  const archived = await boards.archiveBoard(1, board.id);
+  assert.equal(archived?.status, "archived");
+
+  assert.equal(await boards.deleteBoard(1, board.id), true);
+  assert.equal(await boards.getBoard(1, board.id), null);
 });
 
 test("converts stored plan steps to tasks without re-blocking generated plan text", async () => {
@@ -545,6 +585,155 @@ test("inferred context items downgrade model-saved memory and can be updated or 
   assert.equal(deleted, true);
   const remaining = await repository.listInferredContextItems(1);
   assert.equal(remaining.some((item) => item.id === created.id), false);
+});
+
+test("reconciled inferred context statuses are excluded from active memory", async () => {
+  const active = await repository.createInferredContextItem(
+    1,
+    {
+      label: "Weekend availability",
+      value: "Weekends are the realistic time window.",
+      category: "time",
+      sensitivity: "low",
+      persistence: "saved_memory",
+      source: "manual",
+      situation_id: null,
+      intake_session_id: null,
+      next_move_plan_id: null,
+    },
+    { allowSavedMemory: true },
+  );
+  const stale = await repository.createInferredContextItem(
+    1,
+    {
+      label: "Weekday availability",
+      value: "Weekdays are available for classes.",
+      category: "time",
+      sensitivity: "low",
+      persistence: "saved_memory",
+      source: "manual",
+      situation_id: null,
+      intake_session_id: null,
+      next_move_plan_id: null,
+    },
+    { allowSavedMemory: true },
+  );
+  await repository.markInferredContextItemStale(
+    1,
+    stale.id,
+    "User corrected availability.",
+    "high",
+  );
+
+  const activeOnly = await repository.listInferredContextItems(1);
+  assert.equal(activeOnly.some((item) => item.id === active.id), true);
+  assert.equal(activeOnly.some((item) => item.id === stale.id), false);
+
+  const allItems = await repository.listInferredContextItems(1, {
+    includeInactive: true,
+  });
+  assert.equal(allItems.some((item) => item.id === stale.id && item.status === "stale"), true);
+});
+
+test("reconciliation updates existing memory and avoids contradictory append", async () => {
+  const created = await repository.createInferredContextItem(
+    1,
+    {
+      label: "Availability",
+      value: "Weekdays are realistic for classes.",
+      category: "time",
+      sensitivity: "low",
+      persistence: "saved_memory",
+      source: "manual",
+      situation_id: null,
+      intake_session_id: null,
+      next_move_plan_id: null,
+    },
+    { allowSavedMemory: true },
+  );
+
+  const applied = await reconciliation.applyReconciliationOperations({
+    userId: 1,
+    userText: "Actually, I can only do weekends.",
+    reconciliation: {
+      summary: "Updated availability.",
+      confidence: "high",
+      requires_user_confirmation: false,
+      operations: [
+        {
+          type: "update_memory",
+          memory_id: String(created.id),
+          label: "Availability",
+          value: "Weekends are the only realistic time for classes.",
+          category: "time",
+          sensitivity: "low",
+          persistence: "saved_memory",
+          confidence: "high",
+          reason: "The user directly corrected their availability.",
+        },
+      ],
+      board_updates: null,
+      move_map_effect: null,
+      user_visible_explanation: "Updated your availability.",
+      recommended_followup_action:
+        "Recalculate this board using weekend-only availability.",
+      follow_up_question: "",
+    },
+  });
+
+  assert.equal(applied.counts.updated, 1);
+  const updated = await repository.getInferredContextItem(1, created.id);
+  assert.equal(updated?.value, "Weekends are the only realistic time for classes.");
+  assert.equal(updated?.status, "active");
+  const activeItems = await repository.listInferredContextItems(1);
+  const matching = activeItems.filter((item) => item.id === created.id);
+  assert.equal(matching.length, 1);
+});
+
+test("reconciliation downgrades unsafe delete to stale without explicit forget", async () => {
+  const created = await repository.createInferredContextItem(
+    1,
+    {
+      label: "Writing monetization",
+      value: "The user may want to monetize writing.",
+      category: "creative_personal_project",
+      sensitivity: "low",
+      persistence: "saved_memory",
+      source: "manual",
+      situation_id: null,
+      intake_session_id: null,
+      next_move_plan_id: null,
+    },
+    { allowSavedMemory: true },
+  );
+
+  const applied = await reconciliation.applyReconciliationOperations({
+    userId: 1,
+    userText: "That is not true anymore.",
+    reconciliation: {
+      summary: "Removed stale writing assumption.",
+      confidence: "medium",
+      requires_user_confirmation: false,
+      operations: [
+        {
+          type: "delete_memory",
+          memory_id: String(created.id),
+          confidence: "medium",
+          reason: "The user said the memory is no longer true.",
+        },
+      ],
+      board_updates: null,
+      move_map_effect: null,
+      user_visible_explanation: "Marked the older assumption stale.",
+      recommended_followup_action: "No action needed: the stale memory is no longer active.",
+      follow_up_question: "",
+    },
+  });
+
+  assert.equal(applied.counts.deleted, 0);
+  assert.equal(applied.counts.marked_stale, 1);
+  const updated = await repository.getInferredContextItem(1, created.id);
+  assert.equal(updated?.status, "stale");
 });
 
 test("task feedback updates status and records outcome metadata", async () => {

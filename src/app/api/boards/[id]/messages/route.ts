@@ -9,9 +9,10 @@ import { requireUser } from "@/lib/auth";
 import {
   assertCanUseFeature,
   canUseFeature,
-  canUseFirstSituationFlow,
+  canUseFirstSituationFlow as canUseFirstBoardFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
+import { getBoard, updateBoard } from "@/lib/boards";
 import {
   buildCognitiveMetadata,
   buildCognitivePlanContext,
@@ -31,7 +32,6 @@ import {
   getInterventionEffectivenessForContext,
   getOrCreateIntakeSession,
   getProfile,
-  getSituation,
   isGenerationAbandoned,
   listInferredContextItems,
   listIntakeMessages,
@@ -40,7 +40,6 @@ import {
   startGenerationEvent,
   updateOutcomeRecord,
   updateIntakeSession,
-  updateSituation,
 } from "@/lib/repository";
 import { intakeAnswerInputSchema } from "@/lib/schemas";
 import { logGenerationTiming } from "@/lib/server-telemetry";
@@ -94,9 +93,9 @@ export async function POST(request: Request, context: Context) {
       elapsedMs: Date.now() - routeStartedAt,
       usageType: "lightweight_assist",
     });
-    const situation = await getSituation(user.id, situationId);
+    const situation = await getBoard(user.id, situationId);
     if (!situation) throw new ApiRequestError("Board not found.", 404, "not_found");
-    const firstSituationFlowPass = await canUseFirstSituationFlow(user.id, situationId, {
+    const firstBoardFlowPass = await canUseFirstBoardFlow(user.id, situationId, {
       isQa,
     });
     const usageDecision = await canUseFeature(user.id, "lightweight_assist");
@@ -119,12 +118,12 @@ export async function POST(request: Request, context: Context) {
       structural_counts: {
         user_answer_chars: input.content.length,
         retry_count: input.retry_count,
-        first_flow_pass: firstSituationFlowPass,
+        first_flow_pass: firstBoardFlowPass,
       },
       retry_count: input.retry_count,
       is_qa: isQa,
     });
-    if (!firstSituationFlowPass && !usageDecision.allowed) {
+    if (!firstBoardFlowPass && !usageDecision.allowed) {
       await completeGenerationEvent(user.id, clientGenerationId, {
         status: "error",
         flowStatus: "quota_blocked",
@@ -317,7 +316,7 @@ export async function POST(request: Request, context: Context) {
       await cancelGenerationEvent(user.id, clientGenerationId);
       throw new ApiRequestError("Generation was canceled. No new intake result was saved.", 409, "generation_canceled");
     }
-    if (!firstSituationFlowPass) {
+    if (!firstBoardFlowPass) {
       await incrementUsage(user.id, "lightweight_assist", usage);
     }
 
@@ -338,7 +337,7 @@ export async function POST(request: Request, context: Context) {
     });
 
     if (output.recommended_urgency && output.recommended_urgency !== situation.urgency) {
-      await updateSituation(user.id, situation.id, {
+      await updateBoard(user.id, situation.id, {
         title: situation.title,
         description: situation.description,
         category: situation.category,

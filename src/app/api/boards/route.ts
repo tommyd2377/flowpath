@@ -6,6 +6,12 @@ import {
   canUseFirstSituationFlow as canUseFirstBoardFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
+import {
+  createBoard,
+  deleteBoard,
+  listBoards,
+  type Board,
+} from "@/lib/boards";
 import { generateFirstIntakePlan } from "@/lib/flowpath-ai";
 import { sanitizeGenerationError } from "@/lib/generation-observability";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
@@ -13,18 +19,14 @@ import { isQaRequest } from "@/lib/qa-mode";
 import {
   addIntakeMessage,
   completeGenerationEvent,
-  createOutcomeHarnessEvent,
-  createSituation as createBoard,
-  deleteSituation as deleteBoard,
   getLatestIntakeSession,
   getOrCreateIntakeSession,
   listIntakeMessages,
-  listSituations as listBoards,
+  createOutcomeHarnessEvent,
   startGenerationEvent,
 } from "@/lib/repository";
 import { situationInputSchema } from "@/lib/schemas";
 import type { FirstIntakePlan } from "@/lib/situation-routing";
-import type { Situation as Board } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

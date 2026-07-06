@@ -293,6 +293,12 @@ export const INFERRED_CONTEXT_PERSISTENCE = [
   "saved_memory",
 ] as const;
 export const INFERRED_CONTEXT_SOURCES = ["intake", "plan", "manual"] as const;
+export const INFERRED_CONTEXT_STATUSES = [
+  "active",
+  "stale",
+  "deleted",
+  "merged",
+] as const;
 export const PLAN_TASK_CANDIDATE_TYPES = [
   "immediate_next_action",
   "follow_up",
@@ -347,6 +353,8 @@ export const GENERATION_FLOW_TYPES = [
   "task_ranking",
   "today_dashboard",
   "move_map_expansion",
+  "memory_reconciliation",
+  "board_reconciliation",
 ] as const;
 export const GENERATION_FLOW_STATUSES = [
   "running",
@@ -426,6 +434,8 @@ export type InferredContextPersistence =
   (typeof INFERRED_CONTEXT_PERSISTENCE)[number];
 export type InferredContextSource =
   (typeof INFERRED_CONTEXT_SOURCES)[number];
+export type InferredContextStatus =
+  (typeof INFERRED_CONTEXT_STATUSES)[number];
 export type PlanTaskCandidateType =
   (typeof PLAN_TASK_CANDIDATE_TYPES)[number];
 export type ContextUsedCategory = (typeof CONTEXT_USED_CATEGORIES)[number];
@@ -585,6 +595,11 @@ export type InferredContextItem = {
   sensitivity: ConstraintSensitivity;
   persistence: InferredContextPersistence;
   source: InferredContextSource;
+  status: InferredContextStatus;
+  confidence: ConfidenceLevel;
+  superseded_by_id: number | null;
+  last_confirmed_at: string | null;
+  reconciliation_note: string | null;
   situation_id: number | null;
   situation_title?: string | null;
   intake_session_id: number | null;
