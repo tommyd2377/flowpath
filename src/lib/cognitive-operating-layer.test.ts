@@ -11,6 +11,7 @@ import {
   selectRelevantMemory,
   shouldUseWebSearch,
 } from "./cognitive-operating-layer";
+import { buildFallbackDecisionTree } from "./decision-tree";
 import type {
   InferredContextItem,
   IntakeMessage,
@@ -94,6 +95,13 @@ const memoryItems: InferredContextItem[] = [
     updated_at: "2026-05-23T00:00:00.000Z",
   },
 ];
+
+function withDecisionTree(plan: Omit<NextMovePlan, "decision_tree">): NextMovePlan {
+  return {
+    ...plan,
+    decision_tree: buildFallbackDecisionTree(plan),
+  };
+}
 
 function stateFor(message: string) {
   return detectUserState({
@@ -229,7 +237,7 @@ test("evaluator catches generic advice and too many rumination tasks", () => {
     profile: baseProfile,
     inferredContextItems: memoryItems,
   });
-  const plan: NextMovePlan = {
+  const plan: NextMovePlan = withDecisionTree({
     generation_mode: "operator_plan",
     mode: "growth",
     situation_read: "Believe in yourself and keep thinking about it.",
@@ -323,7 +331,7 @@ test("evaluator catches generic advice and too many rumination tasks", () => {
     confidence_level: "low",
     assumptions: [],
     follow_up_questions_if_any: [],
-  };
+  });
 
   const evaluation = evaluateNextMovePlan(plan, context);
   assert.equal(evaluation.passes, false);
@@ -347,7 +355,7 @@ test("evaluator does not require task candidates when intervention suppresses ta
     profile: baseProfile,
     inferredContextItems: [],
   });
-  const plan: NextMovePlan = {
+  const plan: NextMovePlan = withDecisionTree({
     generation_mode: "operator_plan",
     mode: "stability",
     situation_read:
@@ -443,7 +451,7 @@ test("evaluator does not require task candidates when intervention suppresses ta
     confidence_level: "medium",
     assumptions: ["The clerk statement is accurate but still needs records."],
     follow_up_questions_if_any: [],
-  };
+  });
 
   assert.equal(context.intervention.should_create_tasks, false);
   assert.equal(context.intervention.max_tasks, 0);

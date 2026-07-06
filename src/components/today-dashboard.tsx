@@ -77,7 +77,7 @@ export function TodayDashboard() {
     try {
       const [planData, situationData, taskData] = await Promise.all([
         apiFetch<StoredNextMovePlan[]>("/api/next-move-plans?limit=1"),
-        apiFetch<Situation[]>("/api/situations"),
+        apiFetch<Situation[]>("/api/boards"),
         apiFetch<Task[]>("/api/tasks"),
       ]);
       setLatestPlan(planData[0] ?? null);
@@ -210,7 +210,7 @@ export function TodayDashboard() {
                 {latestPlan.why_this_move}
               </p>
             </div>
-            <Link href={`/situations/${latestPlan.situation_id ?? ""}`}>
+            <Link href={`/boards/${latestPlan.situation_id ?? ""}`}>
               <Button type="button">
                 <ArrowRight className="h-4 w-4" />
                 Open Board
@@ -223,7 +223,7 @@ export function TodayDashboard() {
               Continue a board and FlowPath will recommend a practical next
               move.
             </EmptyState>
-            <NewSituationLink />
+            <NewBoardLink />
           </div>
         )}
       </Card>
@@ -238,7 +238,7 @@ export function TodayDashboard() {
   );
 }
 
-function NewSituationLink() {
+function NewBoardLink() {
   return (
     <Link href="/next-move">
       <Button type="button">
@@ -286,7 +286,7 @@ function ActiveBoardsCard({
           <MapPinned className="h-4 w-4 text-[var(--azure-light)]" />
           <h2 className="text-xl font-semibold">Active Boards</h2>
         </div>
-        <Link href="/situations" className="text-sm font-medium text-[var(--azure-light)]">
+        <Link href="/boards" className="text-sm font-medium text-[var(--azure-light)]">
           View all
         </Link>
       </div>
@@ -299,7 +299,7 @@ function ActiveBoardsCard({
           {boards.slice(0, 5).map((situation) => (
             <Link
               key={situation.id}
-              href={`/situations/${situation.id}`}
+              href={`/boards/${situation.id}`}
               className="rounded-md border border-slate-800 bg-slate-900 p-3 text-sm transition hover:border-[var(--azure)]"
             >
               <div className="font-medium text-white">{situation.title}</div>

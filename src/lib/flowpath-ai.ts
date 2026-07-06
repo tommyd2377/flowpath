@@ -8,9 +8,11 @@ import { z } from "zod";
 import {
   TASK_NOTES_MAX,
   TASK_TITLE_MAX,
+  branchExpansionResultSchema,
   dailyPlanSchema,
   interviewerOutputSchema,
   nextMovePlanSchema,
+  type BranchExpansionResultInput,
 } from "./schemas";
 import {
   buildCognitiveMetadata,
@@ -19,6 +21,7 @@ import {
   normalizePlanForIntervention,
   type CognitivePlanContext,
 } from "./cognitive-operating-layer";
+import { sanitizeDecisionTreeSearchStatuses } from "./decision-tree";
 import { DEFAULT_APP_TIMEZONE } from "./env";
 import {
   countWebSearchCalls,
@@ -42,6 +45,8 @@ import { TASK_FRICTION_TYPES } from "./types";
 import type {
   CheckIn,
   DailyPlan,
+  DecisionNode,
+  DecisionOption,
   IntakeMessage,
   IntakeSession,
   LifeArea,
@@ -62,6 +67,7 @@ export const DAILY_PLAN_MAX_OUTPUT_TOKENS = 8000;
 export const FIRST_INTAKE_QUESTION_MAX_OUTPUT_TOKENS = 1200;
 export const INTERVIEW_MAX_OUTPUT_TOKENS = 3000;
 export const NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS = 10000;
+export const BRANCH_EXPANSION_MAX_OUTPUT_TOKENS = 3500;
 export const TASK_REVISION_MAX_OUTPUT_TOKENS = 1600;
 
 const webSearchContextSizes = ["low", "medium", "high"] as const;
@@ -95,11 +101,78 @@ Do not hardcode canned domains or assume the user is a founder, job seeker, deve
 
 Avoid questions like "What do you most want to change about this situation?" or "What would meaningful progress look like?" unless the user's wording is so vague that there is truly no better specific question. Prefer questions in the shape: "For [the user's situation], are you trying to clarify A, B, C, or D?"`;
 
-const operatorPlanInstruction = `FlowPath is generating a board-based next-move plan. Do not write generic advice. The user needs a realistic move that improves the board from the current position. Analyze the situation like an experienced domain insider advising someone they care about who may lack access, context, proof, network, cash, time, energy, confidence, or hidden knowledge. Identify the real bottleneck, not just the obvious problem. Name the naive path most people would take, the higher-leverage operator path, and the wasted motion to avoid. Use the user's constraints and assets: time, money, location, energy, access, credentials, safety, deadlines, support, prior attempts, current tradeoffs, skills, proof, relationships, reputation, tools, transportation, and domain knowledge when available. Generate legal moves only: actions actually available under current constraints. If the direct ambition is not currently reachable, identify prerequisite moves and adjacent viable paths before recommending a small move. Ask no more questions if there is enough signal to produce a useful Board Snapshot and plan. Produce one best next move for the next 24-48 hours, one first 10-minute action, and 1-3 concrete task candidates. Include assumptions, confidence, and professional/safety boundaries where relevant. Do not overclaim certainty. Do not pretend to have secret access, guaranteed outcomes, credentials, or personal connections. Prefer practical sequencing over motivational language. If the situation is high stakes, stabilize first and route to human/professional support where appropriate. If the situation is vague, make a reasonable plan based on available signal and list assumptions instead of forcing endless intake.`;
+export const operatorPlanInstruction = `FlowPath is generating a board-based next-move plan. Do not write generic advice. The user needs a realistic move that improves the board from the current position. Analyze the situation like an experienced domain insider advising someone they care about who may lack access, context, proof, network, cash, time, energy, confidence, or hidden knowledge. Identify the real bottleneck, not just the obvious problem. Name the naive path most people would take, the higher-leverage operator path, and the wasted motion to avoid. Use the user's constraints and assets: time, money, location, energy, access, credentials, safety, deadlines, support, prior attempts, current tradeoffs, skills, proof, relationships, reputation, tools, transportation, and domain knowledge when available. Generate legal moves only: actions actually available under current constraints. If the direct ambition is not currently reachable, identify prerequisite moves and adjacent viable paths before recommending a small move. Ask no more questions if there is enough signal to produce a useful Board Snapshot and plan. Produce one best next move for the next 24-48 hours, one first 10-minute action, and 1-3 concrete task candidates. Also produce a recursive decision_tree: a root board decision/question, 2-5 available strategic branches unless a sixth is truly needed, one recommended/selected branch, visible less-useful alternatives, why/why-not explanations, upside/downside, friction, time to feedback, search status, and a concrete first action for every branch. Branch nodes must be strategic alternatives that answer "which path should I take?", such as clinic vs coach vs solo practice, applications vs networking vs proof asset, or recurring class vs volunteering vs dating apps. Do not put sequential tasks such as pick one option, send one message, block time, contact/register, or attend once as sibling branch options; put those in next_steps, first_action, or an action leaf. New nodes must use kind decision for forks and kind action for concrete frontier actions. Set can_explore true for branches that do not yet have a child node and false when next_node_id already points to a generated child. The recommended branch may include one child decision or action leaf if it is useful immediately; alternate branches may stay shallow until the user explicitly explores them. Convert operator analysis into branches when useful: naive path as downgraded/not-now, operator path as recommended, likely trap/avoid text as branch warning. If the next thing is obvious, produce an action leaf instead of another fork. If local/current/external specificity would materially improve a branch, mark requires_web_search and search_status honestly: searched only if web search was used, needed/unavailable/failed if not verified, and include a concrete search action instead of invented local options. Include assumptions, confidence, and professional/safety boundaries where relevant. Do not overclaim certainty. Do not pretend to have secret access, guaranteed outcomes, credentials, or personal connections. Prefer practical sequencing over motivational language. If the situation is high stakes, stabilize first and route to human/professional support where appropriate. If the situation is vague, make a reasonable plan based on available signal and list assumptions instead of forcing endless intake.`;
 
 const strategistSystemPrompt = `You are FlowPath, a guided next-move engine. Your job is to read the board and identify the user's next best move based on goals, constraints, assets, current reality, urgency, stability, risks, and meaning. You are not a chatbot, generic productivity coach, therapy, legal advice, medical care, financial advice, social services, or emergency help. You separate leverage from busyness and legal moves from fantasy moves. You do not overwhelm the user. You give realistic, actionable guidance. You are allowed to be direct without being harsh. You are careful around legal, medical, housing, addiction, mental health, financial, and safety issues, and you clearly recommend appropriate human or professional help when needed. ${boardNextMoveInstruction} ${operatorPlanInstruction} ${selectiveWebSearchInstruction} ${phaseOneInstruction} ${operatorLeverageInstruction} ${privacyAwareConstraintInstruction} ${socialConnectionInstruction} ${intakeInferredMemoryInstruction} Your output should help the user act in the real world today.`;
 
 const taskRevisionSystemPrompt = `You are FlowPath's task revision engine. Revise exactly one task based on the user's typed or dictated instruction. Preserve the user's actual goal and the task's connection to the situation. Do not create multiple tasks, do not write a full plan, and do not add generic coaching prose. Make the task more concrete, more doable, or better aligned with the user's blocker. If the user says they could not complete it, reduce friction, name the blocker in friction_note, and turn the task into the smallest useful next attempt. Use practical language the user can act on today. Keep the task title short. Keep notes concise but specific. Do not invent facts, deadlines, people, URLs, or external resources. Do not ask for secrets, exact financial balances, passwords, account numbers, exact addresses, tax IDs, or payment details. FlowPath is planning support only, not legal, medical, financial, emergency, or crisis help.`;
+
+export const branchExpansionSystemPrompt = `You are expanding one selected branch in FlowPath's Move Map. You are not writing a full plan. You are deciding what should appear next in the tree.
+
+The selected branch is now the current context. Generate either the next decision node with meaningfully distinct options, or a concrete action leaf if the path is ready for execution.
+
+Rules:
+- Return only the structured output.
+- Optimize for sustainable expected value under the user's constraints: upside, downside risk, time to feedback, cash/time/energy cost, access, local reality, proof, network, stability, meaning, and future options.
+- Do not be generic, cruel, therapy-coded, or motivational filler.
+- Do not over-encourage unrealistic paths. If the goal is not reachable from this board state, create prerequisite or adjacent viable branches.
+- Do not create branches that are really sequential steps. Search, send message, register, and calendar are steps, not sibling strategies.
+- A decision node should usually contain 2-5 options. Use fewer only when fewer are real; hard maximum is 6. Do not force exactly three options.
+- If the next thing is obvious enough to act on, return an action_leaf instead of another fork.
+- Do not hallucinate local/current/external facts. If local/current information is needed and no search results are provided, mark search needed or unavailable and make the action a concrete search/check step.
+- If search results are provided, use them conservatively and do not dump a search report into the node.
+- Preserve the user-selected primary board domain; secondary domains are additive context, not replacements.
+- Keep node text compact. Details can go in reasoning_summary, not in branch labels.`;
+
+export type BranchExpansionGenerationContext = {
+  date: string;
+  board: Pick<Situation, "id" | "title" | "description" | "category" | "status" | "urgency">;
+  plan: {
+    id: number;
+    situation_read: string;
+    situation_summary: string;
+    key_constraints: string[];
+    highest_leverage_move_today: NextMovePlan["highest_leverage_move_today"];
+    operator_insight: NextMovePlan["operator_insight"];
+    likely_trap: string;
+    local_reality_scout: NextMovePlan["local_reality_scout"];
+    assumptions: string[];
+  };
+  current_node: DecisionNode;
+  selected_option: DecisionOption;
+  selected_path: string[];
+  selected_path_labels: string[];
+  decision_tree_summary: {
+    root_node_id: string;
+    active_node_id: string;
+    recommended_option_id: string;
+    node_count: number;
+    existing_branch_labels: string[];
+  };
+  intake_summary: {
+    session_summary: string;
+    recent_messages: Array<Pick<IntakeMessage, "role" | "content">>;
+  };
+  relevant_memory: unknown[];
+  open_tasks: Array<Pick<Task, "title" | "status" | "source_plan_section">>;
+  cognitive_operating_layer: {
+    state_detection: CognitivePlanContext["stateDetection"];
+    intervention: CognitivePlanContext["intervention"];
+    selected_memory: CognitivePlanContext["memorySelection"];
+    web_search_decision: CognitivePlanContext["webSearchDecision"];
+  } | null;
+  search_context: {
+    allow_web_search: boolean;
+    search_decision_reason: ReturnType<typeof webSearchDecisionReason>;
+    actual_search_results_provided: boolean;
+  };
+};
+
+export function isModelBackedBranchExpansionEnabled() {
+  const value = process.env.FLOWPATH_MODEL_BACKED_BRANCH_EXPANSION?.trim().toLowerCase();
+  if (value) return ["1", "true", "yes", "on"].includes(value);
+  return process.env.NODE_ENV !== "production" && Boolean(process.env.OPENAI_API_KEY);
+}
 
 export function isOpenAIWebSearchEnabled() {
   const value = process.env.OPENAI_WEB_SEARCH_ENABLED?.trim().toLowerCase();
@@ -818,6 +891,152 @@ function trimContextUsedItems(value: unknown) {
   );
 }
 
+function trimDecisionAction(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return trimGeneratedRecordStrings(value, {
+    title: 180,
+    details: 2000,
+    success_condition: 1000,
+    fallback: 1000,
+  });
+}
+
+function trimDecisionSources(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((source) =>
+    isJsonRecord(source)
+      ? trimGeneratedRecordStrings(source, {
+          title: 180,
+          why_it_matters: 1000,
+          source: 500,
+          url_or_next_search: 500,
+        })
+      : source,
+  );
+}
+
+function trimDecisionOptions(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value.map((option) =>
+    isJsonRecord(option)
+      ? {
+          ...trimGeneratedRecordStrings(option, {
+            id: 120,
+            node_id: 120,
+            label: 120,
+            description: 1000,
+            why: 1200,
+            upside: 900,
+            downside: 900,
+            time_to_feedback: 160,
+            success_condition: 1000,
+            fallback: 1000,
+          }),
+          next_node_id:
+            typeof option.next_node_id === "string"
+              ? trimGeneratedString(option.next_node_id, 120)
+              : option.next_node_id,
+          first_action: trimDecisionAction(option.first_action),
+          next_steps: trimNextMoveSteps(option.next_steps),
+          sources: trimDecisionSources(option.sources),
+        }
+      : option,
+  );
+}
+
+function trimDecisionTree(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return {
+    ...trimGeneratedRecordStrings(value, {
+      id: 120,
+      root_node_id: 120,
+      active_node_id: 120,
+      recommended_option_id: 120,
+      created_at: 80,
+      updated_at: 80,
+    }),
+    selected_path: trimGeneratedStringArray(value.selected_path, 120),
+    current_action: trimDecisionAction(value.current_action),
+    nodes: Array.isArray(value.nodes)
+      ? value.nodes.map((node) =>
+          isJsonRecord(node)
+            ? {
+                ...trimGeneratedRecordStrings(node, {
+                  id: 120,
+                  title: 180,
+                  question: 500,
+                  context_summary: 1200,
+                }),
+                parent_id:
+                  typeof node.parent_id === "string"
+                    ? trimGeneratedString(node.parent_id, 120)
+                    : node.parent_id,
+                selected_from_option_id:
+                  typeof node.selected_from_option_id === "string"
+                    ? trimGeneratedString(node.selected_from_option_id, 120)
+                    : node.selected_from_option_id,
+                selected_option_id:
+                  typeof node.selected_option_id === "string"
+                    ? trimGeneratedString(node.selected_option_id, 120)
+                    : node.selected_option_id,
+                generated_at:
+                  typeof node.generated_at === "string"
+                    ? trimGeneratedString(node.generated_at, 80)
+                    : node.generated_at,
+                action: trimDecisionAction(node.action),
+                options: trimDecisionOptions(node.options),
+              }
+            : node,
+        )
+      : value.nodes,
+  };
+}
+
+function trimBranchExpansionOutput(value: unknown) {
+  if (!isJsonRecord(value)) return value;
+  return {
+    ...trimGeneratedRecordStrings(value, {
+      reasoning_summary: 1200,
+      selected_path_summary: 1000,
+    }),
+    memory_used: trimGeneratedStringArray(value.memory_used, 240),
+    assumptions: trimGeneratedStringArray(value.assumptions, 500),
+    node: isJsonRecord(value.node)
+      ? {
+          ...trimGeneratedRecordStrings(value.node, {
+            id: 120,
+            title: 180,
+            question: 500,
+            summary: 1200,
+          }),
+          options: Array.isArray(value.node.options)
+            ? value.node.options.map((option) =>
+                isJsonRecord(option)
+                  ? trimGeneratedRecordStrings(option, {
+                      id: 120,
+                      label: 120,
+                      short_rationale: 600,
+                      time_to_feedback: 160,
+                      first_action_preview: 500,
+                    })
+                  : option,
+              )
+            : value.node.options,
+        }
+      : value.node,
+    action_leaf: isJsonRecord(value.action_leaf)
+      ? trimGeneratedRecordStrings(value.action_leaf, {
+          id: 120,
+          title: 180,
+          first_action: 1000,
+          first_10_minutes: 1000,
+          success_condition: 1000,
+          if_blocked: 1000,
+        })
+      : value.action_leaf,
+  };
+}
+
 function trimHighestLeverageMove(value: unknown) {
   if (!isJsonRecord(value)) return value;
   return trimGeneratedRecordStrings(value, {
@@ -858,6 +1077,7 @@ function trimNextMovePlanOutput(value: unknown) {
     context_used: trimContextUsedItems(value.context_used),
     inferred_context_items: trimInferredContextItems(value.inferred_context_items),
     task_candidates: trimTaskCandidates(value.task_candidates),
+    decision_tree: trimDecisionTree(value.decision_tree),
     assumptions: trimGeneratedStringArray(value.assumptions, 500),
     follow_up_questions_if_any: trimGeneratedStringArray(
       value.follow_up_questions_if_any,
@@ -1028,6 +1248,328 @@ const firstIntakeQuestionOutputSchema = z.object({
   situation_terms_used: z.array(z.string().trim().min(1).max(120)).min(1).max(6),
 });
 
+function decisionFirstActionJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "title",
+      "details",
+      "estimated_minutes",
+      "success_condition",
+      "fallback",
+    ],
+    properties: {
+      title: { type: "string" },
+      details: { type: "string" },
+      estimated_minutes: { type: ["integer", "null"], minimum: 1, maximum: 480 },
+      success_condition: { type: "string" },
+      fallback: { type: "string" },
+    },
+  };
+}
+
+function decisionBranchSourceJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "why_it_matters", "source", "url_or_next_search"],
+    properties: {
+      title: { type: "string" },
+      why_it_matters: { type: "string" },
+      source: { type: "string" },
+      url_or_next_search: { type: "string" },
+    },
+  };
+}
+
+function decisionOptionJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "node_id",
+      "label",
+      "description",
+      "move_type",
+      "recommendation_level",
+      "why",
+      "upside",
+      "downside",
+      "friction",
+      "time_to_feedback",
+      "requires_web_search",
+      "search_status",
+      "next_node_id",
+      "can_explore",
+      "first_action",
+      "success_condition",
+      "fallback",
+      "selected",
+      "next_steps",
+      "sources",
+    ],
+    properties: {
+      id: { type: "string" },
+      node_id: { type: "string" },
+      label: { type: "string" },
+      description: { type: "string" },
+      move_type: {
+        type: "string",
+        enum: ["protect", "progress", "meaning", "mixed"],
+      },
+      recommendation_level: {
+        type: "string",
+        enum: ["recommended", "viable", "supplement", "not_now", "risky"],
+      },
+      why: { type: "string" },
+      upside: { type: "string" },
+      downside: { type: "string" },
+      friction: { type: "string", enum: ["low", "medium", "high"] },
+      time_to_feedback: { type: "string" },
+      requires_web_search: { type: "boolean" },
+      search_status: {
+        type: "string",
+        enum: ["not_needed", "needed", "searched", "unavailable", "failed"],
+      },
+      next_node_id: { type: ["string", "null"] },
+      can_explore: { type: "boolean" },
+      first_action: decisionFirstActionJsonSchema(),
+      success_condition: { type: "string" },
+      fallback: { type: "string" },
+      selected: { type: "boolean" },
+      next_steps: {
+        type: "array",
+        maxItems: 6,
+        items: nextMoveStepJsonSchema(),
+      },
+      sources: {
+        type: "array",
+        maxItems: 4,
+        items: decisionBranchSourceJsonSchema(),
+      },
+    },
+  };
+}
+
+function decisionNodeJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "parent_id",
+      "selected_from_option_id",
+      "kind",
+      "title",
+      "question",
+      "context_summary",
+      "options",
+      "action",
+      "selected_option_id",
+      "status",
+      "search_status",
+      "generated_at",
+    ],
+    properties: {
+      id: { type: "string" },
+      parent_id: { type: ["string", "null"] },
+      selected_from_option_id: { type: ["string", "null"] },
+      kind: { type: "string", enum: ["decision", "action", "outcome"] },
+      title: { type: "string" },
+      question: { type: "string" },
+      context_summary: { type: "string" },
+      options: {
+        type: "array",
+        maxItems: 6,
+        items: decisionOptionJsonSchema(),
+      },
+      action: {
+        anyOf: [decisionFirstActionJsonSchema(), { type: "null" }],
+      },
+      selected_option_id: { type: ["string", "null"] },
+      status: {
+        type: "string",
+        enum: ["active", "available", "completed", "blocked"],
+      },
+      search_status: {
+        type: "string",
+        enum: ["not_needed", "needed", "searched", "unavailable", "failed"],
+      },
+      generated_at: { type: ["string", "null"] },
+    },
+  };
+}
+
+function decisionTreeJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "board_id",
+      "root_node_id",
+      "active_node_id",
+      "selected_path",
+      "recommended_option_id",
+      "current_action",
+      "nodes",
+      "created_at",
+      "updated_at",
+    ],
+    properties: {
+      id: { type: "string" },
+      board_id: { type: ["integer", "null"] },
+      root_node_id: { type: "string" },
+      active_node_id: { type: "string" },
+      selected_path: {
+        type: "array",
+        minItems: 1,
+        maxItems: 8,
+        items: { type: "string" },
+      },
+      recommended_option_id: { type: "string" },
+      current_action: decisionFirstActionJsonSchema(),
+      nodes: {
+        type: "array",
+        minItems: 1,
+        maxItems: 16,
+        items: decisionNodeJsonSchema(),
+      },
+      created_at: { type: "string" },
+      updated_at: { type: "string" },
+    },
+  };
+}
+
+function branchExpansionOptionJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "label",
+      "short_rationale",
+      "recommendation_level",
+      "can_explore",
+      "search_status",
+      "friction",
+      "time_to_feedback",
+      "first_action_preview",
+    ],
+    properties: {
+      id: { type: ["string", "null"] },
+      label: { type: "string" },
+      short_rationale: { type: "string" },
+      recommendation_level: {
+        type: "string",
+        enum: ["recommended", "viable", "supplement", "not_now", "risky"],
+      },
+      can_explore: { type: "boolean" },
+      search_status: {
+        type: "string",
+        enum: ["not_needed", "needed", "searched", "unavailable", "failed"],
+      },
+      friction: { type: "string", enum: ["low", "medium", "high"] },
+      time_to_feedback: { type: "string" },
+      first_action_preview: { type: "string" },
+    },
+  };
+}
+
+function branchExpansionDecisionNodeJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["id", "kind", "title", "question", "summary", "options", "search_status"],
+    properties: {
+      id: { type: ["string", "null"] },
+      kind: { type: "string", enum: ["decision"] },
+      title: { type: "string" },
+      question: { type: "string" },
+      summary: { type: "string" },
+      options: {
+        type: "array",
+        minItems: 1,
+        maxItems: 6,
+        items: branchExpansionOptionJsonSchema(),
+      },
+      search_status: {
+        type: "string",
+        enum: ["not_needed", "needed", "searched", "unavailable", "failed"],
+      },
+    },
+  };
+}
+
+function branchExpansionActionLeafJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "kind",
+      "title",
+      "first_action",
+      "first_10_minutes",
+      "success_condition",
+      "if_blocked",
+      "search_status",
+    ],
+    properties: {
+      id: { type: ["string", "null"] },
+      kind: { type: "string", enum: ["action"] },
+      title: { type: "string" },
+      first_action: { type: "string" },
+      first_10_minutes: { type: "string" },
+      success_condition: { type: "string" },
+      if_blocked: { type: "string" },
+      search_status: {
+        type: "string",
+        enum: ["not_needed", "needed", "searched", "unavailable", "failed"],
+      },
+    },
+  };
+}
+
+export const branchExpansionJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "result_type",
+    "node",
+    "action_leaf",
+    "reasoning_summary",
+    "selected_path_summary",
+    "memory_used",
+    "assumptions",
+    "search_needed",
+  ],
+  properties: {
+    result_type: { type: "string", enum: ["decision_node", "action_leaf"] },
+    node: {
+      anyOf: [branchExpansionDecisionNodeJsonSchema(), { type: "null" }],
+    },
+    action_leaf: {
+      anyOf: [branchExpansionActionLeafJsonSchema(), { type: "null" }],
+    },
+    reasoning_summary: { type: "string" },
+    selected_path_summary: { type: "string" },
+    memory_used: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string" },
+    },
+    assumptions: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string" },
+    },
+    search_needed: { type: "boolean" },
+  },
+};
+
 const nextMovePlanJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -1058,6 +1600,7 @@ const nextMovePlanJsonSchema = {
     "context_used",
     "inferred_context_items",
     "task_candidates",
+    "decision_tree",
     "confidence_level",
     "assumptions",
     "follow_up_questions_if_any",
@@ -1158,6 +1701,7 @@ const nextMovePlanJsonSchema = {
       maxItems: 3,
       items: taskCandidateJsonSchema(),
     },
+    decision_tree: decisionTreeJsonSchema(),
     confidence_level: { type: "string", enum: ["low", "medium", "high"] },
     assumptions: {
       type: "array",
@@ -1250,6 +1794,93 @@ async function createStructuredResponse({
     usage: responseUsageMetadata(response.usage),
     usedWebSearch: responseUsedWebSearch(response),
     webSearchCallCount: countWebSearchCalls(response),
+  };
+}
+
+export type BranchExpansionGenerationResult = {
+  expansion: BranchExpansionResultInput;
+  model: string;
+  modelRole: ModelRole | null;
+  usage: AiUsageMetadata;
+  webSearchCallCount: number;
+  webSearchDecisionReason: ReturnType<typeof webSearchDecisionReason>;
+  modelSelection: GenerationModelSelection;
+};
+
+export async function generateBranchExpansion(
+  context: BranchExpansionGenerationContext,
+  options: { allowWebSearch?: boolean } = {},
+): Promise<BranchExpansionGenerationResult> {
+  const cognitive = context.cognitive_operating_layer;
+  const allowWebSearch =
+    options.allowWebSearch !== false &&
+    context.search_context.allow_web_search &&
+    Boolean(cognitive?.web_search_decision.should_use_web_search);
+  const tools = getOpenAIWebSearchTools({ allowWebSearch });
+  const include = getOpenAIWebSearchInclude({ allowWebSearch });
+  const selection = selectModelForGeneration({
+    flowType: "move_map_expansion",
+    situation: context.board,
+    urgency: context.board.urgency,
+    safetyRouteTriggered:
+      (cognitive?.state_detection.risk_flags.length ?? 0) > 0,
+    safetyConfidence:
+      (cognitive?.state_detection.risk_flags.length ?? 0) > 0 ? "medium" : "none",
+    webSearchNeeded: allowWebSearch,
+    constraintCount:
+      (context.plan.key_constraints.length ?? 0) +
+      (cognitive?.selected_memory.selected_memories.length ?? 0),
+    competingPriorityCount: context.open_tasks.length,
+    promptApproxChars: JSON.stringify(context).length,
+  });
+  const response = await createStructuredResponse({
+    system: branchExpansionSystemPrompt,
+    name: "flowpath_branch_expansion",
+    description:
+      "The next Move Map child decision node or action leaf for one selected branch.",
+    schema: branchExpansionJsonSchema,
+    user: {
+      instruction:
+        "Expand only the selected Move Map branch. Return either a child decision node or an action leaf.",
+      context,
+      search_rules: {
+        allow_web_search: allowWebSearch,
+        max_web_searches: tools ? 2 : 0,
+        if_no_search:
+          "Do not claim local/current verification. Mark search_status needed/unavailable and make the action a concrete search/check step.",
+      },
+    },
+    tools,
+    include,
+    maxToolCalls: tools ? 2 : undefined,
+    maxOutputTokens: BRANCH_EXPANSION_MAX_OUTPUT_TOKENS,
+    model: selection.model,
+    modelRole: selection.modelRole,
+  });
+  const expansion = branchExpansionResultSchema.parse(
+    trimBranchExpansionOutput(JSON.parse(response.outputText)),
+  );
+  const estimatedCostUsd = estimateModelCostDollars({
+    branch_expansion: {
+      model: response.model,
+      inputTokens: response.usage.inputTokens,
+      cachedInputTokens: response.usage.cachedInputTokens,
+      outputTokens: response.usage.outputTokens,
+    },
+  });
+  response.usage.estimatedCostUsd = estimatedCostUsd;
+
+  return {
+    expansion,
+    model: response.model,
+    modelRole: response.modelRole,
+    usage: response.usage,
+    webSearchCallCount: response.webSearchCallCount,
+    webSearchDecisionReason: webSearchDecisionReason(
+      cognitive?.web_search_decision,
+      context.search_context.allow_web_search && options.allowWebSearch !== false,
+    ),
+    modelSelection: selection,
   };
 }
 
@@ -1803,6 +2434,13 @@ export async function generateNextMovePlan(
   const webSearchUsed = first.usedWebSearch || Boolean(revision?.usedWebSearch);
   const webSearchCallCount =
     first.webSearchCallCount + (revision?.webSearchCallCount ?? 0);
+  plan = {
+    ...plan,
+    decision_tree: sanitizeDecisionTreeSearchStatuses(
+      plan.decision_tree,
+      webSearchCallCount,
+    ),
+  };
   const cognitiveMetadata =
     cognitiveContext &&
     buildCognitiveMetadata({

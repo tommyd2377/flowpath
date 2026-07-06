@@ -2,18 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  branchExpansionJsonSchema,
+  branchExpansionSystemPrompt,
   boardNextMoveInstruction,
   buildFirstIntakeQuestionPromptInput,
   firstIntakeQuestionSystemPrompt,
   intakeInferredMemoryInstruction,
+  operatorPlanInstruction,
   parseFirstIntakeQuestionOutput,
   privacyAwareConstraintInstruction,
   socialConnectionInstruction,
 } from "./flowpath-ai";
+import { buildFallbackDecisionTree } from "./decision-tree";
 import {
   DEFAULT_SAFETY_BOUNDARY,
   nextMovePlanSchema,
   safetyBoundarySchema,
+  type NextMovePlanInput,
 } from "./schemas";
 import type { Situation } from "./types";
 
@@ -47,6 +52,46 @@ test("board prompt frames FlowPath as a domain-general next-move engine", () => 
   assert.match(boardNextMoveInstruction, /People\/Community\/Belonging/i);
   assert.match(boardNextMoveInstruction, /Craft\/Creativity\/Personal Mastery/i);
   assert.match(boardNextMoveInstruction, /urgent stability/i);
+});
+
+test("operator prompt requires decision tree branches and honest search status", () => {
+  assert.match(operatorPlanInstruction, /decision_tree/i);
+  assert.match(operatorPlanInstruction, /recursive decision_tree/i);
+  assert.match(operatorPlanInstruction, /2-5 available strategic branches/i);
+  assert.match(operatorPlanInstruction, /recommended\/selected branch/i);
+  assert.match(operatorPlanInstruction, /first action for every branch/i);
+  assert.match(operatorPlanInstruction, /which path should I take/i);
+  assert.match(operatorPlanInstruction, /Do not put sequential tasks/i);
+  assert.match(operatorPlanInstruction, /next_steps/i);
+  assert.match(operatorPlanInstruction, /kind decision/i);
+  assert.match(operatorPlanInstruction, /kind action/i);
+  assert.match(operatorPlanInstruction, /can_explore true/i);
+  assert.match(operatorPlanInstruction, /explicitly explores/i);
+  assert.match(operatorPlanInstruction, /search_status honestly/i);
+  assert.match(operatorPlanInstruction, /invented local options/i);
+});
+
+test("branch expansion prompt is scoped to one selected path and avoids fake forks", () => {
+  assert.match(branchExpansionSystemPrompt, /one selected branch/i);
+  assert.match(branchExpansionSystemPrompt, /not writing a full plan/i);
+  assert.match(branchExpansionSystemPrompt, /decision node/i);
+  assert.match(branchExpansionSystemPrompt, /action leaf/i);
+  assert.match(branchExpansionSystemPrompt, /2-5 options/i);
+  assert.match(branchExpansionSystemPrompt, /Do not force exactly three/i);
+  assert.match(branchExpansionSystemPrompt, /sequential steps/i);
+  assert.match(branchExpansionSystemPrompt, /Do not hallucinate local\/current\/external facts/i);
+});
+
+test("branch expansion JSON schema requires branch metadata and search status", () => {
+  const schema = JSON.stringify(branchExpansionJsonSchema);
+  assert.match(schema, /result_type/);
+  assert.match(schema, /decision_node/);
+  assert.match(schema, /action_leaf/);
+  assert.match(schema, /short_rationale/);
+  assert.match(schema, /recommendation_level/);
+  assert.match(schema, /first_action_preview/);
+  assert.match(schema, /search_status/);
+  assert.match(schema, /search_needed/);
 });
 
 test("intake memory prompt requires inferred constraints and small task candidates", () => {
@@ -151,7 +196,7 @@ test("first intake output parser does not repeat matching title and description"
 });
 
 test("next move plan schema still requires structured insight fields", () => {
-  const parsed = nextMovePlanSchema.safeParse({
+  const plan = {
     generation_mode: "operator_plan",
     mode: "growth",
     situation_read: "User is trying to change careers without a proof asset.",
@@ -253,6 +298,10 @@ test("next move plan schema still requires structured insight fields", () => {
     confidence_level: "medium",
     assumptions: [],
     follow_up_questions_if_any: [],
+  } satisfies Omit<NextMovePlanInput, "decision_tree">;
+  const parsed = nextMovePlanSchema.safeParse({
+    ...plan,
+    decision_tree: buildFallbackDecisionTree(plan),
   });
 
   assert.equal(parsed.success, true);

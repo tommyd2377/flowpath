@@ -45,6 +45,27 @@ export const NEXT_MOVE_MODES = [
 ] as const;
 export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
 export const SAFETY_RISK_LEVELS = ["low", "medium", "high", "crisis"] as const;
+export const DECISION_MOVE_TYPES = ["protect", "progress", "meaning", "mixed"] as const;
+export const DECISION_RECOMMENDATION_LEVELS = [
+  "recommended",
+  "viable",
+  "supplement",
+  "not_now",
+  "risky",
+] as const;
+export const DECISION_SEARCH_STATUSES = [
+  "not_needed",
+  "needed",
+  "searched",
+  "unavailable",
+  "failed",
+] as const;
+export const DECISION_NODE_STATUSES = [
+  "active",
+  "available",
+  "completed",
+  "blocked",
+] as const;
 export const PLAN_TIERS = [
   "free",
   "core",
@@ -325,6 +346,7 @@ export const GENERATION_FLOW_TYPES = [
   "task_revision",
   "task_ranking",
   "today_dashboard",
+  "move_map_expansion",
 ] as const;
 export const GENERATION_FLOW_STATUSES = [
   "running",
@@ -368,6 +390,11 @@ export type IntakeStage = (typeof INTAKE_STAGES)[number];
 export type NextMoveMode = (typeof NEXT_MOVE_MODES)[number];
 export type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
 export type SafetyRiskLevel = (typeof SAFETY_RISK_LEVELS)[number];
+export type DecisionMoveType = (typeof DECISION_MOVE_TYPES)[number];
+export type DecisionRecommendationLevel =
+  (typeof DECISION_RECOMMENDATION_LEVELS)[number];
+export type DecisionSearchStatus = (typeof DECISION_SEARCH_STATUSES)[number];
+export type DecisionNodeStatus = (typeof DECISION_NODE_STATUSES)[number];
 export type PlanTier = (typeof PLAN_TIERS)[number];
 export type BillingStatus = (typeof BILLING_STATUSES)[number];
 export type UsageType = (typeof USAGE_TYPES)[number];
@@ -748,6 +775,74 @@ export type HighestLeverageMove = {
   success_condition: string;
 };
 
+export type DecisionBranchSource = {
+  title: string;
+  why_it_matters: string;
+  source: string;
+  url_or_next_search: string;
+};
+
+export type DecisionFirstAction = {
+  title: string;
+  details: string;
+  estimated_minutes: number | null;
+  success_condition: string;
+  fallback: string;
+};
+
+export type DecisionOption = {
+  id: string;
+  node_id: string;
+  label: string;
+  description: string;
+  move_type: DecisionMoveType;
+  recommendation_level: DecisionRecommendationLevel;
+  why: string;
+  upside: string;
+  downside: string;
+  friction: "low" | "medium" | "high";
+  time_to_feedback: string;
+  requires_web_search: boolean;
+  search_status: DecisionSearchStatus;
+  next_node_id: string | null;
+  can_explore: boolean;
+  first_action: DecisionFirstAction;
+  success_condition: string;
+  fallback: string;
+  selected: boolean;
+  next_steps: NextMoveStep[];
+  sources: DecisionBranchSource[];
+};
+
+export type DecisionNode = {
+  id: string;
+  parent_id: string | null;
+  selected_from_option_id: string | null;
+  kind: "decision" | "action" | "outcome";
+  title: string;
+  question: string;
+  context_summary: string;
+  options: DecisionOption[];
+  action: DecisionFirstAction | null;
+  selected_option_id: string | null;
+  status: DecisionNodeStatus;
+  search_status: DecisionSearchStatus;
+  generated_at: string | null;
+};
+
+export type DecisionTree = {
+  id: string;
+  board_id: number | null;
+  root_node_id: string;
+  active_node_id: string;
+  selected_path: string[];
+  recommended_option_id: string;
+  current_action: DecisionFirstAction;
+  nodes: DecisionNode[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type NextMovePlan = {
   generation_mode: "operator_plan";
   mode: NextMoveMode;
@@ -775,6 +870,7 @@ export type NextMovePlan = {
   context_used: ContextUsedItem[];
   inferred_context_items: GeneratedInferredContextItem[];
   task_candidates: PlanTaskCandidate[];
+  decision_tree: DecisionTree;
   confidence_level: ConfidenceLevel;
   assumptions: string[];
   follow_up_questions_if_any: string[];

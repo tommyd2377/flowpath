@@ -17,7 +17,7 @@ import { QaModeBanner } from "./qa-mode-banner";
 
 const links = [
   { href: "/", label: "Today", icon: Compass },
-  { href: "/situations", label: "Boards", icon: MapPinned },
+  { href: "/boards", label: "Boards", icon: MapPinned },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/memory", label: "Memory", icon: Brain },
 ];

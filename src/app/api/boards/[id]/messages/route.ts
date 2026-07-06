@@ -82,7 +82,7 @@ export async function POST(request: Request, context: Context) {
       input.client_generation_id || `server-intake-${crypto.randomUUID()}`;
     telemetryClientGenerationId = clientGenerationId;
     logGenerationTiming({
-      route: "situations.messages",
+      route: "boards.messages",
       generationType: "intake",
       phase: "start",
       userId: user.id,
@@ -187,7 +187,7 @@ export async function POST(request: Request, context: Context) {
       allowWebSearch: false,
     });
     logGenerationTiming({
-      route: "situations.messages",
+      route: "boards.messages",
       generationType: "intake",
       phase: "context_loaded",
       userId: user.id,
@@ -269,7 +269,7 @@ export async function POST(request: Request, context: Context) {
       model = generated.model;
       modelRole = generated.modelRole;
       logGenerationTiming({
-        route: "situations.messages",
+        route: "boards.messages",
         generationType: "intake",
         phase: "model_complete",
         userId: user.id,
@@ -288,7 +288,7 @@ export async function POST(request: Request, context: Context) {
     } catch (generationError) {
       const sanitized = sanitizeGenerationError(generationError);
       logGenerationTiming({
-        route: "situations.messages",
+        route: "boards.messages",
         generationType: "intake",
         phase: "error",
         userId: user.id,
@@ -347,7 +347,7 @@ export async function POST(request: Request, context: Context) {
       });
     }
     logGenerationTiming({
-      route: "situations.messages",
+      route: "boards.messages",
       generationType: "intake",
       phase: "persisted",
       userId: user.id,
@@ -408,7 +408,7 @@ export async function POST(request: Request, context: Context) {
       }),
     });
     logGenerationTiming({
-      route: "situations.messages",
+      route: "boards.messages",
       generationType: "intake",
       phase: "complete",
       userId: user.id,
@@ -431,7 +431,7 @@ export async function POST(request: Request, context: Context) {
   } catch (error) {
     if (telemetryUserId) {
       logGenerationTiming({
-        route: "situations.messages",
+        route: "boards.messages",
         generationType: "intake",
         phase: "error",
         userId: telemetryUserId,

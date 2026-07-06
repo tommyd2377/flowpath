@@ -16,7 +16,7 @@ function formatUpdatedAt(value: string) {
   }).format(new Date(value));
 }
 
-export function SituationsView() {
+export function BoardsView() {
   const [situations, setSituations] = useState<Situation[]>([]);
   const [status, setStatus] = useState("active");
   const [loading, setLoading] = useState(true);
@@ -30,7 +30,7 @@ export function SituationsView() {
     setError(null);
     try {
       const suffix = status === "all" ? "" : `?status=${status}`;
-      setSituations(await apiFetch<Situation[]>(`/api/situations${suffix}`));
+      setSituations(await apiFetch<Situation[]>(`/api/boards${suffix}`));
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "Could not load boards.",
@@ -49,7 +49,7 @@ export function SituationsView() {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch(`/api/situations/${situation.id}`, {
+      await apiFetch(`/api/boards/${situation.id}`, {
         method: "PUT",
         body: JSON.stringify({ ...situation, status: nextStatus }),
       });
@@ -76,7 +76,7 @@ export function SituationsView() {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch<void>(`/api/situations/${situation.id}`, {
+      await apiFetch<void>(`/api/boards/${situation.id}`, {
         method: "DELETE",
       });
       setConfirmingDeleteId(null);
@@ -132,7 +132,7 @@ export function SituationsView() {
           {situations.map((situation) => (
             <Card key={situation.id}>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <Link href={`/situations/${situation.id}`} className="min-w-0">
+                <Link href={`/boards/${situation.id}`} className="min-w-0">
                   <div className="flex flex-wrap gap-2">
                     <span className="rounded-md bg-[rgba(0,120,212,0.18)] px-2 py-1 text-xs font-medium text-blue-100">
                       {situation.urgency} urgency

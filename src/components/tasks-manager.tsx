@@ -15,8 +15,6 @@ import { apiFetch } from "@/lib/client-api";
 import { TASK_NOTES_MAX, TASK_TITLE_MAX } from "@/lib/schemas";
 import { TASK_FRICTION_TYPES } from "@/lib/types";
 import type {
-  LifeArea,
-  Project,
   Task,
   TaskFrictionType,
   TaskStatus,
@@ -36,8 +34,6 @@ import {
 
 type TaskForm = {
   title: string;
-  life_area_id: number | null;
-  project_id: number | null;
   status: TaskStatus;
   importance: number;
   effort: number;
@@ -55,8 +51,6 @@ type TaskFeedbackOutcome =
 
 const emptyTask: TaskForm = {
   title: "",
-  life_area_id: null,
-  project_id: null,
   status: "open",
   importance: 3,
   effort: 3,
@@ -106,8 +100,6 @@ function isActiveTask(task: Task) {
 function formFromTask(task: Task): TaskForm {
   return {
     title: task.title,
-    life_area_id: task.life_area_id,
-    project_id: task.project_id,
     status: task.status,
     importance: task.importance,
     effort: task.effort,
@@ -121,8 +113,6 @@ function formFromTask(task: Task): TaskForm {
 
 export function TasksManager() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [areas, setAreas] = useState<LifeArea[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [form, setForm] = useState<TaskForm>(emptyTask);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -143,14 +133,8 @@ export function TasksManager() {
     setLoading(true);
     setError(null);
     try {
-      const [taskData, areaData, projectData] = await Promise.all([
-        apiFetch<Task[]>("/api/tasks"),
-        apiFetch<LifeArea[]>("/api/life-areas"),
-        apiFetch<Project[]>("/api/projects"),
-      ]);
+      const taskData = await apiFetch<Task[]>("/api/tasks");
       setTasks(taskData);
-      setAreas(areaData);
-      setProjects(projectData);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load tasks.");
     } finally {
@@ -378,8 +362,6 @@ export function TasksManager() {
               <TaskFields
                 form={form}
                 setForm={setForm}
-                areas={areas}
-                projects={projects}
               />
               <div>
                 <Button type="submit" disabled={saving}>
@@ -561,13 +543,9 @@ function TaskCard({
 function TaskFields({
   form,
   setForm,
-  areas,
-  projects,
 }: {
   form: TaskForm;
   setForm: Dispatch<SetStateAction<TaskForm>>;
-  areas: LifeArea[];
-  projects: Project[];
 }) {
   return (
     <>
@@ -582,44 +560,6 @@ function TaskFields({
         />
         <CharacterCount value={form.title} max={TASK_TITLE_MAX} />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Life area">
-          <SelectInput
-            value={form.life_area_id ?? ""}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                life_area_id: event.target.value ? Number(event.target.value) : null,
-              }))
-            }
-          >
-            <option value="">None</option>
-            {areas.map((area) => (
-              <option key={area.id} value={area.id}>
-                {area.name}
-              </option>
-            ))}
-          </SelectInput>
-        </Field>
-        <Field label="Project">
-          <SelectInput
-            value={form.project_id ?? ""}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                project_id: event.target.value ? Number(event.target.value) : null,
-              }))
-            }
-          >
-            <option value="">None</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </SelectInput>
-        </Field>
-      </div>
       <div className="grid gap-4 sm:grid-cols-3">
         <Field label="Status">
           <SelectInput

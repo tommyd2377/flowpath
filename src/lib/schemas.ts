@@ -6,6 +6,10 @@ import {
   CONSTRAINT_SENSITIVITIES,
   CONTEXT_USED_CATEGORIES,
   CONTEXT_USED_SOURCES,
+  DECISION_MOVE_TYPES,
+  DECISION_NODE_STATUSES,
+  DECISION_RECOMMENDATION_LEVELS,
+  DECISION_SEARCH_STATUSES,
   DOMAIN_ACCESS_LEVELS,
   DATING_ENVIRONMENTS,
   DATING_INTENTIONS,
@@ -535,6 +539,175 @@ export const highestLeverageMoveSchema = z.object({
   success_condition: z.string().trim().min(1).max(2000),
 });
 
+export const decisionBranchSourceSchema = z.object({
+  title: z.string().trim().min(1).max(180),
+  why_it_matters: z.string().trim().min(1).max(1000),
+  source: z.string().trim().max(500).default(""),
+  url_or_next_search: z.string().trim().max(500).default(""),
+});
+
+export const decisionFirstActionSchema = z.object({
+  title: z.string().trim().min(1).max(180),
+  details: z.string().trim().min(1).max(2000),
+  estimated_minutes: z.number().int().min(1).max(480).nullable().default(null),
+  success_condition: z.string().trim().min(1).max(1000),
+  fallback: z.string().trim().min(1).max(1000),
+});
+
+export const decisionOptionSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  node_id: z.string().trim().min(1).max(120),
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1).max(1000),
+  move_type: z.enum(DECISION_MOVE_TYPES),
+  recommendation_level: z.enum(DECISION_RECOMMENDATION_LEVELS),
+  why: z.string().trim().min(1).max(1200),
+  upside: z.string().trim().min(1).max(900),
+  downside: z.string().trim().min(1).max(900),
+  friction: z.enum(["low", "medium", "high"]),
+  time_to_feedback: z.string().trim().min(1).max(160),
+  requires_web_search: z.boolean(),
+  search_status: z.enum(DECISION_SEARCH_STATUSES),
+  next_node_id: z.string().trim().min(1).max(120).nullable().default(null),
+  can_explore: z.boolean().default(true),
+  first_action: decisionFirstActionSchema,
+  success_condition: z.string().trim().min(1).max(1000),
+  fallback: z.string().trim().min(1).max(1000),
+  selected: z.boolean().default(false),
+  next_steps: z.array(nextMoveStepSchema).max(6).default([]),
+  sources: z.array(decisionBranchSourceSchema).max(4).default([]),
+});
+
+export const decisionNodeSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  parent_id: z.string().trim().min(1).max(120).nullable().default(null),
+  selected_from_option_id: z.string().trim().min(1).max(120).nullable().default(null),
+  kind: z.enum(["decision", "action", "outcome"]).default("decision"),
+  title: z.string().trim().min(1).max(180),
+  question: z.string().trim().min(1).max(500),
+  context_summary: z.string().trim().min(1).max(1200),
+  options: z.array(decisionOptionSchema).max(6).default([]),
+  action: decisionFirstActionSchema.nullable().default(null),
+  selected_option_id: z.string().trim().min(1).max(120).nullable().default(null),
+  status: z.enum(DECISION_NODE_STATUSES).default("active"),
+  search_status: z.enum(DECISION_SEARCH_STATUSES).default("not_needed"),
+  generated_at: z.string().trim().min(1).max(80).nullable().default(null),
+});
+
+export const decisionTreeSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  board_id: z.number().int().positive().nullable().default(null),
+  root_node_id: z.string().trim().min(1).max(120),
+  active_node_id: z.string().trim().min(1).max(120),
+  selected_path: z.array(z.string().trim().min(1).max(120)).min(1).max(8),
+  recommended_option_id: z.string().trim().min(1).max(120),
+  current_action: decisionFirstActionSchema,
+  nodes: z.array(decisionNodeSchema).min(1).max(16),
+  created_at: z.string().trim().min(1).max(80),
+  updated_at: z.string().trim().min(1).max(80),
+});
+
+function normalizedBranchLabel(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(a|an|the|one|this|that|and|or|to|for|with|nearby|local)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export const branchExpansionOptionSchema = z.object({
+  id: z.string().trim().min(1).max(120).nullable().optional(),
+  label: z.string().trim().min(1).max(120),
+  short_rationale: z.string().trim().min(1).max(600),
+  recommendation_level: z.enum(DECISION_RECOMMENDATION_LEVELS),
+  can_explore: z.boolean().default(true),
+  search_status: z.enum(DECISION_SEARCH_STATUSES).optional().default("not_needed"),
+  friction: z.enum(["low", "medium", "high"]).optional().default("medium"),
+  time_to_feedback: z.string().trim().min(1).max(160).optional().default("Unknown"),
+  first_action_preview: z.string().trim().max(500).optional().default(""),
+});
+
+export const branchExpansionDecisionNodeSchema = z.object({
+  id: z.string().trim().min(1).max(120).nullable().optional(),
+  kind: z.literal("decision").default("decision"),
+  title: z.string().trim().min(1).max(180),
+  question: z.string().trim().min(1).max(500),
+  summary: z.string().trim().max(1200).optional().default(""),
+  options: z.array(branchExpansionOptionSchema).min(1).max(6),
+  search_status: z.enum(DECISION_SEARCH_STATUSES).optional().default("not_needed"),
+});
+
+export const branchExpansionActionLeafSchema = z.object({
+  id: z.string().trim().min(1).max(120).nullable().optional(),
+  kind: z.literal("action").default("action"),
+  title: z.string().trim().min(1).max(180),
+  first_action: z.string().trim().min(1).max(1000),
+  first_10_minutes: z.string().trim().max(1000).optional().default(""),
+  success_condition: z.string().trim().max(1000).optional().default(""),
+  if_blocked: z.string().trim().max(1000).optional().default(""),
+  search_status: z.enum(DECISION_SEARCH_STATUSES).optional().default("not_needed"),
+});
+
+export const branchExpansionResultSchema = z
+  .object({
+    result_type: z.enum(["decision_node", "action_leaf"]),
+    node: branchExpansionDecisionNodeSchema.nullable().optional().default(null),
+    action_leaf: branchExpansionActionLeafSchema.nullable().optional().default(null),
+    reasoning_summary: z.string().trim().max(1200).optional().default(""),
+    selected_path_summary: z.string().trim().max(1000).optional().default(""),
+    memory_used: z.array(z.string().trim().min(1).max(240)).max(8).optional().default([]),
+    assumptions: z.array(z.string().trim().min(1).max(500)).max(8).optional().default([]),
+    search_needed: z.boolean().optional().default(false),
+  })
+  .superRefine((value, ctx) => {
+    if (value.result_type === "decision_node") {
+      if (!value.node) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["node"],
+          message: "Decision-node expansions must include node.",
+        });
+      } else if (value.node.options.length > 1) {
+        const seen = new Set<string>();
+        for (const [index, option] of value.node.options.entries()) {
+          const key = normalizedBranchLabel(option.label);
+          if (seen.has(key)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["node", "options", index, "label"],
+              message: "Branch options must be meaningfully distinct.",
+            });
+          }
+          seen.add(key);
+        }
+      }
+      if (value.action_leaf) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["action_leaf"],
+          message: "Decision-node expansions must not also include action_leaf.",
+        });
+      }
+    }
+    if (value.result_type === "action_leaf") {
+      if (!value.action_leaf) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["action_leaf"],
+          message: "Action-leaf expansions must include action_leaf.",
+        });
+      }
+      if (value.node) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["node"],
+          message: "Action-leaf expansions must not also include node.",
+        });
+      }
+    }
+  });
+
 export const nextMovePlanSchema = z.object({
   generation_mode: z.literal("operator_plan").default("operator_plan"),
   mode: z.enum(NEXT_MOVE_MODES),
@@ -562,6 +735,7 @@ export const nextMovePlanSchema = z.object({
   context_used: z.array(contextUsedItemSchema).min(1).max(8),
   inferred_context_items: z.array(generatedInferredContextItemSchema).max(8),
   task_candidates: z.array(planTaskCandidateSchema).max(3),
+  decision_tree: decisionTreeSchema,
   confidence_level: z.enum(CONFIDENCE_LEVELS),
   assumptions: z.array(z.string().trim().min(1).max(500)).max(8),
   follow_up_questions_if_any: z.array(z.string().trim().min(1).max(500)).max(8),
@@ -587,4 +761,5 @@ export type SituationInput = z.infer<typeof situationInputSchema>;
 export type SituationUpdate = z.infer<typeof situationUpdateSchema>;
 export type IntakeAnswerInput = z.infer<typeof intakeAnswerInputSchema>;
 export type InterviewerOutput = z.infer<typeof interviewerOutputSchema>;
+export type BranchExpansionResultInput = z.infer<typeof branchExpansionResultSchema>;
 export type NextMovePlanInput = z.infer<typeof nextMovePlanSchema>;

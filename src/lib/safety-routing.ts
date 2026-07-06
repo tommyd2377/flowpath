@@ -1,4 +1,5 @@
 import { nextMovePlanSchema, type NextMovePlanInput } from "./schemas";
+import { buildFallbackDecisionTree } from "./decision-tree";
 import type { SafetyRouteType, Situation, SituationUrgency } from "./types";
 
 export type SafetyRouteDecision = {
@@ -178,7 +179,7 @@ export function buildSafetyRoutedPlan(
 ): NextMovePlanInput {
   const guidance = safetyGuidance(decision);
   const title = situation.title || "urgent situation";
-  const plan = {
+  const planWithoutTree = {
     generation_mode: "operator_plan" as const,
     mode: "crisis_triage" as const,
     situation_read: `This looks like a high-stakes ${decision.reason} situation that needs immediate human support before ordinary planning.`,
@@ -259,7 +260,8 @@ export function buildSafetyRoutedPlan(
     resources_to_seek: [],
     when_to_get_human_help: guidance.human,
     safety_boundary: {
-      risk_level: decision.confidence === "high" ? "crisis" : "high",
+      risk_level:
+        decision.confidence === "high" ? ("crisis" as const) : ("high" as const),
       professional_help_signal: guidance.human,
       do_not_rely_on_ai_for:
         "Do not rely on FlowPath for emergency, crisis, legal, medical, housing, financial, or safety decisions.",
@@ -302,5 +304,8 @@ export function buildSafetyRoutedPlan(
     follow_up_questions_if_any: [],
   };
 
-  return nextMovePlanSchema.parse(plan);
+  return nextMovePlanSchema.parse({
+    ...planWithoutTree,
+    decision_tree: buildFallbackDecisionTree(planWithoutTree),
+  });
 }

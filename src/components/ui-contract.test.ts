@@ -74,7 +74,7 @@ test("New board uses selected-domain intake without manual title or urgency", ()
   assert.doesNotMatch(source, /I want sexual connection safely and respectfully/);
 });
 
-test("New Situation shows saved plan state instead of quota CTA after generation", () => {
+test("New board shows saved plan state instead of quota CTA after generation", () => {
   const source = readSource("src/components/next-move-flow.tsx");
 
   assert.match(source, /Best move generated/);
@@ -84,11 +84,11 @@ test("New Situation shows saved plan state instead of quota CTA after generation
 });
 
 test("Board detail supports conversational board updates", () => {
-  const source = readSource("src/components/situation-detail-view.tsx");
+  const source = readSource("src/components/board-detail-view.tsx");
 
   assert.match(source, /Tell FlowPath what changed/);
   assert.match(source, /board-update/);
-  assert.match(source, /Update board and recalculate/);
+  assert.match(source, /Update and recalculate/);
   assert.match(source, /BoardSnapshot/);
   assert.doesNotMatch(source, /Generate updated plan/);
 });

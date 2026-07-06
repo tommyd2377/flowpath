@@ -6,6 +6,7 @@ import type {
   ContextConstraints,
   ContextUsedItem,
   DailyPlan,
+  DecisionTree,
   GeneratedInferredContextItem,
   GenerationEvent,
   GenerationFlowStatus,
@@ -70,6 +71,11 @@ import {
   mergeContextConstraints,
   sanitizeContextConstraintsForSession,
 } from "./constraints";
+import {
+  decisionBranchSourceSection,
+  findDecisionOption,
+  normalizeDecisionTree,
+} from "./decision-tree";
 import { inferBoardTitle } from "./entry-domains";
 import { assertSafeTextFields } from "./privacy";
 import { nowIso, todayIsoDate } from "./time";
@@ -1017,7 +1023,7 @@ export async function getOutcomeHarnessDashboardSummary(
   ]);
   const firstIntakeAbandoned = await countHarnessEvents(userId, isQa, [
     "first_intake_abandoned",
-    "created_new_situation_before_answering",
+    "created_new_board_before_answering",
   ]);
   const generationTotals = await first<{
     total: number;
@@ -2441,6 +2447,7 @@ type NextMovePlanRow = Omit<
   | "context_used"
   | "inferred_context_items"
   | "task_candidates"
+  | "decision_tree"
   | "cognitive_metadata"
   | "assumptions"
   | "follow_up_questions_if_any"
@@ -2478,7 +2485,7 @@ function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
     success_condition: "",
   };
 
-  return {
+  const planWithoutTree: Omit<StoredNextMovePlan, "decision_tree"> = {
     id: row.id,
     situation_id: row.situation_id,
     intake_session_id: row.intake_session_id,
@@ -2537,6 +2544,11 @@ function rowToNextMovePlan(row: NextMovePlanRow): StoredNextMovePlan {
     raw_json: row.raw_json,
     is_qa: rowBoolean(row.is_qa),
     created_at: row.created_at,
+  };
+
+  return {
+    ...planWithoutTree,
+    decision_tree: normalizeDecisionTree(planWithoutTree),
   };
 }
 
@@ -2648,6 +2660,27 @@ export async function getNextMovePlan(
     Parameters<typeof rowToNextMovePlan>[0]
   >("SELECT * FROM next_move_plans WHERE id = ? AND user_id = ?", [id, userId]);
   return row ? rowToNextMovePlan(row) : null;
+}
+
+export async function updateNextMovePlanDecisionTree(
+  userId: number,
+  planId: number,
+  decisionTree: DecisionTree,
+): Promise<StoredNextMovePlan | null> {
+  const existing = await getNextMovePlan(userId, planId);
+  if (!existing) return null;
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(existing.raw_json) as Record<string, unknown>;
+  } catch {
+    raw = { ...existing };
+  }
+  raw.decision_tree = decisionTree;
+  await run(
+    `UPDATE next_move_plans SET raw_json = ? WHERE id = ? AND user_id = ?`,
+    [JSON.stringify(raw), planId, userId],
+  );
+  return getNextMovePlan(userId, planId);
 }
 
 export async function getLatestNextMovePlan(
@@ -2915,7 +2948,35 @@ export async function createTasksFromNextMovePlan(
   };
 }
 
-function suggestedActionFromPlan(plan: StoredNextMovePlan) {
+function suggestedActionFromPlan(
+  plan: StoredNextMovePlan,
+  branchOptionId?: string | null,
+) {
+  const branch = findDecisionOption(plan.decision_tree, branchOptionId);
+  if (branchOptionId && branch?.id === branchOptionId) {
+    const importanceByLevel = {
+      recommended: 5,
+      viable: 4,
+      supplement: 3,
+      not_now: 2,
+      risky: 2,
+    } as const;
+    const effortByFriction = {
+      low: 1,
+      medium: 2,
+      high: 3,
+    } as const;
+    return {
+      title: branch.first_action.title,
+      description: branch.first_action.details,
+      estimated_minutes: branch.first_action.estimated_minutes ?? 10,
+      importance: importanceByLevel[branch.recommendation_level],
+      effort: effortByFriction[branch.friction],
+      friction_type: branch.friction === "high" ? ("scary" as const) : ("none" as const),
+      rank_reason: branch.why || "Accepted from the selected decision branch.",
+    };
+  }
+
   const firstTask = plan.task_candidates[0];
   const title = firstTask?.title || plan.first_10_minute_action.title;
   const description =
@@ -2944,7 +3005,9 @@ function suggestedActionFromPlan(plan: StoredNextMovePlan) {
 export async function getSuggestedActionTaskForPlan(
   userId: number,
   planId: number,
+  branchOptionId?: string | null,
 ): Promise<Task | null> {
+  const sourceSection = decisionBranchSourceSection(branchOptionId);
   const row = await first<Task & UserScopedRow>(
     `SELECT
       tasks.*,
@@ -2964,10 +3027,10 @@ export async function getSuggestedActionTaskForPlan(
       AND situations.user_id = tasks.user_id
     WHERE tasks.user_id = ?
       AND tasks.source_next_move_plan_id = ?
-      AND tasks.source_plan_section = 'suggested_action'
+      AND tasks.source_plan_section = ?
     ORDER BY tasks.created_at ASC
     LIMIT 1`,
-    [userId, planId],
+    [userId, planId, sourceSection],
   );
   return row
     ? rankTasks(
@@ -2986,12 +3049,14 @@ export async function saveSuggestedActionTask(
     description?: string;
     estimatedMinutes?: number | null;
     status?: Task["status"];
+    branchOptionId?: string | null;
   } = {},
 ) {
   const plan = await getNextMovePlan(userId, planId);
   if (!plan) throw new Error("Plan not found.");
   const isQa = Boolean(plan.is_qa);
-  const original = suggestedActionFromPlan(plan);
+  const sourceSection = decisionBranchSourceSection(input.branchOptionId);
+  const original = suggestedActionFromPlan(plan, input.branchOptionId);
   const nextTitle = (input.title ?? original.title).trim();
   const nextDescription = (input.description ?? original.description).trim();
   const nextEstimatedMinutes =
@@ -2999,7 +3064,11 @@ export async function saveSuggestedActionTask(
       ? original.estimated_minutes
       : input.estimatedMinutes;
   assertSafeTextFields({ title: nextTitle, notes: nextDescription });
-  const existing = await getSuggestedActionTaskForPlan(userId, planId);
+  const existing = await getSuggestedActionTaskForPlan(
+    userId,
+    planId,
+    input.branchOptionId,
+  );
   const now = nowIso();
 
   if (existing) {
@@ -3039,12 +3108,13 @@ export async function saveSuggestedActionTask(
       user_id, title, life_area_id, project_id, situation_id, source_next_move_plan_id,
       source_plan_section, status, importance, effort, friction_type, estimated_minutes,
       notes, is_qa, created_at, updated_at
-    ) VALUES (?, ?, NULL, NULL, ?, ?, 'suggested_action', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       nextTitle,
       plan.situation_id,
       plan.id,
+      sourceSection,
       input.status ?? "open",
       original.importance,
       original.effort,
@@ -3065,12 +3135,13 @@ export async function saveSuggestedActionTask(
     planId,
     eventType: "task_created_from_ai",
     source: "suggested_action",
-    subtype: "suggested_action",
+    subtype: sourceSection,
     metadata: {
       title: task.title,
       estimatedMinutes: task.estimated_minutes ?? null,
+      sourcePlanSection: sourceSection,
     },
-    dedupeKey: `suggested-action-task-created:${planId}`,
+    dedupeKey: `suggested-action-task-created:${planId}:${sourceSection}`,
     isQa,
   });
   return { task, created: true, original };

@@ -8,6 +8,7 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
+import { findDecisionOption } from "@/lib/decision-tree";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import {
   createOutcomeHarnessEvent,
@@ -27,6 +28,7 @@ type Context = { params: Promise<{ id: string }> };
 
 const suggestedActionSchema = z.object({
   action: z.enum(["accept", "edit", "dismiss", "complete", "not_useful"]),
+  branch_option_id: z.string().trim().min(1).max(120).nullable().optional(),
   title: z.string().trim().max(220).optional(),
   description: z.string().trim().max(5000).optional(),
   estimatedMinutes: z.number().int().min(1).max(480).nullable().optional(),
@@ -40,12 +42,23 @@ async function planContext(userId: number, planId: number) {
   return { plan, situation, intakeRouting };
 }
 
-function originalSuggestedAction(plan: Awaited<ReturnType<typeof getNextMovePlan>>) {
+function originalSuggestedAction(
+  plan: Awaited<ReturnType<typeof getNextMovePlan>>,
+  branchOptionId?: string | null,
+) {
   if (!plan) {
     return {
       title: "",
       description: "",
       estimatedMinutes: null as number | null,
+    };
+  }
+  const branch = findDecisionOption(plan.decision_tree, branchOptionId);
+  if (branchOptionId && branch?.id === branchOptionId) {
+    return {
+      title: branch.first_action.title,
+      description: branch.first_action.details,
+      estimatedMinutes: branch.first_action.estimated_minutes,
     };
   }
   const firstTask = plan.task_candidates[0];
@@ -97,15 +110,17 @@ async function writeSuggestedEvent(
   });
 }
 
-export async function GET(_request: Request, context: Context) {
+export async function GET(request: Request, context: Context) {
   try {
     const user = await requireUser();
     const { id: idParam } = await context.params;
     const planId = parseId(idParam);
+    const branchOptionId =
+      new URL(request.url).searchParams.get("branch_option_id") || null;
     const { plan } = await planContext(user.id, planId);
     const [events, task] = await Promise.all([
       listOutcomeHarnessEventsForPlan(user.id, planId),
-      getSuggestedActionTaskForPlan(user.id, planId),
+      getSuggestedActionTaskForPlan(user.id, planId, branchOptionId),
     ]);
     const terminal = events.find((event) =>
       [
@@ -128,7 +143,7 @@ export async function GET(_request: Request, context: Context) {
     return dataResponse({
       state,
       task,
-      original: originalSuggestedAction(plan),
+      original: originalSuggestedAction(plan, branchOptionId),
     });
   } catch (error) {
     return errorResponse(error, "Could not load suggested action state.");
@@ -142,7 +157,9 @@ export async function POST(request: Request, context: Context) {
     const planId = parseId(idParam);
     const { plan } = await planContext(user.id, planId);
     const input = suggestedActionSchema.parse(await readJson(request));
-    const original = originalSuggestedAction(plan);
+    const branchOptionId = input.branch_option_id ?? null;
+    const branchEventKey = branchOptionId ?? "default";
+    const original = originalSuggestedAction(plan, branchOptionId);
 
     if (input.action === "dismiss") {
       await writeSuggestedEvent(
@@ -152,9 +169,10 @@ export async function POST(request: Request, context: Context) {
         {
           title: original.title,
           estimatedMinutes: original.estimatedMinutes,
+          branchOptionId,
         },
         null,
-        `suggested-action-dismissed:${planId}`,
+        `suggested-action-dismissed:${planId}:${branchEventKey}`,
       );
       return dataResponse({ state: "dismissed", task: null });
     }
@@ -172,9 +190,10 @@ export async function POST(request: Request, context: Context) {
         {
           title: original.title,
           estimatedMinutes: original.estimatedMinutes,
+          branchOptionId,
         },
         null,
-        `suggested-action-not-useful:${planId}`,
+        `suggested-action-not-useful:${planId}:${branchEventKey}`,
       );
       return dataResponse({ state: "not_useful", task: null });
     }
@@ -185,6 +204,7 @@ export async function POST(request: Request, context: Context) {
       description: input.description,
       estimatedMinutes: input.estimatedMinutes,
       status,
+      branchOptionId,
     });
     const task = saved.task;
 
@@ -210,10 +230,16 @@ export async function POST(request: Request, context: Context) {
         user.id,
         planId,
         "suggested_action_edited",
-        diff,
+        { ...diff, branchOptionId },
         task.id,
       );
-      await writeSuggestedEvent(user.id, planId, "task_edited", diff, task.id);
+      await writeSuggestedEvent(
+        user.id,
+        planId,
+        "task_edited",
+        { ...diff, branchOptionId },
+        task.id,
+      );
       return dataResponse({ state: task.status === "done" ? "completed" : "accepted", task });
     }
 
@@ -225,9 +251,10 @@ export async function POST(request: Request, context: Context) {
         {
           title: task.title,
           estimatedMinutes: task.estimated_minutes ?? null,
+          branchOptionId,
         },
         task.id,
-        `suggested-action-completed:${planId}`,
+        `suggested-action-completed:${planId}:${branchEventKey}`,
       );
       await writeSuggestedEvent(
         user.id,
@@ -236,6 +263,7 @@ export async function POST(request: Request, context: Context) {
         {
           title: task.title,
           estimatedMinutes: task.estimated_minutes ?? null,
+          branchOptionId,
         },
         task.id,
         `suggested-action-task-completed:${task.id}`,
@@ -251,9 +279,10 @@ export async function POST(request: Request, context: Context) {
         title: task.title,
         estimatedMinutes: task.estimated_minutes ?? null,
         createdTask: saved.created,
+        branchOptionId,
       },
       task.id,
-      `suggested-action-accepted:${planId}`,
+      `suggested-action-accepted:${planId}:${branchEventKey}`,
     );
     return dataResponse({ state: "accepted", task });
   } catch (error) {

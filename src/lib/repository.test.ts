@@ -8,6 +8,10 @@ import {
   buildCognitiveMetadata,
   buildCognitivePlanContext,
 } from "./cognitive-operating-layer";
+import {
+  buildFallbackDecisionTree,
+  decisionBranchSourceSection,
+} from "./decision-tree";
 import { assertNoProhibitedData, ProhibitedDataError } from "./privacy";
 import type { NextMovePlanInput } from "./schemas";
 
@@ -41,8 +45,17 @@ async function applyMigrations() {
   }
 }
 
-function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
+function withDecisionTree(
+  plan: Omit<NextMovePlanInput, "decision_tree">,
+): NextMovePlanInput {
   return {
+    ...plan,
+    decision_tree: buildFallbackDecisionTree(plan),
+  };
+}
+
+function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
+  return withDecisionTree({
     generation_mode: "operator_plan",
     mode: "growth",
     situation_read: "A focused situation needs one next action.",
@@ -131,7 +144,7 @@ function minimalPlan(title = "Do one useful action"): NextMovePlanInput {
     confidence_level: "medium",
     assumptions: [],
     follow_up_questions_if_any: [],
-  };
+  });
 }
 
 before(async () => {
@@ -159,7 +172,7 @@ test("new profiles do not store manual memory explainer text", async () => {
 });
 
 test("converts stored plan steps to tasks without re-blocking generated plan text", async () => {
-  const plan: NextMovePlanInput = {
+  const plan = withDecisionTree({
     generation_mode: "operator_plan",
     mode: "stability",
     situation_read: "User needs a safer broad plan for money pressure.",
@@ -314,7 +327,7 @@ test("converts stored plan steps to tasks without re-blocking generated plan tex
     confidence_level: "medium",
     assumptions: [],
     follow_up_questions_if_any: [],
-  };
+  });
 
   assert.throws(
     () => assertNoProhibitedData(plan.next_24_hours[0].details),
@@ -455,6 +468,45 @@ test("telemetry task conversion creates tasks once and records generated counts"
   assert.equal(manualCounts.generated_task_count, 0);
   assert.equal(manualCounts.returned_task_count, 1);
   assert.equal(manualCounts.already_existed, true);
+});
+
+test("branch suggested actions save under stable decision branch source sections", async () => {
+  const situation = await repository.createSituation(1, {
+    title: "I need a branchable next action",
+    description: "I need a branchable next action.",
+    category: "work_career",
+    urgency: "medium",
+  });
+  const storedPlan = await repository.createNextMovePlan(
+    1,
+    situation.id,
+    null,
+    minimalPlan("Send one branch-specific update"),
+    "test-model",
+  );
+  const branchOptionId = storedPlan.decision_tree.recommended_option_id;
+  const branchSection = decisionBranchSourceSection(branchOptionId);
+
+  const defaultSaved = await repository.saveSuggestedActionTask(1, storedPlan.id);
+  const branchSaved = await repository.saveSuggestedActionTask(1, storedPlan.id, {
+    branchOptionId,
+  });
+
+  assert.equal(defaultSaved.task.source_plan_section, "suggested_action");
+  assert.equal(branchSaved.task.source_plan_section, branchSection);
+  assert.notEqual(defaultSaved.task.id, branchSaved.task.id);
+  assert.equal(
+    (await repository.getSuggestedActionTaskForPlan(1, storedPlan.id))?.id,
+    defaultSaved.task.id,
+  );
+  assert.equal(
+    (await repository.getSuggestedActionTaskForPlan(
+      1,
+      storedPlan.id,
+      branchOptionId,
+    ))?.id,
+    branchSaved.task.id,
+  );
 });
 
 test("inferred context items downgrade model-saved memory and can be updated or deleted", async () => {

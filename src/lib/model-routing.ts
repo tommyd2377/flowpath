@@ -236,7 +236,7 @@ export function selectModelForGeneration(
     modelRole = "evaluator_fast";
   } else if (input.flowType === "plan_revision") {
     modelRole = highStakes || complexityScore >= 0.72 ? "plan_escalated" : "revision_standard";
-  } else if (input.flowType === "next_move_plan") {
+  } else if (input.flowType === "next_move_plan" || input.flowType === "move_map_expansion") {
     modelRole = highStakes || complexityScore >= 0.68 ? "plan_escalated" : "plan_standard";
   } else {
     modelRole = "evaluator_fast";

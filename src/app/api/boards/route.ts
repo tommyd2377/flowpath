@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import {
   assertCanUseFeature,
   canUseFeature,
-  canUseFirstSituationFlow,
+  canUseFirstSituationFlow as canUseFirstBoardFlow,
   incrementUsage,
 } from "@/lib/billing/usage";
 import { generateFirstIntakePlan } from "@/lib/flowpath-ai";
@@ -14,24 +14,24 @@ import {
   addIntakeMessage,
   completeGenerationEvent,
   createOutcomeHarnessEvent,
-  createSituation,
-  deleteSituation,
+  createSituation as createBoard,
+  deleteSituation as deleteBoard,
   getLatestIntakeSession,
   getOrCreateIntakeSession,
   listIntakeMessages,
-  listSituations,
+  listSituations as listBoards,
   startGenerationEvent,
 } from "@/lib/repository";
 import { situationInputSchema } from "@/lib/schemas";
 import type { FirstIntakePlan } from "@/lib/situation-routing";
-import type { Situation } from "@/lib/types";
+import type { Situation as Board } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function firstIntakePlanForNewSituation(
+async function firstIntakePlanForNewBoard(
   userId: number,
-  situation: Situation,
+  board: Board,
 ): Promise<{ plan: FirstIntakePlan; source: "ai"; model?: string }> {
   if (!process.env.OPENAI_API_KEY) {
     throw new ApiRequestError(
@@ -41,25 +41,25 @@ async function firstIntakePlanForNewSituation(
     );
   }
 
-  const firstFlowPass = await canUseFirstSituationFlow(userId, situation.id, {
-    isQa: Boolean(situation.is_qa),
+  const firstFlowPass = await canUseFirstBoardFlow(userId, board.id, {
+    isQa: Boolean(board.is_qa),
   });
   const usageDecision = await canUseFeature(userId, "lightweight_assist");
   const clientGenerationId = `server-first-intake-${crypto.randomUUID()}`;
   await startGenerationEvent(userId, {
     client_generation_id: clientGenerationId,
     generation_type: "intake",
-    situation_id: situation.id,
+    situation_id: board.id,
     flow_type: "first_intake_question",
     flow_status: "running",
     quota_tier: usageDecision.planTier,
     quota_usage_type: "lightweight_assist",
     structural_counts: {
-      situation_title_chars: situation.title.length,
-      situation_description_chars: situation.description.length,
+      board_title_chars: board.title.length,
+      board_description_chars: board.description.length,
       first_flow_pass: firstFlowPass,
     },
-    is_qa: Boolean(situation.is_qa),
+    is_qa: Boolean(board.is_qa),
   });
   if (!firstFlowPass) {
     if (!usageDecision.allowed) {
@@ -77,7 +77,7 @@ async function firstIntakePlanForNewSituation(
 
   let generated;
   try {
-    generated = await generateFirstIntakePlan(situation);
+    generated = await generateFirstIntakePlan(board);
   } catch (error) {
     const sanitized = sanitizeGenerationError(error);
     await completeGenerationEvent(userId, clientGenerationId, {
@@ -122,7 +122,7 @@ export async function GET(request: Request) {
     const user = await requireUser();
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status") || undefined;
-    return dataResponse(await listSituations(user.id, status, { isQa: isQaRequest(request) }));
+    return dataResponse(await listBoards(user.id, status, { isQa: isQaRequest(request) }));
   } catch (error) {
     return errorResponse(error, "Could not load boards.");
   }
@@ -133,14 +133,14 @@ export async function POST(request: Request) {
     const user = await requireUser();
     const isQa = isQaRequest(request);
     const input = situationInputSchema.parse(await readJson(request));
-    const activeSituations = await listSituations(user.id, "active", { isQa });
-    const situation = await createSituation(user.id, input, { isQa });
+    const activeBoards = await listBoards(user.id, "active", { isQa });
+    const board = await createBoard(user.id, input, { isQa });
     const { session, firstIntakeGeneration, messages } = await (async () => {
       try {
-        const session = await getOrCreateIntakeSession(user.id, situation.id);
-        const firstIntakeGeneration = await firstIntakePlanForNewSituation(
+        const session = await getOrCreateIntakeSession(user.id, board.id);
+        const firstIntakeGeneration = await firstIntakePlanForNewBoard(
           user.id,
-          situation,
+          board,
         );
         const messages = await addIntakeMessage(
           user.id,
@@ -151,12 +151,12 @@ export async function POST(request: Request) {
         );
         return { session, firstIntakeGeneration, messages };
       } catch (firstIntakeError) {
-        await deleteSituation(user.id, situation.id).catch(() => {});
+        await deleteBoard(user.id, board.id).catch(() => {});
         throw firstIntakeError;
       }
     })();
     const firstIntakePlanner = firstIntakeGeneration.plan;
-    for (const active of activeSituations.slice(0, 8)) {
+    for (const active of activeBoards.slice(0, 8)) {
       const activeSession = await getLatestIntakeSession(user.id, active.id);
       if (!activeSession) continue;
       const activeMessages = await listIntakeMessages(user.id, activeSession.id);
@@ -166,13 +166,13 @@ export async function POST(request: Request) {
       await createOutcomeHarnessEvent(user.id, {
         situationId: active.id,
         conversationId: String(active.id),
-        eventType: "created_new_situation_before_answering",
+        eventType: "created_new_board_before_answering",
         source: "first_intake",
         domain: activePlanner.domain,
         subtype: activePlanner.subtype,
         questionPurpose: activePlanner.questionPurpose,
-        metadata: { replacementSituationId: situation.id },
-        dedupeKey: `new-situation-before-answering:${active.id}:${situation.id}`,
+        metadata: { replacementBoardId: board.id },
+        dedupeKey: `new-board-before-answering:${active.id}:${board.id}`,
         isQa,
       });
       await createOutcomeHarnessEvent(user.id, {
@@ -183,14 +183,14 @@ export async function POST(request: Request) {
         domain: activePlanner.domain,
         subtype: activePlanner.subtype,
         questionPurpose: activePlanner.questionPurpose,
-        metadata: { reason: "new_situation_started" },
+        metadata: { reason: "new_board_started" },
         dedupeKey: `first-intake-abandoned:${active.id}`,
         isQa,
       });
     }
     await createOutcomeHarnessEvent(user.id, {
-      situationId: situation.id,
-      conversationId: String(situation.id),
+      situationId: board.id,
+      conversationId: String(board.id),
       messageId: messages.id,
       eventType: "first_intake_question_shown",
       source: "first_intake",
@@ -203,11 +203,11 @@ export async function POST(request: Request) {
         generationSource: firstIntakeGeneration.source,
         model: firstIntakeGeneration.model ?? null,
       },
-      dedupeKey: `first-intake-question-shown:${situation.id}`,
+      dedupeKey: `first-intake-question-shown:${board.id}`,
       isQa,
     });
     return dataResponse(
-      { situation, session, messages: [messages], firstIntakePlanner },
+      { board, situation: board, session, messages: [messages], firstIntakePlanner },
       201,
     );
   } catch (error) {

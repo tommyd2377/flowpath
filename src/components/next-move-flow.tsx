@@ -57,7 +57,8 @@ import {
   TextArea,
 } from "./ui";
 
-type SituationDetail = {
+type BoardDetail = {
+  board?: Situation;
   situation: Situation;
   session: IntakeSession;
   messages: IntakeMessage[];
@@ -104,7 +105,7 @@ type NextMoveFlowProps = {
 };
 
 export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
-  const [detail, setDetail] = useState<SituationDetail | null>(null);
+  const [detail, setDetail] = useState<BoardDetail | null>(null);
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<EntryDomainId | "">(
     initialDomain ?? "",
@@ -135,7 +136,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     const requestId = detailRequestRef.current + 1;
     detailRequestRef.current = requestId;
     setError(null);
-    const nextDetail = await apiFetch<SituationDetail>(`/api/situations/${id}`);
+    const nextDetail = await apiFetch<BoardDetail>(`/api/boards/${id}`);
     if (detailRequestRef.current === requestId) {
       setDetail(nextDetail);
       setAnswer("");
@@ -151,13 +152,13 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
         typeof window === "undefined"
           ? new URLSearchParams()
           : new URLSearchParams(window.location.search);
-      const requestedSituationId = Number(searchParams.get("situationId"));
+      const requestedBoardId = Number(searchParams.get("boardId"));
       const requestedDomain = searchParams.get("domain");
       if (isEntryDomainId(requestedDomain)) {
         setCategory(requestedDomain);
       }
-      if (Number.isInteger(requestedSituationId) && requestedSituationId > 0) {
-        await loadDetail(requestedSituationId);
+      if (Number.isInteger(requestedBoardId) && requestedBoardId > 0) {
+        await loadDetail(requestedBoardId);
       } else {
         setDetail(null);
       }
@@ -227,7 +228,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     // explicit retry/cancel controls once a generation takes too long.
   }
 
-  async function createSituation(event: React.FormEvent<HTMLFormElement>) {
+  async function createBoard(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!category) {
       setError("Choose one board before starting intake.");
@@ -237,14 +238,14 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     setError(null);
     setMessage(null);
     try {
-      const created = await apiFetch<{ situation: Situation }>("/api/situations", {
+      const created = await apiFetch<{ board: Situation; situation?: Situation }>("/api/boards", {
         method: "POST",
         body: JSON.stringify({ description, category }),
       });
       setDescription("");
       setCategory("");
       setTaskConfirmation(null);
-      await loadDetail(created.situation.id);
+      await loadDetail(created.board.id);
       setMessage("Board started. Answer one question at a time.");
     } catch (createError) {
       setError(
@@ -274,7 +275,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     setError(null);
     setMessage(null);
     try {
-      await apiFetch(`/api/situations/${detail.situation.id}/messages`, {
+      await apiFetch(`/api/boards/${detail.situation.id}/messages`, {
         method: "POST",
         signal: controller.signal,
         body: JSON.stringify({
@@ -312,7 +313,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
     setTaskConfirmation(null);
     try {
       const generated = await apiFetch<PlanGenerationResponse>(
-        `/api/situations/${situationId}/generate-plan`,
+        `/api/boards/${situationId}/generate-plan`,
         {
           method: "POST",
           signal: controller.signal,
@@ -437,7 +438,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
                 description={description}
                 setDescription={setDescription}
                 working={working}
-                onSubmit={createSituation}
+                onSubmit={createBoard}
               />
             ) : (
               <DomainPicker onSelect={setCategory} />
@@ -468,7 +469,7 @@ export function NextMoveFlow({ initialDomain = null }: NextMoveFlowProps) {
                     </p>
                   </div>
                   <Link
-                    href={`/situations/${detail.situation.id}`}
+                    href={`/boards/${detail.situation.id}`}
                     className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:border-[var(--azure)]"
                   >
                     Board detail
@@ -756,7 +757,7 @@ function RelatedTasksCard({ tasks }: { tasks: Task[] }) {
       </div>
       {tasks.length > 6 ? (
         <Link
-          href={`/situations/${tasks[0].situation_id ?? ""}`}
+          href={`/boards/${tasks[0].situation_id ?? ""}`}
           className="mt-3 inline-flex text-sm font-medium text-[var(--azure-light)]"
         >
           View all related tasks

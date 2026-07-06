@@ -30,8 +30,10 @@ export const OUTCOME_HARNESS_EVENT_TYPES = [
   "escalation_triggered",
   "first_intake_question_shown",
   "first_intake_abandoned",
-  "situation_edited_before_answering",
-  "created_new_situation_before_answering",
+  "board_edited_before_answering",
+  "created_new_board_before_answering",
+  "move_map_branch_expanded",
+  "move_map_action_leaf_reached",
 ] as const;
 
 export const OUTCOME_HARNESS_SOURCES = [
@@ -43,6 +45,7 @@ export const OUTCOME_HARNESS_SOURCES = [
   "check_in",
   "manual_user_feedback",
   "system_inference",
+  "move_map",
 ] as const;
 
 export type OutcomeHarnessEventType =

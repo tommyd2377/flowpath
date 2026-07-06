@@ -6,6 +6,7 @@ import {
   detectRepeatedDecisionLoop,
   evaluateNextMovePlan,
 } from "./cognitive-operating-layer";
+import { buildFallbackDecisionTree } from "./decision-tree";
 import { outcomeHarnessFixtures } from "./outcome-harness-fixtures";
 import type { IntakeMessage, NextMovePlan, Profile, Situation } from "./types";
 
@@ -33,6 +34,13 @@ function situationFor(text: string, category = "custom"): Situation {
     urgency: "medium",
     created_at: "2026-05-30T00:00:00.000Z",
     updated_at: "2026-05-30T00:00:00.000Z",
+  };
+}
+
+function withDecisionTree(plan: Omit<NextMovePlan, "decision_tree">): NextMovePlan {
+  return {
+    ...plan,
+    decision_tree: buildFallbackDecisionTree(plan),
   };
 }
 
@@ -132,7 +140,7 @@ test("evaluator rejects generic fixture-style plans", () => {
     profile,
     inferredContextItems: [],
   });
-  const plan: NextMovePlan = {
+  const plan: NextMovePlan = withDecisionTree({
     generation_mode: "operator_plan",
     mode: "growth",
     situation_read: "Believe in yourself and think about it.",
@@ -187,7 +195,7 @@ test("evaluator rejects generic fixture-style plans", () => {
     confidence_level: "low",
     assumptions: [],
     follow_up_questions_if_any: [],
-  };
+  });
 
   const evaluation = evaluateNextMovePlan(plan, context);
   assert.equal(evaluation.passes, false);
