@@ -205,45 +205,54 @@ export async function POST(request: Request, context: Context) {
       ).length,
       inferredContextCount: inferredContextItems.length,
     });
-    await createOutcomeHarnessEvent(user.id, {
-      situationId,
-      conversationId: String(situationId),
-      messageId: messagesAfterUser.filter((message) => message.role === "user").at(-1)?.id ?? null,
-      eventType: "intake_question_answered",
-      source: "followup_intake",
-      stateDetected: cognitiveContext.stateDetection.primary_state,
-      interventionType: cognitiveContext.intervention.intervention_type,
-      domain: intakeRouting.domain,
-      subtype: intakeRouting.subtype,
-      questionPurpose: intakeRouting.questionPurpose,
-      metadata: {
-        currentStage: session.current_stage,
-        answerLength: input.content.length,
-      },
-      dedupeKey: `intake-question-answered:${input.client_message_id}`,
-      isQa,
-    });
-    if (cognitiveContext.repeatedLoopDetected) {
+    const latestUserMessageId =
+      messagesAfterUser.filter((message) => message.role === "user").at(-1)?.id ??
+      null;
+    try {
       await createOutcomeHarnessEvent(user.id, {
         situationId,
         conversationId: String(situationId),
-        messageId:
-          messagesAfterUser.filter((message) => message.role === "user").at(-1)?.id ??
-          null,
-        eventType: "user_repeated_same_loop",
-        source: "system_inference",
+        messageId: latestUserMessageId,
+        eventType: "intake_question_answered",
+        source: "followup_intake",
         stateDetected: cognitiveContext.stateDetection.primary_state,
         interventionType: cognitiveContext.intervention.intervention_type,
         domain: intakeRouting.domain,
         subtype: intakeRouting.subtype,
         questionPurpose: intakeRouting.questionPurpose,
         metadata: {
-          repeatedTopic: cognitiveContext.repeatedTopic,
-          repeatedLoopCount: historicalEffectiveness.repeatedLoopCount,
+          currentStage: session.current_stage,
+          answerLength: input.content.length,
         },
-        dedupeKey: `repeated-loop:intake:${input.client_message_id}`,
+        dedupeKey: `intake-question-answered:${input.client_message_id}`,
         isQa,
       });
+    } catch (eventError) {
+      console.warn("Intake question telemetry failed", eventError);
+    }
+    if (cognitiveContext.repeatedLoopDetected) {
+      try {
+        await createOutcomeHarnessEvent(user.id, {
+          situationId,
+          conversationId: String(situationId),
+          messageId: latestUserMessageId,
+          eventType: "user_repeated_same_loop",
+          source: "system_inference",
+          stateDetected: cognitiveContext.stateDetection.primary_state,
+          interventionType: cognitiveContext.intervention.intervention_type,
+          domain: intakeRouting.domain,
+          subtype: intakeRouting.subtype,
+          questionPurpose: intakeRouting.questionPurpose,
+          metadata: {
+            repeatedTopic: cognitiveContext.repeatedTopic,
+            repeatedLoopCount: historicalEffectiveness.repeatedLoopCount,
+          },
+          dedupeKey: `repeated-loop:intake:${input.client_message_id}`,
+          isQa,
+        });
+      } catch (eventError) {
+        console.warn("Repeated-loop intake telemetry failed", eventError);
+      }
     }
     const compactProfile = compactProfileForMemorySelection(
       profile,
