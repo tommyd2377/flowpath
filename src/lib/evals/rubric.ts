@@ -617,7 +617,13 @@ export function scoreEvalScenario(
 export function scoreEvalSuite(
   scenarios: EvalScenario[],
   outputsByScenarioId: Record<string, EvalOutput>,
-  meta: Pick<EvalSuiteReport, "generatedAt" | "mode" | "gitCommit" | "modelConfig">,
+  meta: Pick<EvalSuiteReport, "generatedAt" | "mode" | "gitCommit" | "modelConfig"> &
+    Partial<
+      Pick<
+        EvalSuiteReport,
+        "selectedScenarioIds" | "totalModelCalls" | "webSearchEnabled" | "traces"
+      >
+    >,
 ): EvalSuiteReport {
   const results = scenarios.map((scenario) => {
     const output = outputsByScenarioId[scenario.id];

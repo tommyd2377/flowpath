@@ -71,6 +71,26 @@ export type EvalOutput = {
   safetyMode?: string;
   webSearchCallCount: number;
   notes?: string;
+  trace?: EvalTrace;
+};
+
+export type EvalTrace = {
+  scenarioId: string;
+  generationKind: "plan" | "reconciliation" | "branch_expansion";
+  model: string | null;
+  modelRole: string | null;
+  webSearchAllowed: boolean;
+  webSearchCallCount: number;
+  schemaValid: boolean;
+  promptSections: string[];
+  boardTitle: string;
+  rootQuestion?: string;
+  branchOptions?: string[];
+  recommendedBranch?: string;
+  actionLeaf?: string;
+  memoryOperations?: string[];
+  searchStatusSummary?: string[];
+  notes?: string[];
 };
 
 export type CriticalFailureId =
@@ -106,6 +126,10 @@ export type EvalSuiteReport = {
   mode: "offline" | "live";
   gitCommit: string | null;
   modelConfig: string | null;
+  selectedScenarioIds?: string[];
+  totalModelCalls?: number;
+  webSearchEnabled?: boolean;
+  traces?: EvalTrace[];
   results: EvalScenarioResult[];
   overallScore: number;
   maxScore: number;

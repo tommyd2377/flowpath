@@ -58,8 +58,8 @@ you intentionally want to spend a bounded number of OpenAI calls.
 
 ```bash
 FLOWPATH_LIVE_EVALS=1 \
-FLOWPATH_LIVE_EVAL_MAX_CALLS=3 \
-FLOWPATH_LIVE_EVAL_MAX_SCENARIOS=3 \
+FLOWPATH_LIVE_EVAL_MAX_CALLS=5 \
+FLOWPATH_LIVE_EVAL_SCENARIOS=tennis_local_community,community_not_dating,career_no_cold_application_traction,memory_correction_private_writing,board_update_weekends_only \
 npm run evals:live
 ```
 
@@ -69,9 +69,29 @@ Optional web search during live evals:
 FLOWPATH_LIVE_EVAL_WEB_SEARCH=1
 ```
 
+Optional one-scenario branch-expansion smoke:
+
+```bash
+FLOWPATH_LIVE_EVAL_EXPAND_SCENARIO=tennis_local_community
+```
+
+If `FLOWPATH_LIVE_EVAL_SCENARIOS` is omitted, live mode runs a small default
+smoke subset, capped by `FLOWPATH_LIVE_EVAL_MAX_CALLS` and
+`FLOWPATH_LIVE_EVAL_MAX_SCENARIOS`.
+
 Live evals use QA-style in-memory board/session objects and should not write
 production data. They still call the configured model, so keep the call budget
 small.
+
+Live reports are written separately from offline reports:
+
+- `docs/evals/latest-flowpath-live-eval.md`
+- `docs/evals/runs/<timestamp>-live.json`
+
+Live reports include compact trace summaries: selected scenario IDs, model
+roles, web-search allowance/call counts, prompt sections, root branches,
+recommended branch, action leaf, reconciliation operations, search statuses,
+and schema-validation status. Full prompts are not dumped by default.
 
 ## Adding A Fixture
 

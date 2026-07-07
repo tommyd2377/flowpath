@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { branchExpansionResultSchema } from "../schemas";
 import { evalScenarios } from "./fixtures";
 import { mockOutputsByScenarioId } from "./mock-outputs";
-import { renderEvalReportMarkdown } from "./report";
+import { renderEvalReportMarkdown, writeEvalReport } from "./report";
 import {
   detectBranchQualityIssues,
   scoreEvalScenario,
   scoreEvalSuite,
 } from "./rubric";
-import { resolveEvalMode } from "./run-evals";
+import {
+  liveEvalReadiness,
+  resolveEvalMode,
+  selectLiveEvalScenarios,
+} from "./run-evals";
 import type { EvalOutput } from "./types";
 
 function cloneOutput(output: EvalOutput): EvalOutput {
@@ -188,36 +195,82 @@ test("reconciliation action scoring rewards concrete next steps over generic upd
   assert.ok(dimensionScore(weekendResult, "action_concreteness") >= 2.5);
 });
 
-test("report renderer includes scenario scores and critical failure summary", () => {
+test("report renderer includes scenario scores, trace summaries, and critical failure summary", () => {
   const report = scoreEvalSuite(evalScenarios.slice(0, 1), mockOutputsByScenarioId, {
     generatedAt: "2026-07-06T00:00:00.000Z",
-    mode: "offline",
+    mode: "live",
     gitCommit: "test",
-    modelConfig: "offline mocked outputs",
+    modelConfig: "live test",
+    selectedScenarioIds: ["tennis_local_community"],
+    totalModelCalls: 1,
+    webSearchEnabled: false,
+    traces: [
+      {
+        scenarioId: "tennis_local_community",
+        generationKind: "plan",
+        model: "test-model",
+        modelRole: "plan_standard",
+        webSearchAllowed: false,
+        webSearchCallCount: 0,
+        schemaValid: true,
+        promptSections: ["moveMapRootPrompt"],
+        boardTitle: "Use tennis to build local community",
+        rootQuestion: "Which tennis path should you take?",
+        branchOptions: ["Beginner clinic", "Coach"],
+        recommendedBranch: "Beginner clinic",
+        actionLeaf: "Contact one beginner clinic",
+        searchStatusSummary: ["needed"],
+      },
+    ],
   });
   const markdown = renderEvalReportMarkdown(report);
   assert.match(markdown, /FlowPath Output Quality Eval/);
   assert.match(markdown, /Tennis \/ local community/);
   assert.match(markdown, /Scenario Summary/);
+  assert.match(markdown, /Live Trace Summary/);
+  assert.match(markdown, /Beginner clinic/);
 });
 
-test("live eval mode is explicitly gated", () => {
+test("report writer keeps live reports separate from offline reports", async () => {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "flowpath-evals-"));
+  try {
+    const offlineReport = scoreEvalSuite(evalScenarios.slice(0, 1), mockOutputsByScenarioId, {
+      generatedAt: "2026-07-06T00:00:00.000Z",
+      mode: "offline",
+      gitCommit: "test",
+      modelConfig: "offline mocked outputs",
+    });
+    const liveReport = {
+      ...offlineReport,
+      generatedAt: "2026-07-06T00:00:01.000Z",
+      mode: "live" as const,
+      modelConfig: "live smoke",
+    };
+    const offlinePaths = await writeEvalReport(offlineReport, outputDir);
+    const livePaths = await writeEvalReport(liveReport, outputDir);
+    assert.match(offlinePaths.latestPath, /latest-flowpath-eval\.md$/);
+    assert.match(offlinePaths.jsonPath, /2026-07-06T00-00-00-000Z\.json$/);
+    assert.match(livePaths.latestPath, /latest-flowpath-live-eval\.md$/);
+    assert.match(livePaths.jsonPath, /2026-07-06T00-00-01-000Z-live\.json$/);
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test("live eval mode is explicitly gated without failing when env is missing", () => {
   assert.equal(resolveEvalMode(["--offline"], {}), "offline");
-  assert.throws(
-    () => resolveEvalMode(["--live"], {}),
-    /FLOWPATH_LIVE_EVALS=1/,
-  );
-  assert.throws(
-    () => resolveEvalMode(["--live"], { FLOWPATH_LIVE_EVALS: "1" }),
-    /OPENAI_API_KEY/,
-  );
-  assert.throws(
-    () =>
-      resolveEvalMode(["--live"], {
-        FLOWPATH_LIVE_EVALS: "1",
-        OPENAI_API_KEY: "test",
-      }),
-    /FLOWPATH_LIVE_EVAL_MAX_CALLS/,
+  assert.equal(resolveEvalMode(["--live"], {}), "live_unavailable");
+  assert.deepEqual(liveEvalReadiness(["--live"], {}).missing, [
+    "FLOWPATH_LIVE_EVALS=1",
+    "OPENAI_API_KEY",
+    "FLOWPATH_LIVE_EVAL_MAX_CALLS",
+  ]);
+  assert.equal(
+    resolveEvalMode(["--live"], {
+      FLOWPATH_LIVE_EVALS: "1",
+      OPENAI_API_KEY: "test",
+    }),
+    "live_unavailable",
   );
   assert.equal(
     resolveEvalMode(["--live"], {
@@ -226,5 +279,43 @@ test("live eval mode is explicitly gated", () => {
       FLOWPATH_LIVE_EVAL_MAX_CALLS: "1",
     }),
     "live",
+  );
+});
+
+test("live eval scenario selection supports explicit IDs and budget caps", () => {
+  const selected = selectLiveEvalScenarios(evalScenarios, {
+    FLOWPATH_LIVE_EVAL_MAX_CALLS: "2",
+    FLOWPATH_LIVE_EVAL_SCENARIOS:
+      "community_not_dating,memory_correction_private_writing",
+  });
+  assert.deepEqual(
+    selected.map((scenario) => scenario.id),
+    ["community_not_dating", "memory_correction_private_writing"],
+  );
+
+  const cappedDefault = selectLiveEvalScenarios(evalScenarios, {
+    FLOWPATH_LIVE_EVAL_MAX_CALLS: "2",
+  });
+  assert.deepEqual(
+    cappedDefault.map((scenario) => scenario.id),
+    ["tennis_local_community", "community_not_dating"],
+  );
+
+  assert.throws(
+    () =>
+      selectLiveEvalScenarios(evalScenarios, {
+        FLOWPATH_LIVE_EVAL_MAX_CALLS: "1",
+        FLOWPATH_LIVE_EVAL_SCENARIOS:
+          "community_not_dating,memory_correction_private_writing",
+      }),
+    /budget 1/,
+  );
+  assert.throws(
+    () =>
+      selectLiveEvalScenarios(evalScenarios, {
+        FLOWPATH_LIVE_EVAL_MAX_CALLS: "1",
+        FLOWPATH_LIVE_EVAL_SCENARIOS: "unknown_scenario",
+      }),
+    /Unknown live eval scenario/,
   );
 });

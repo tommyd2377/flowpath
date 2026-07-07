@@ -1,9 +1,10 @@
 # FlowPath Output Quality Eval
 
-Generated: 2026-07-06T23:46:41.857Z
+Generated: 2026-07-06T23:57:17.558Z
 Mode: offline
-Git commit: dfc6802
+Git commit: 066bf3e
 Model config: offline mocked outputs
+Scenario IDs: tennis_local_community, yoga_social_connection, career_no_cold_application_traction, first_time_entrepreneur, creative_professionalization_too_early, community_not_dating, rural_community_constraint, urgent_eviction_pressure, memory_correction_private_writing, board_update_weekends_only
 
 Overall: PASS - 290.0 / 300 (97%)
 
