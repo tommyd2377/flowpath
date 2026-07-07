@@ -14,6 +14,7 @@ import {
   reconciliationJsonSchema,
   reconciliationSystemPrompt,
   socialConnectionInstruction,
+  trimNextMovePlanOutput,
 } from "./flowpath-ai";
 import { buildFallbackDecisionTree } from "./decision-tree";
 import {
@@ -164,6 +165,45 @@ test("branch expansion JSON schema requires branch metadata and search status", 
   assert.match(schema, /first_action_preview/);
   assert.match(schema, /search_status/);
   assert.match(schema, /search_needed/);
+});
+
+test("generated decision tree trim fills blank child node questions", () => {
+  const output = trimNextMovePlanOutput({
+    decision_tree: {
+      id: "tree-1",
+      root_node_id: "root",
+      active_node_id: "action-1",
+      recommended_option_id: "option-1",
+      selected_path: ["option-1"],
+      created_at: "2026-07-07T00:00:00.000Z",
+      updated_at: "2026-07-07T00:00:00.000Z",
+      nodes: [
+        {
+          id: "root",
+          kind: "decision",
+          title: "Root",
+          question: "Which path should you take?",
+          context_summary: "A root decision.",
+          options: [],
+        },
+        {
+          id: "action-1",
+          kind: "action",
+          title: "Contact or sign up",
+          question: "   ",
+          context_summary: "A generated action node with a blank question.",
+          options: [],
+        },
+      ],
+    },
+  }) as {
+    decision_tree: { nodes: Array<{ question: string }> };
+  };
+
+  assert.equal(
+    output.decision_tree.nodes[1]?.question,
+    "Take the next action for Contact or sign up.",
+  );
 });
 
 test("reconciliation prompt prevents append-only contradictory memory", () => {

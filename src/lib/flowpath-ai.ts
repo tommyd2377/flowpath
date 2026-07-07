@@ -1020,6 +1020,14 @@ function trimDecisionOptions(value: unknown) {
   );
 }
 
+function fallbackDecisionNodeQuestion(node: JsonRecord) {
+  const rawTitle = typeof node.title === "string" ? node.title.trim() : "";
+  const title = rawTitle || "this path";
+  if (node.kind === "action") return `Take the next action for ${title}.`;
+  if (node.kind === "outcome") return `What happened after ${title}?`;
+  return `What should happen next for ${title}?`;
+}
+
 function trimDecisionTree(value: unknown) {
   if (!isJsonRecord(value)) return value;
   return {
@@ -1036,13 +1044,21 @@ function trimDecisionTree(value: unknown) {
     nodes: Array.isArray(value.nodes)
       ? value.nodes.map((node) =>
           isJsonRecord(node)
-            ? {
-                ...trimGeneratedRecordStrings(node, {
+            ? (() => {
+                const trimmedNode = trimGeneratedRecordStrings(node, {
                   id: 120,
                   title: 180,
                   question: 500,
                   context_summary: 1200,
-                }),
+                });
+                const question =
+                  typeof trimmedNode.question === "string" &&
+                  trimmedNode.question.trim()
+                    ? trimmedNode.question
+                    : fallbackDecisionNodeQuestion(trimmedNode);
+                return {
+                  ...trimmedNode,
+                  question,
                 parent_id:
                   typeof node.parent_id === "string"
                     ? trimGeneratedString(node.parent_id, 120)
@@ -1061,7 +1077,8 @@ function trimDecisionTree(value: unknown) {
                     : node.generated_at,
                 action: trimDecisionAction(node.action),
                 options: trimDecisionOptions(node.options),
-              }
+                };
+              })()
             : node,
         )
       : value.nodes,
@@ -1203,7 +1220,7 @@ function trimHighestLeverageMove(value: unknown) {
   });
 }
 
-function trimNextMovePlanOutput(value: unknown) {
+export function trimNextMovePlanOutput(value: unknown) {
   if (!isJsonRecord(value)) return value;
   return {
     ...trimGeneratedRecordStrings(value, {
