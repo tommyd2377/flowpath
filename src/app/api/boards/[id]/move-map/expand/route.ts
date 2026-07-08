@@ -281,6 +281,16 @@ export async function POST(request: Request, context: Context) {
             selectedPath: input.selected_path,
             expansion: generated.expansion,
             webSearchCallCount: generated.webSearchCallCount,
+            contextText: [
+              board.title,
+              board.description,
+              plan.situation_read,
+              plan.situation_summary,
+              plan.highest_leverage_move_today.title,
+              plan.highest_leverage_move_today.description,
+              ...plan.key_constraints,
+              ...plan.assumptions,
+            ].join(" "),
           });
           generatedBy = "model_backed";
           modelUsed = generated.model;
@@ -315,6 +325,10 @@ export async function POST(request: Request, context: Context) {
                   option.id,
                 )?.next_node_id,
               )?.kind ?? null,
+              structured_output_repaired:
+                generated.structuredOutput.structuredOutputRepaired,
+              structured_output_repair_attempts:
+                generated.structuredOutput.structuredOutputRepairAttempts,
             },
           });
         } catch (generationError) {

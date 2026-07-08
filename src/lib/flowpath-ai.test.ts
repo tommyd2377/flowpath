@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { z } from "zod";
 
 import {
   branchExpansionJsonSchema,
@@ -9,11 +10,13 @@ import {
   firstIntakeQuestionSystemPrompt,
   intakeInferredMemoryInstruction,
   operatorPlanInstruction,
+  parseStructuredOutputWithRepair,
   parseFirstIntakeQuestionOutput,
   privacyAwareConstraintInstruction,
   reconciliationJsonSchema,
   reconciliationSystemPrompt,
   socialConnectionInstruction,
+  StructuredOutputRecoveryError,
   trimNextMovePlanOutput,
 } from "./flowpath-ai";
 import { buildFallbackDecisionTree } from "./decision-tree";
@@ -37,6 +40,87 @@ const baseSituation: Situation = {
   created_at: "2026-05-30T00:00:00.000Z",
   updated_at: "2026-05-30T00:00:00.000Z",
 };
+
+const simpleStructuredSchema = z.object({
+  answer: z.string(),
+});
+
+function parseSimpleStructuredOutput(outputText: string) {
+  return simpleStructuredSchema.parse(JSON.parse(outputText));
+}
+
+test("structured output parser returns valid JSON without repair", async () => {
+  let repairCalls = 0;
+  const result = await parseStructuredOutputWithRepair({
+    name: "test_structured_output",
+    outputText: JSON.stringify({ answer: "ready" }),
+    parse: parseSimpleStructuredOutput,
+    repairOutputText: async () => {
+      repairCalls += 1;
+      return { outputText: JSON.stringify({ answer: "unused" }) };
+    },
+  });
+
+  assert.equal(result.parsed.answer, "ready");
+  assert.equal(result.structuredOutputRepaired, false);
+  assert.equal(result.structuredOutputAttempts, 1);
+  assert.equal(result.structuredOutputRepairAttempts, 0);
+  assert.equal(repairCalls, 0);
+});
+
+test("structured output parser repairs malformed JSON once", async () => {
+  const result = await parseStructuredOutputWithRepair({
+    name: "test_structured_output",
+    outputText: '{"answer": "almost"',
+    parse: parseSimpleStructuredOutput,
+    repairOutputText: async ({ initialErrorSummary, initialRawOutputExcerpt }) => {
+      assert.match(initialErrorSummary, /JSON|position|Expected/i);
+      assert.match(initialRawOutputExcerpt, /almost/);
+      return { outputText: JSON.stringify({ answer: "repaired" }) };
+    },
+  });
+
+  assert.equal(result.parsed.answer, "repaired");
+  assert.equal(result.structuredOutputRepaired, true);
+  assert.equal(result.structuredOutputAttempts, 2);
+  assert.equal(result.structuredOutputRepairAttempts, 1);
+  assert.match(result.initialRawOutputExcerpt ?? "", /almost/);
+});
+
+test("structured output parser repairs schema-invalid JSON once", async () => {
+  const result = await parseStructuredOutputWithRepair({
+    name: "test_structured_output",
+    outputText: JSON.stringify({ answer: 42 }),
+    parse: parseSimpleStructuredOutput,
+    repairOutputText: async ({ initialErrorSummary }) => {
+      assert.match(initialErrorSummary, /Expected string|Invalid input/i);
+      return { outputText: JSON.stringify({ answer: "schema repaired" }) };
+    },
+  });
+
+  assert.equal(result.parsed.answer, "schema repaired");
+  assert.equal(result.structuredOutputRepaired, true);
+  assert.match(result.initialErrorSummary ?? "", /answer|Expected string|Invalid input/i);
+});
+
+test("structured output parser throws structured recovery error after repair fails", async () => {
+  await assert.rejects(
+    () =>
+      parseStructuredOutputWithRepair({
+        name: "test_structured_output",
+        outputText: '{"answer": "almost"',
+        parse: parseSimpleStructuredOutput,
+        repairOutputText: async () => ({ outputText: JSON.stringify({ answer: 42 }) }),
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof StructuredOutputRecoveryError);
+      assert.match(error.initialErrorSummary, /JSON|position|Expected/i);
+      assert.match(error.repairErrorSummary, /answer|Expected string|Invalid input/i);
+      assert.match(error.initialRawOutputExcerpt, /almost/);
+      return true;
+    },
+  );
+});
 
 test("privacy-aware prompt instructs least-sensitive constraint collection", () => {
   assert.match(privacyAwareConstraintInstruction, /least sensitive useful/i);
@@ -85,6 +169,15 @@ test("next move plan prompt modules separate board, move map, action, memory, se
   assert.match(nextMovePlanPromptModules.moveMapRootPrompt, /sixth only when genuinely needed/i);
   assert.doesNotMatch(nextMovePlanPromptModules.moveMapRootPrompt, /exactly three/i);
 
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /user-facing product copy/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /plain-language real-world option/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Acting fundamentals/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /On-camera acting/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Improv class/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /container/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /highest-signal/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /provider/i);
+
   assert.match(nextMovePlanPromptModules.taskExtractionInstruction, /subordinate to the selected Move Map line/i);
   assert.match(nextMovePlanPromptModules.memoryExtractionInstruction, /Do not duplicate existing memory/i);
   assert.match(nextMovePlanPromptModules.safetyBoundaryInstruction, /urgent housing instability/i);
@@ -101,6 +194,7 @@ test("branch quality module forbids sequential task lists as root branches", () 
   assert.match(instruction, /not sequential tasks/i);
   assert.match(instruction, /search local options/i);
   assert.match(instruction, /send one message/i);
+  assert.match(instruction, /choose one weekly place/i);
   assert.match(instruction, /peer branches/i);
   assert.match(instruction, /Do not force exactly three branches/i);
   assert.match(instruction, /professional networking/i);
@@ -108,17 +202,31 @@ test("branch quality module forbids sequential task lists as root branches", () 
   assert.match(instruction, /not dating/i);
 });
 
+test("user-facing label module bans internal strategy labels", () => {
+  const instruction = nextMovePlanPromptModules.userFacingLabelInstruction;
+  assert.match(instruction, /Move Map labels are user-facing/i);
+  assert.match(instruction, /Do not use internal strategy vocabulary/i);
+  assert.match(instruction, /lowest-friction/i);
+  assert.match(instruction, /supporting prerequisite/i);
+  assert.match(instruction, /class, course, clinic, group, or workshop/i);
+  assert.match(instruction, /ask whether this level fits/i);
+});
+
 test("action leaf module requires concrete executable actions", () => {
   const instruction = nextMovePlanPromptModules.actionLeafInstruction;
   assert.match(instruction, /executable verb/i);
   assert.match(instruction, /object of action/i);
   assert.match(instruction, /scope or quantity/i);
+  assert.match(instruction, /search query terms/i);
+  assert.match(instruction, /shortlist criteria/i);
+  assert.match(instruction, /target quantity/i);
   assert.match(instruction, /success condition/i);
   assert.match(instruction, /if-blocked fallback/i);
   assert.match(instruction, /Avoid vague actions/i);
   assert.match(instruction, /Network more/i);
   assert.match(instruction, /memory corrections/i);
-  assert.match(instruction, /Recalculate this board/i);
+  assert.match(instruction, /No action needed/i);
+  assert.match(instruction, /private 30-minute writing session/i);
 });
 
 test("search honesty module forbids local verification claims without search", () => {
@@ -127,7 +235,12 @@ test("search honesty module forbids local verification claims without search", (
   assert.match(instruction, /do not imply "I found"/i);
   assert.match(instruction, /Use search_status searched only when web search was actually used/i);
   assert.match(instruction, /mark search_status needed/i);
-  assert.match(instruction, /concrete search\/check step/i);
+  assert.match(instruction, /concrete search\/check workflow/i);
+  assert.match(instruction, /target quantity/i);
+  assert.match(instruction, /shortlist criteria/i);
+  assert.match(instruction, /specific provider/i);
+  assert.match(instruction, /advanced level/i);
+  assert.match(instruction, /placement or fit/i);
 });
 
 test("social tone module avoids dating assumptions and manipulative language", () => {
@@ -147,10 +260,12 @@ test("branch expansion prompt is scoped to one selected path and avoids fake for
   assert.match(branchExpansionSystemPrompt, /not writing a complete board plan/i);
   assert.match(branchExpansionSystemPrompt, /decision node/i);
   assert.match(branchExpansionSystemPrompt, /action leaf/i);
+  assert.match(branchExpansionSystemPrompt, /user-facing product copy/i);
   assert.match(branchExpansionSystemPrompt, /2-5 options/i);
   assert.match(branchExpansionSystemPrompt, /Do not force exactly three/i);
   assert.match(branchExpansionSystemPrompt, /sequential steps/i);
   assert.match(branchExpansionSystemPrompt, /Do not hallucinate local\/current\/external facts/i);
+  assert.match(branchExpansionSystemPrompt, /concrete action leaf/i);
   assert.match(branchExpansionSystemPrompt, /friendship\/community/i);
   assert.match(branchExpansionSystemPrompt, /not dating/i);
 });
@@ -216,6 +331,8 @@ test("reconciliation prompt prevents append-only contradictory memory", () => {
   assert.match(reconciliationSystemPrompt, /recommended_followup_action/i);
   assert.match(reconciliationSystemPrompt, /No action needed/i);
   assert.match(reconciliationSystemPrompt, /recalculate, or continue/i);
+  assert.match(reconciliationSystemPrompt, /do not stop at "recalculate"/i);
+  assert.match(reconciliationSystemPrompt, /private writing session/i);
 });
 
 test("reconciliation JSON schema exposes memory ids and board move-map effects", () => {

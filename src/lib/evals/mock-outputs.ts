@@ -160,10 +160,10 @@ const tennisTree = decisionTree({
   recommendedOptionId: "clinic_group",
   currentAction: action(
     "Contact one beginner-friendly tennis container",
-    "Search beginner tennis clinics or recurring groups near Bed-Stuy / 11216 and contact one option. Do not treat any local option as verified until you check it.",
+    "Search for 3 recurring beginner adult tennis clinics or social drill groups within 20-30 minutes of 11216. Use search terms like 'beginner adult tennis clinic near Bed-Stuy', 'adult tennis clinic Brooklyn beginner', and 'social tennis drill Brooklyn'. Shortlist only recurring, beginner-friendly, low-pressure options that are not competitive pickup, then contact the best match today. Do not treat any local option as verified until you check it.",
     {
-      success_condition: "One beginner-friendly recurring tennis option is contacted.",
-      fallback: "If no clinic is obvious, ask one public-court program or coach where adult beginners usually start.",
+      success_condition: "Three candidates are shortlisted or one beginner-friendly recurring tennis option is contacted today.",
+      fallback: "If no clinic appears, contact one private or semi-private coach and ask where adult beginners usually move into group play.",
     },
   ),
   options: branches("root", [
@@ -175,7 +175,11 @@ const tennisTree = decisionTree({
       search: "needed",
       firstAction: action(
         "Contact one beginner-friendly tennis container",
-        "Search beginner tennis clinics or recurring groups near Bed-Stuy / 11216 and contact one option.",
+        "Search for 3 recurring beginner adult tennis clinics or social drill groups within 20-30 minutes of 11216 using 'beginner adult tennis clinic near Bed-Stuy', 'adult tennis clinic Brooklyn beginner', and 'social tennis drill Brooklyn', then contact the best recurring low-pressure option today.",
+        {
+          success_condition: "Three candidates are shortlisted or one message is sent today.",
+          fallback: "If no clinic appears, contact one coach and ask where adult beginners usually move into group play.",
+        },
       ),
     },
     {
@@ -242,6 +246,83 @@ const yogaTree = decisionTree({
       search: "needed",
     },
   ]),
+});
+
+const actingTree = decisionTree({
+  id: "eval-acting-tree",
+  rootQuestion: "Which acting-class format should you try first in Brooklyn?",
+  rootSummary:
+    "The user wants an advanced acting class near Bed-Stuy or nearby Brooklyn, with improv as an appealing social/craft direction.",
+  recommendedOptionId: "improv_class",
+  currentAction: action(
+    "Ask Brooklyn Comedy Collective whether Level 3 fits",
+    "Use the searched Brooklyn Comedy Collective class information as a lead, then send one placement/fit message asking whether Level 3 matches your current improv experience and whether evenings or weekends are available.",
+    {
+      success_condition: "One fit-check message is sent or the correct placement path is identified.",
+      fallback: "If Level 3 is not a fit, ask which advanced or intermediate improv class they recommend near Bed-Stuy.",
+    },
+  ),
+  options: branches("root", [
+    {
+      id: "improv_class",
+      label: "Improv class in Brooklyn",
+      description:
+        "Best match for the user's stated interest, social repetition, and Brooklyn preference; confirm level fit before enrolling.",
+      level: "recommended",
+      search: "searched",
+      firstAction: action(
+        "Ask Brooklyn Comedy Collective whether Level 3 fits",
+        "Send one placement/fit message asking whether Level 3 matches your current improv experience and schedule.",
+        {
+          success_condition: "One fit-check message is sent.",
+          fallback: "If that level is not right, ask for the nearest advanced or intermediate improv class.",
+        },
+      ),
+    },
+    {
+      id: "on_camera_acting",
+      label: "On-camera acting",
+      description: "Useful if screen acting matters more than live ensemble energy.",
+      level: "viable",
+      search: "needed",
+    },
+    {
+      id: "scene_study",
+      label: "Scene study",
+      description: "A strong acting-craft path if the user wants repeated partner work and text analysis.",
+      level: "viable",
+      search: "needed",
+    },
+    {
+      id: "trial_workshop",
+      label: "Trial workshop",
+      description: "Lower commitment if the user wants to check fit before joining a full class.",
+      level: "supplement",
+      search: "needed",
+    },
+    {
+      id: "audition_monologue",
+      label: "Audition or monologue class",
+      description: "More targeted, but less aligned with the stated improv/social pull.",
+      level: "not_now",
+      search: "needed",
+    },
+  ]).map((branch) =>
+    branch.id === "improv_class"
+      ? {
+          ...branch,
+          sources: [
+            {
+              title: "Brooklyn Comedy Collective improv class lead",
+              why_it_matters:
+                "Mock searched result used only as a fit-check lead; level and schedule still need confirmation.",
+              source: "mock_search",
+              url_or_next_search: "Search Brooklyn Comedy Collective Level 3 improv class",
+            },
+          ],
+        }
+      : branch,
+  ),
 });
 
 const careerTree = decisionTree({
@@ -613,7 +694,7 @@ const branchExpansion: BranchExpansionResultInput = {
   result_type: "decision_node",
   node: {
     kind: "decision",
-    title: "Choose the recurring container",
+    title: "Choose the recurring group",
     question: "Which beginner-friendly recurring option should you test first?",
     summary: "Stay focused on repeatable beginner exposure, not one-off browsing.",
     options: [
@@ -681,6 +762,22 @@ export const mockOutputsByScenarioId: Record<string, EvalOutput> = {
     },
     decisionTree: yogaTree,
     webSearchCallCount: 0,
+  },
+  acting_class_brooklyn: {
+    scenarioId: "acting_class_brooklyn",
+    boardTitle: "Find an acting class in Brooklyn",
+    primaryDomain: "people_community_belonging",
+    secondaryDomains: ["craft_creativity_mastery"],
+    boardState: {
+      currentPosition:
+        "The user wants an advanced acting class near Bed-Stuy or nearby Brooklyn, is open on evenings or weekends, has no price constraint, and is especially interested in improv.",
+      goal: "Find a Brooklyn acting class that also creates a creative social setting.",
+      constraints: ["Advanced level", "Bed-Stuy or nearby Brooklyn", "Improv preferred"],
+      assets: ["Flexible schedule", "No price constraint", "Clear interest in improv"],
+      assumptions: ["Level fit should be confirmed before enrolling"],
+    },
+    decisionTree: actingTree,
+    webSearchCallCount: 1,
   },
   career_no_cold_application_traction: {
     scenarioId: "career_no_cold_application_traction",

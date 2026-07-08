@@ -11,6 +11,7 @@
     "evals": "tsx src/lib/evals/run-evals.ts",
     "evals:offline": "tsx src/lib/evals/run-evals.ts --offline",
     "evals:live": "FLOWPATH_LIVE_EVALS=1 tsx src/lib/evals/run-evals.ts --live",
+    "evals:live:compare": "FLOWPATH_LIVE_EVALS=1 tsx src/lib/evals/run-evals.ts --live-compare",
     "generation:report": "tsx scripts/flowpath-generation-report.ts",
     "db:init": "node scripts/init-db.mjs",
     "db:seed": "node scripts/seed-db.mjs",

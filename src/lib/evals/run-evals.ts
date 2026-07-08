@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   attachBranchExpansionToTree,
+  decisionActionTaskNotes,
   findDecisionOption,
   getDecisionNode,
   rootDecisionNode,
@@ -11,6 +12,7 @@ import {
   generateBranchExpansion,
   generateNextMovePlan,
   reconcileMemoryAndBoardUpdate,
+  StructuredOutputRecoveryError,
   type ReconciliationGenerationContext,
   type StrategistContext,
 } from "../flowpath-ai";
@@ -31,10 +33,29 @@ import type {
   Task,
 } from "../types";
 import { evalScenarios } from "./fixtures";
+import {
+  LIVE_COMPARISON_COMMAND,
+  baselineAnswerSchema,
+  baselineModelFromEnv,
+  generateDirectBaselineAnswer,
+  judgeModelFromEnv,
+  liveComparisonReadiness,
+  liveComparisonRequested,
+  runPairwiseJudge,
+  selectLiveComparisonScenarios,
+  shouldRunPairwiseJudge,
+} from "./live-comparison";
 import { mockOutputsByScenarioId } from "./mock-outputs";
-import { writeEvalReport } from "./report";
-import { scoreEvalSuite } from "./rubric";
-import type { EvalMemoryItem, EvalOutput, EvalScenario, EvalTrace } from "./types";
+import { writeEvalReport, writeLiveComparisonReport } from "./report";
+import { scoreEvalScenario, scoreEvalSuite } from "./rubric";
+import type {
+  EvalMemoryItem,
+  EvalOutput,
+  EvalScenario,
+  EvalTrace,
+  LiveComparisonReport,
+  LiveComparisonScenarioResult,
+} from "./types";
 
 type EvalEnv = Record<string, string | undefined>;
 
@@ -69,6 +90,12 @@ export function liveEvalReadiness(args: string[], env: EvalEnv) {
 }
 
 export function resolveEvalMode(args: string[], env: EvalEnv) {
+  if (liveComparisonRequested(args, env)) {
+    const comparisonReadiness = liveComparisonReadiness(args, env);
+    return comparisonReadiness.ready
+      ? ("live_compare" as const)
+      : ("live_compare_unavailable" as const);
+  }
   const readiness = liveEvalReadiness(args, env);
   if (!readiness.requestedLive) return "offline" as const;
   if (!readiness.ready) return "live_unavailable" as const;
@@ -84,6 +111,78 @@ function currentGitCommit() {
   } catch {
     return null;
   }
+}
+
+function liveGenerationFailureId(error: unknown) {
+  if (error instanceof StructuredOutputRecoveryError) {
+    return "structured_repair_failed" as const;
+  }
+  if (error instanceof SyntaxError || /json|parse/i.test((error as Error)?.message ?? "")) {
+    return "malformed_model_json" as const;
+  }
+  if (/schema|zod|invalid_type|too_small|too_big/i.test((error as Error)?.message ?? "")) {
+    return "schema_validation_failed" as const;
+  }
+  return "schema_validation_failed" as const;
+}
+
+function liveFailureOutput(
+  scenario: EvalScenario,
+  index: number,
+  error: unknown,
+): EvalOutput {
+  const id = liveGenerationFailureId(error);
+  const note =
+    error instanceof StructuredOutputRecoveryError
+      ? error.repairErrorSummary
+      : error instanceof Error
+        ? error.message.slice(0, 1200)
+        : String(error).slice(0, 1200);
+  const rawOutputExcerpt =
+    error instanceof StructuredOutputRecoveryError
+      ? error.initialRawOutputExcerpt
+      : undefined;
+  const boardTitle = inferBoardTitle(scenario.entryDomain, scenario.userInputs.join("\n"));
+  return {
+    scenarioId: scenario.id,
+    boardTitle,
+    primaryDomain: scenario.entryDomain,
+    secondaryDomains: [],
+    boardState: {
+      currentPosition: scenario.userInputs.join("\n"),
+      goal: scenario.userInputs[0] ?? "",
+      constraints: [],
+      assets: [],
+      assumptions: [],
+    },
+    decisionTree: null,
+    webSearchCallCount: 0,
+    notes: `Live generation failed: ${note}`,
+    generationFailure: {
+      id,
+      note,
+      rawOutputExcerpt,
+    },
+    trace: {
+      scenarioId: scenario.id,
+      generationKind: "plan",
+      model: null,
+      modelRole: null,
+      webSearchAllowed: process.env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+      webSearchCallCount: 0,
+      schemaValid: false,
+      promptSections: [],
+      boardTitle,
+      structuredOutputRepaired: false,
+      structuredOutputRepairAttempts: error instanceof StructuredOutputRecoveryError ? 1 : 0,
+      structuredOutputInitialError:
+        error instanceof StructuredOutputRecoveryError
+          ? error.initialErrorSummary
+          : note,
+      structuredOutputRawExcerpt: rawOutputExcerpt,
+      notes: [`scenario_index=${index}`, `failure=${id}`, note],
+    },
+  };
 }
 
 function scenarioCountFromEnv(env: EvalEnv) {
@@ -221,6 +320,7 @@ function traceFromPlan({
   modelRole,
   webSearchAllowed,
   webSearchCallCount,
+  structuredOutput,
 }: {
   scenario: EvalScenario;
   output: EvalOutput;
@@ -228,10 +328,17 @@ function traceFromPlan({
   modelRole: string | null;
   webSearchAllowed: boolean;
   webSearchCallCount: number;
+  structuredOutput?: {
+    structuredOutputRepaired: boolean;
+    structuredOutputRepairAttempts: number;
+    initialErrorSummary?: string;
+    initialRawOutputExcerpt?: string;
+  };
 }): EvalTrace {
   const tree = output.decisionTree;
   const root = tree ? rootDecisionNode(tree) : null;
   const recommended = tree ? findDecisionOption(tree, tree.recommended_option_id) : null;
+  const currentAction = output.decisionTree?.current_action;
   return {
     scenarioId: scenario.id,
     generationKind: "plan",
@@ -253,8 +360,13 @@ function traceFromPlan({
     rootQuestion: root?.question,
     branchOptions: root?.options.map((option) => option.label),
     recommendedBranch: recommended?.label,
-    actionLeaf: output.decisionTree?.current_action.title,
+    actionTitle: currentAction?.title,
+    actionLeaf: currentAction ? decisionActionTaskNotes(currentAction) : undefined,
     searchStatusSummary: searchStatuses(tree),
+    structuredOutputRepaired: structuredOutput?.structuredOutputRepaired,
+    structuredOutputRepairAttempts: structuredOutput?.structuredOutputRepairAttempts,
+    structuredOutputInitialError: structuredOutput?.initialErrorSummary,
+    structuredOutputRawExcerpt: structuredOutput?.initialRawOutputExcerpt,
     notes: [
       `expected_primary_domain=${scenario.expected.primaryDomain}`,
       `supplied_entry_domain=${scenario.entryDomain}`,
@@ -471,6 +583,11 @@ async function runLiveReconciliationScenario(
     boardTitle: output.boardTitle,
     actionLeaf: reconciliation.recommended_followup_action,
     memoryOperations: reconciliation.operations.map((operation) => operation.type),
+    structuredOutputRepaired: generated.structuredOutput.structuredOutputRepaired,
+    structuredOutputRepairAttempts:
+      generated.structuredOutput.structuredOutputRepairAttempts,
+    structuredOutputInitialError: generated.structuredOutput.initialErrorSummary,
+    structuredOutputRawExcerpt: generated.structuredOutput.initialRawOutputExcerpt,
     notes: [
       reconciliation.user_visible_explanation,
       reconciliation.move_map_effect?.reason ?? "",
@@ -579,6 +696,18 @@ async function maybeRunBranchExpansionSmoke({
       `expanded_option=${option.label}`,
       `expansion_result=${expanded.expansion.result_type}`,
     ],
+    structuredOutputRepaired:
+      previousTrace.structuredOutputRepaired ||
+      expanded.structuredOutput.structuredOutputRepaired,
+    structuredOutputRepairAttempts:
+      (previousTrace.structuredOutputRepairAttempts ?? 0) +
+      expanded.structuredOutput.structuredOutputRepairAttempts,
+    structuredOutputInitialError:
+      previousTrace.structuredOutputInitialError ??
+      expanded.structuredOutput.initialErrorSummary,
+    structuredOutputRawExcerpt:
+      previousTrace.structuredOutputRawExcerpt ??
+      expanded.structuredOutput.initialRawOutputExcerpt,
   };
   if (output.decisionTree) {
     output.decisionTree = attachBranchExpansionToTree({
@@ -588,13 +717,23 @@ async function maybeRunBranchExpansionSmoke({
       selectedPath: tree.selected_path,
       expansion: expanded.expansion,
       webSearchCallCount: expanded.webSearchCallCount,
+      contextText: [
+        output.boardTitle,
+        output.boardState.currentPosition,
+        output.boardState.goal,
+        ...output.boardState.constraints,
+        ...output.boardState.assumptions,
+      ].join(" "),
     });
     const childOption = findDecisionOption(output.decisionTree, option.id);
     const childNode = getDecisionNode(output.decisionTree, childOption?.next_node_id);
     output.trace.rootQuestion = root.question;
     output.trace.branchOptions = root.options.map((candidate) => candidate.label);
     output.trace.recommendedBranch = option.label;
-    output.trace.actionLeaf = childNode?.action?.title ?? output.trace.actionLeaf;
+    output.trace.actionTitle = childNode?.action?.title ?? output.trace.actionTitle;
+    output.trace.actionLeaf = childNode?.action
+      ? decisionActionTaskNotes(childNode.action)
+      : output.trace.actionLeaf;
     output.trace.searchStatusSummary = searchStatuses(output.decisionTree);
   }
   return { modelCalls: 1 };
@@ -625,48 +764,20 @@ async function runLiveEvalOutputs(
   const outputs: Record<string, EvalOutput> = {};
   let modelCalls = 0;
   for (const [index, scenario] of selectedScenarios.entries()) {
-    if (isReconciliationScenario(scenario)) {
-      const reconciled = await runLiveReconciliationScenario(scenario, index);
-      outputs[scenario.id] = reconciled.output;
-      modelCalls += reconciled.modelCalls;
-      continue;
+    try {
+      const result = await runLiveFlowPathScenario(scenario, index, env, {
+        includeExpansionSmoke: true,
+      });
+      outputs[scenario.id] = result.output;
+      modelCalls += result.modelCalls;
+    } catch (error) {
+      outputs[scenario.id] = liveFailureOutput(scenario, index, error);
+      modelCalls += 1;
+      console.warn(
+        `Live eval scenario ${scenario.id} failed but the suite will continue.`,
+        error instanceof Error ? error.message : error,
+      );
     }
-    const generated = await generateNextMovePlan(liveEvalContextForScenario(scenario, index), {
-      allowWebSearch: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
-    });
-    modelCalls += 1;
-    outputs[scenario.id] = {
-      scenarioId: scenario.id,
-      boardTitle: generated.plan.situation_summary || inferBoardTitle(scenario.entryDomain, scenario.userInputs.join("\n")),
-      primaryDomain: scenario.entryDomain,
-      secondaryDomains: [],
-      boardState: {
-        currentPosition: generated.plan.situation_summary,
-        goal: generated.plan.situation_read,
-        constraints: generated.plan.key_constraints,
-        assets: generated.plan.context_used.map((item) => `${item.label}: ${item.value}`),
-        assumptions: generated.plan.assumptions,
-      },
-      decisionTree: generated.plan.decision_tree,
-      safetyMode: generated.plan.mode,
-      webSearchCallCount: generated.webSearchCallCount,
-      notes: `Live eval model: ${generated.model}`,
-    };
-    outputs[scenario.id].trace = traceFromPlan({
-      scenario,
-      output: outputs[scenario.id],
-      model: generated.model,
-      modelRole: generated.modelRole,
-      webSearchAllowed: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
-      webSearchCallCount: generated.webSearchCallCount,
-    });
-    const expansion = await maybeRunBranchExpansionSmoke({
-      scenario,
-      output: outputs[scenario.id],
-      generatedPlan: generated,
-      webSearchAllowed: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
-    });
-    modelCalls += expansion.modelCalls;
   }
   return {
     outputs,
@@ -678,9 +789,266 @@ async function runLiveEvalOutputs(
   };
 }
 
+async function runLiveFlowPathScenario(
+  scenario: EvalScenario,
+  index: number,
+  env: EvalEnv,
+  options: { includeExpansionSmoke?: boolean } = {},
+): Promise<{ output: EvalOutput; modelCalls: number }> {
+  if (isReconciliationScenario(scenario)) {
+    return runLiveReconciliationScenario(scenario, index);
+  }
+
+  const generated = await generateNextMovePlan(liveEvalContextForScenario(scenario, index), {
+    allowWebSearch: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+  });
+  const output: EvalOutput = {
+    scenarioId: scenario.id,
+    boardTitle:
+      generated.plan.situation_summary ||
+      inferBoardTitle(scenario.entryDomain, scenario.userInputs.join("\n")),
+    primaryDomain: scenario.entryDomain,
+    secondaryDomains: [],
+    boardState: {
+      currentPosition: generated.plan.situation_summary,
+      goal: generated.plan.situation_read,
+      constraints: generated.plan.key_constraints,
+      assets: generated.plan.context_used.map((item) => `${item.label}: ${item.value}`),
+      assumptions: generated.plan.assumptions,
+    },
+    decisionTree: generated.plan.decision_tree,
+    safetyMode: generated.plan.mode,
+    webSearchCallCount: generated.webSearchCallCount,
+    notes: `Live eval model: ${generated.model}`,
+  };
+  output.trace = traceFromPlan({
+    scenario,
+    output,
+    model: generated.model,
+    modelRole: generated.modelRole,
+    webSearchAllowed: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+    webSearchCallCount: generated.webSearchCallCount,
+    structuredOutput: generated.structuredOutput,
+  });
+
+  let modelCalls = 1;
+  if (options.includeExpansionSmoke) {
+    const expansion = await maybeRunBranchExpansionSmoke({
+      scenario,
+      output,
+      generatedPlan: generated,
+      webSearchAllowed: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+    });
+    modelCalls += expansion.modelCalls;
+  }
+  return { output, modelCalls };
+}
+
+async function runLiveComparisonReport({
+  scenarios,
+  env,
+  generatedAt,
+}: {
+  scenarios: EvalScenario[];
+  env: EvalEnv;
+  generatedAt: string;
+}): Promise<LiveComparisonReport> {
+  const selected = selectLiveComparisonScenarios(scenarios, env, 2);
+  const { judgeRequested, judgeEnabled } = shouldRunPairwiseJudge(
+    env,
+    selected.scenarios.length,
+  );
+  const budget = Number(env.FLOWPATH_LIVE_EVAL_MAX_CALLS);
+  const estimatedCalls = selected.scenarios.length * (judgeEnabled ? 3 : 2);
+  console.log(
+    `Live FlowPath vs baseline comparison is enabled. Estimated model calls: ${estimatedCalls}.`,
+  );
+  if (selected.skippedScenarioIds.length) {
+    console.log(
+      `Skipped by budget/scenario cap: ${selected.skippedScenarioIds.join(", ")}.`,
+    );
+  }
+  if (judgeRequested && !judgeEnabled) {
+    console.log("Pairwise judge was requested but skipped because the call budget is too low.");
+  }
+
+  const results: LiveComparisonScenarioResult[] = [];
+  let modelCalls = 0;
+  for (const [index, scenario] of selected.scenarios.entries()) {
+    let flowpath: Awaited<ReturnType<typeof runLiveFlowPathScenario>>;
+    try {
+      flowpath = await runLiveFlowPathScenario(scenario, index, env, {
+        includeExpansionSmoke: false,
+      });
+      modelCalls += flowpath.modelCalls;
+    } catch (error) {
+      flowpath = {
+        output: liveFailureOutput(scenario, index, error),
+        modelCalls: 1,
+      };
+      modelCalls += 1;
+      console.warn(
+        `Live comparison FlowPath scenario ${scenario.id} failed but comparison will continue.`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    let baseline: Awaited<ReturnType<typeof generateDirectBaselineAnswer>>;
+    try {
+      baseline = await generateDirectBaselineAnswer({ scenario, env });
+      modelCalls += baseline.modelCalls;
+    } catch (error) {
+      const failureNote =
+        error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+      const fallbackAnswer = baselineAnswerSchema.parse({
+        summary: `Baseline generation failed: ${failureNote}`,
+        primary_domain: scenario.entryDomain,
+        secondary_domains: [],
+        current_position: scenario.userInputs.join("\n") || scenario.name,
+        goal: scenario.userInputs[0] || scenario.name,
+        constraints: [],
+        assets: [],
+        assumptions: ["The live baseline output could not be parsed."],
+        options: [
+          {
+            label: "Generation failed",
+            rationale: failureNote || "The baseline model response was not usable.",
+            recommendation_level: "not_now",
+            first_action_preview: "Retry the live eval after inspecting the error.",
+            search_status: "not_needed",
+          },
+        ],
+        recommended_next_move: "Retry the live eval after inspecting the error.",
+        first_action: "Retry the live eval after inspecting the error.",
+        first_10_minutes: "Review the parse or schema error in the live report.",
+        success_condition: "The baseline scenario is scored as a controlled failure.",
+        if_blocked: "Run the offline evals and inspect the raw model response.",
+        assumptions_to_watch: [],
+        memory_updates: [],
+        search_status: "not_needed",
+      });
+      baseline = {
+        answer: fallbackAnswer,
+        output: liveFailureOutput(scenario, index, error),
+        model: "generation_failed",
+        modelCalls: 1,
+      };
+      baseline.output.notes = `Live baseline generation failed: ${baseline.output.generationFailure?.note ?? "unknown"}`;
+      modelCalls += 1;
+      console.warn(
+        `Live comparison baseline scenario ${scenario.id} failed but comparison will continue.`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    const flowpathScore = scoreEvalScenario(scenario, flowpath.output);
+    const baselineScore = scoreEvalScenario(scenario, baseline.output);
+    let pairwiseJudge = null;
+    let pairwiseJudgeError: string | null = null;
+    if (judgeEnabled && !flowpath.output.generationFailure && !baseline.output.generationFailure) {
+      try {
+        pairwiseJudge = await runPairwiseJudge({
+          scenario,
+          flowpathOutput: flowpath.output,
+          baselineOutput: baseline.output,
+          env,
+        });
+      } catch (error) {
+        pairwiseJudgeError =
+          error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+        console.warn(
+          `Pairwise judge failed for scenario ${scenario.id}; comparison will continue.`,
+          pairwiseJudgeError,
+        );
+      } finally {
+        modelCalls += 1;
+      }
+    }
+
+    results.push({
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      flowpath: flowpathScore,
+      baseline: baselineScore,
+      delta: flowpathScore.overallScore - baselineScore.overallScore,
+      pairwiseJudge,
+      pairwiseJudgeError,
+      flowpathTrace: flowpath.output.trace,
+      baselineTrace: baseline.output.trace,
+      notes: [
+        pairwiseJudge
+          ? `pairwise_winner=${pairwiseJudge.winner}`
+          : pairwiseJudgeError
+            ? `pairwise_judge_failed=${pairwiseJudgeError}`
+            : "pairwise_judge_not_run",
+      ],
+    });
+  }
+
+  const flowpathScore = results.reduce(
+    (sum, result) => sum + result.flowpath.overallScore,
+    0,
+  );
+  const baselineScore = results.reduce(
+    (sum, result) => sum + result.baseline.overallScore,
+    0,
+  );
+  const flowpathMax = results.reduce((sum, result) => sum + result.flowpath.maxScore, 0);
+  const baselineMax = results.reduce((sum, result) => sum + result.baseline.maxScore, 0);
+  const pairwiseWins = {
+    flowpath: results.filter((result) => result.pairwiseJudge?.winner === "flowpath").length,
+    baseline: results.filter((result) => result.pairwiseJudge?.winner === "baseline").length,
+    tie: results.filter((result) => result.pairwiseJudge?.winner === "tie").length,
+  };
+  const scenarioCount = Math.max(1, results.length);
+
+  return {
+    generatedAt,
+    mode: "live_compare",
+    gitCommit: currentGitCommit(),
+    modelConfig: `flowpath_models=existing routing; baseline=${baselineModelFromEnv(
+      env,
+    )}; judge=${judgeEnabled ? judgeModelFromEnv(env) : "disabled"}; web_search=${
+      env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1"
+    }`,
+    selectedScenarioIds: selected.scenarios.map((scenario) => scenario.id),
+    totalModelCalls: modelCalls,
+    webSearchEnabled: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+    judgeEnabled,
+    judgeRequested,
+    budget: Number.isInteger(budget) ? budget : 0,
+    flowpathAverageScore: flowpathScore / scenarioCount,
+    baselineAverageScore: baselineScore / scenarioCount,
+    flowpathMaxScore: flowpathMax / scenarioCount,
+    baselineMaxScore: baselineMax / scenarioCount,
+    delta: (flowpathScore - baselineScore) / scenarioCount,
+    pairwiseWins,
+    criticalFailures: {
+      flowpath: results.reduce(
+        (sum, result) => sum + result.flowpath.criticalFailures.length,
+        0,
+      ),
+      baseline: results.reduce(
+        (sum, result) => sum + result.baseline.criticalFailures.length,
+        0,
+      ),
+    },
+    results,
+    passed: results.every((result) => result.flowpath.passed),
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const mode = resolveEvalMode(args, process.env);
+  if (mode === "live_compare_unavailable") {
+    const readiness = liveComparisonReadiness(args, process.env);
+    console.log("Live comparison evals were not run because required env vars are missing.");
+    console.log(`Missing: ${readiness.missing.join(", ") || "unknown"}.`);
+    console.log("Run a bounded live comparison with:");
+    console.log(LIVE_COMPARISON_COMMAND);
+    return;
+  }
   if (mode === "live_unavailable") {
     const readiness = liveEvalReadiness(args, process.env);
     console.log("Live evals were not run because required env vars are missing.");
@@ -691,6 +1059,42 @@ async function main() {
   }
   const writeReport = !args.includes("--no-write");
   const generatedAt = new Date().toISOString();
+  if (mode === "live_compare") {
+    const report = await runLiveComparisonReport({
+      scenarios: evalScenarios,
+      env: process.env,
+      generatedAt,
+    });
+    console.log(
+      `${report.passed ? "PASS" : "FAIL"} FlowPath ${report.flowpathAverageScore.toFixed(
+        1,
+      )}/${report.flowpathMaxScore.toFixed(1)} vs baseline ${report.baselineAverageScore.toFixed(
+        1,
+      )}/${report.baselineMaxScore.toFixed(1)} across ${report.results.length} scenario(s).`,
+    );
+    for (const result of report.results) {
+      console.log(
+        `- ${result.scenarioName}: FlowPath ${result.flowpath.overallScore.toFixed(
+          1,
+        )}/${result.flowpath.maxScore}; baseline ${result.baseline.overallScore.toFixed(
+          1,
+        )}/${result.baseline.maxScore}; delta ${
+          result.delta >= 0 ? "+" : ""
+        }${result.delta.toFixed(1)}${
+          result.pairwiseJudge ? `; judge=${result.pairwiseJudge.winner}` : ""
+        }`,
+      );
+    }
+    if (writeReport) {
+      const paths = await writeLiveComparisonReport(report);
+      console.log(`Wrote Markdown report: ${paths.latestPath}`);
+      console.log(`Wrote JSON report: ${paths.jsonPath}`);
+    }
+    if (!report.passed) {
+      process.exitCode = 1;
+    }
+    return;
+  }
   const liveResult =
     mode === "live" ? await runLiveEvalOutputs(evalScenarios, process.env) : null;
   const outputsByScenarioId = liveResult?.outputs ?? mockOutputsByScenarioId;

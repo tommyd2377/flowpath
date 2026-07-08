@@ -425,21 +425,21 @@ function ActionLeaf({
         </span>
         <SearchStatusBadge status={node.search_status} />
       </div>
-      <div className="mt-2 text-base font-semibold leading-6">
+      <div className="mt-2 text-xs font-medium uppercase tracking-wide text-slate-400">
         {branchTask?.title ?? action.title}
       </div>
-      <div className="mt-2 grid gap-1.5 text-xs leading-5 text-slate-300">
-        <p>
-          <span className="font-medium text-slate-100">First action:</span>{" "}
-          {oneLine(action.details, 130)}
+      <div className="mt-2 grid gap-2 text-xs leading-5 text-slate-300">
+        <p className="text-sm font-semibold leading-6 text-slate-100">
+          <span className="font-medium">First action:</span>{" "}
+          {action.details}
         </p>
         <p>
           <span className="font-medium text-slate-100">Success:</span>{" "}
-          {oneLine(action.success_condition, 110)}
+          {action.success_condition}
         </p>
         <p>
           <span className="font-medium text-slate-100">If blocked:</span>{" "}
-          {oneLine(action.fallback, 110)}
+          {action.fallback}
         </p>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">

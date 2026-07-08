@@ -194,6 +194,8 @@ export async function POST(request: Request, context: Context) {
       canUseWebSearchForTier(usageDecision.planTier) ? "not_needed" : "unavailable_for_tier";
     let deterministicSafetyRouted = false;
     let cognitiveMetadata: CognitiveMetadata | undefined;
+    let structuredOutputRepaired = false;
+    let structuredOutputRepairAttempts = 0;
     try {
       if (safetyDecision.planBehavior === "human_help_only") {
         deterministicSafetyRouted = true;
@@ -226,6 +228,9 @@ export async function POST(request: Request, context: Context) {
         webSearchCallCount = generated.webSearchCallCount;
         webSearchDecisionReason = generated.webSearchDecisionReason;
         cognitiveMetadata = generated.cognitiveMetadata;
+        structuredOutputRepaired = generated.structuredOutput.structuredOutputRepaired;
+        structuredOutputRepairAttempts =
+          generated.structuredOutput.structuredOutputRepairAttempts;
       }
     } catch (generationError) {
       const sanitized = sanitizeGenerationError(generationError);
@@ -489,6 +494,8 @@ export async function POST(request: Request, context: Context) {
         inferred_context_items_count: plan.inferred_context_items.length,
         context_used_count: plan.context_used.length,
         deterministic_safety_routed: deterministicSafetyRouted,
+        structured_output_repaired: structuredOutputRepaired,
+        structured_output_repair_attempts: structuredOutputRepairAttempts,
       },
       outcomeHarnessContextIncluded: historicalEffectiveness.hasMeaningfulSignal,
       historicalEffectivenessInfluencedIntervention:

@@ -28,6 +28,7 @@ export const evalScenarios: EvalScenario[] = [
       actionKeywords: ["contact", "beginner"],
       recurringContainerPreferred: true,
       noUnverifiedLocalClaims: true,
+      requiresSearchWorkflowAction: true,
       preservePrimaryDomain: true,
     },
   },
@@ -57,6 +58,37 @@ export const evalScenarios: EvalScenario[] = [
       actionKeywords: ["message", "class"],
       recurringContainerPreferred: true,
       noUnverifiedLocalClaims: true,
+    },
+  },
+  {
+    id: "acting_class_brooklyn",
+    name: "Acting class / Brooklyn options",
+    description:
+      "Class-search board where Move Map branches should be recognizable acting-class formats, not internal strategy labels.",
+    entryDomain: "people_community_belonging",
+    userInputs: [
+      "I want to find a local acting class in Brooklyn for people in their 30s.",
+      "I am more advanced, anytime of the week, money is not a problem, and improv would be fun. Bed-Stuy or nearby Brooklyn is ideal.",
+    ],
+    expected: {
+      primaryDomain: "people_community_belonging",
+      secondaryDomains: ["craft_creativity_mastery"],
+      titleKeywords: ["acting", "class"],
+      goalKeywords: ["acting", "class", "Brooklyn"],
+      constraintKeywords: ["advanced", "Bed-Stuy", "improv"],
+      branchKeywordGroups: [
+        ["improv", "class"],
+        ["on-camera", "acting"],
+        ["scene", "study"],
+        ["trial", "workshop"],
+      ],
+      recommendedBranchKeywords: ["improv", "class"],
+      actionKeywords: ["ask", "fit"],
+      noUnverifiedLocalClaims: true,
+      requiresSearchWorkflowAction: true,
+      avoidInternalJargonLabels: true,
+      providerSpecificKeywords: ["Brooklyn Comedy Collective", "BCC", "Level 3"],
+      requiresProviderGrounding: true,
     },
   },
   {
@@ -165,6 +197,11 @@ export const evalScenarios: EvalScenario[] = [
       recommendedBranchKeywords: ["recurring"],
       actionKeywords: ["join", "recurring"],
       mustAvoidDatingAssumption: true,
+      forbiddenRootBranchLabels: [
+        "choose one weekly place",
+        "choose one recurring",
+        "choose one hobby group",
+      ],
     },
   },
   {
@@ -236,6 +273,7 @@ export const evalScenarios: EvalScenario[] = [
       activeMemoryLabels: ["Writing privacy"],
       staleMemoryLabels: ["Monetize writing"],
       actionKeywords: ["private", "writing", "session"],
+      requiresPracticalReconciliationFollowup: true,
     },
   },
   {

@@ -106,6 +106,10 @@ export async function POST(request: Request) {
             stale_count: applied.counts.marked_stale,
             deleted_count: applied.counts.deleted,
             requires_confirmation: generated.reconciliation.requires_user_confirmation,
+            structured_output_repaired:
+              generated.structuredOutput.structuredOutputRepaired,
+            structured_output_repair_attempts:
+              generated.structuredOutput.structuredOutputRepairAttempts,
           },
         });
         generationEventCompleted = true;

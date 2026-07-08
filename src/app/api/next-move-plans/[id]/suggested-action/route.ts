@@ -8,7 +8,10 @@ import {
   readJson,
 } from "@/lib/api-response";
 import { requireUser } from "@/lib/auth";
-import { findDecisionOption } from "@/lib/decision-tree";
+import {
+  canonicalDecisionActionText,
+  findDecisionOption,
+} from "@/lib/decision-tree";
 import { buildIntakeRoutingMetadata } from "@/lib/intake";
 import {
   createOutcomeHarnessEvent,
@@ -62,9 +65,12 @@ function originalSuggestedAction(
     };
   }
   const firstTask = plan.task_candidates[0];
+  const canonicalAction = plan.decision_tree.current_action;
+  const canonicalDescription = canonicalDecisionActionText(canonicalAction);
   return {
-    title: firstTask?.title || plan.first_10_minute_action.title,
+    title: firstTask?.title || canonicalAction.title || plan.first_10_minute_action.title,
     description:
+      canonicalDescription ||
       firstTask?.description ||
       firstTask?.details ||
       plan.first_10_minute_action.details,

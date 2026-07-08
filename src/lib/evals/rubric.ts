@@ -1,6 +1,7 @@
 import {
   decisionTreeTrace,
   findDecisionOption,
+  hasInternalMoveMapLabelJargon,
   rootDecisionNode,
 } from "../decision-tree";
 import {
@@ -8,8 +9,15 @@ import {
   decisionTreeSchema,
   reconciliationResultSchema,
 } from "../schemas";
-import type { DecisionOption, DecisionTree } from "../types";
 import type {
+  DecisionFirstAction,
+  DecisionOption,
+  DecisionSearchStatus,
+  DecisionTree,
+} from "../types";
+import type {
+  CriticalFailure,
+  CriticalFailureEvidence,
   CriticalFailureId,
   EvalOutput,
   EvalScenario,
@@ -25,6 +33,7 @@ const DIMENSION_LABELS: Record<RubricDimensionId, string> = {
   domain_correctness: "Domain correctness",
   board_state_accuracy: "Board-state accuracy",
   branch_quality: "Branch quality",
+  label_quality: "User-facing label quality",
   recommended_line_quality: "Recommended line quality",
   action_concreteness: "Action concreteness",
   search_honesty: "Search honesty",
@@ -55,6 +64,17 @@ const TASK_LIKE_VERBS = [
 const CONCRETE_ACTION_VERB =
   /contact|message|send|call|search|choose|book|share|join|schedule|write|list|recalculate|protect|continue|preserve/;
 
+const LOCAL_SEARCH_SIGNAL =
+  /\b(local|nearby|near me|neighborhood|zip|brooklyn|bed-stuy|11216|within \d+|commute|class|clinic|studio|coach|program|group|meetup|event|availability|schedule|level fit|placement)\b/i;
+
+type VisibleEvalField = {
+  fieldPath: string;
+  text: string;
+  visible: boolean;
+  source: CriticalFailureEvidence["source"];
+  searchStatus?: string;
+};
+
 function normalize(value: string) {
   return value
     .toLowerCase()
@@ -67,8 +87,12 @@ function normalize(value: string) {
 function outputText(output: EvalOutput) {
   const tree = output.decisionTree;
   const treeText = tree
-    ? tree.nodes
-        .flatMap((node) => [
+    ? [
+        tree.current_action.title,
+        tree.current_action.details,
+        tree.current_action.success_condition,
+        tree.current_action.fallback,
+        ...tree.nodes.flatMap((node) => [
           node.title,
           node.question,
           node.context_summary,
@@ -89,8 +113,8 @@ function outputText(output: EvalOutput) {
               source.url_or_next_search,
             ]),
           ]),
-        ])
-        .join(" ")
+        ]),
+      ].join(" ")
     : "";
   const branchExpansionText = output.branchExpansion
     ? JSON.stringify(output.branchExpansion)
@@ -147,6 +171,25 @@ function rootOptions(tree: DecisionTree | null | undefined) {
   return rootDecisionNode(tree).options;
 }
 
+function visibleMoveMapLabels(output: EvalOutput) {
+  const treeLabels = output.decisionTree
+    ? output.decisionTree.nodes.flatMap((node) => [
+        node.title,
+        ...node.options.map((option) => option.label),
+      ])
+    : [];
+  const branchExpansionLabels =
+    output.branchExpansion?.result_type === "decision_node" && output.branchExpansion.node
+      ? [
+          output.branchExpansion.node.title,
+          ...output.branchExpansion.node.options.map((option) => option.label),
+        ]
+      : output.branchExpansion?.action_leaf
+        ? [output.branchExpansion.action_leaf.title]
+        : [];
+  return [...treeLabels, ...branchExpansionLabels].filter(Boolean);
+}
+
 function recommendedOption(tree: DecisionTree | null | undefined) {
   if (!tree) return null;
   return findDecisionOption(tree, tree.recommended_option_id) ?? null;
@@ -176,6 +219,195 @@ function activeActionText(output: EvalOutput) {
   ]
     .join(" ")
     .toLowerCase();
+}
+
+function addActionVisibleFields(
+  fields: VisibleEvalField[],
+  fieldPath: string,
+  action: DecisionFirstAction | null | undefined,
+  searchStatus?: DecisionSearchStatus | string,
+) {
+  if (!action) return;
+  fields.push(
+    {
+      fieldPath: `${fieldPath}.title`,
+      text: action.title,
+      visible: true,
+      source: "canonical_action",
+      searchStatus,
+    },
+    {
+      fieldPath: `${fieldPath}.details`,
+      text: action.details,
+      visible: true,
+      source: "canonical_action",
+      searchStatus,
+    },
+    {
+      fieldPath: `${fieldPath}.success_condition`,
+      text: action.success_condition,
+      visible: true,
+      source: "canonical_action",
+      searchStatus,
+    },
+    {
+      fieldPath: `${fieldPath}.fallback`,
+      text: action.fallback,
+      visible: true,
+      source: "canonical_action",
+      searchStatus,
+    },
+  );
+}
+
+function visibleEvalFields(output: EvalOutput): VisibleEvalField[] {
+  const fields: VisibleEvalField[] = [];
+  const tree = output.decisionTree;
+  if (tree) {
+    fields.push({
+      fieldPath: "decision_tree.current_action.title",
+      text: tree.current_action.title,
+      visible: true,
+      source: "canonical_action",
+    });
+    addActionVisibleFields(
+      fields,
+      "decision_tree.current_action",
+      tree.current_action,
+      undefined,
+    );
+    tree.nodes.forEach((node, nodeIndex) => {
+      fields.push(
+        {
+          fieldPath: `decision_tree.nodes[${nodeIndex}].title`,
+          text: node.title,
+          visible: true,
+          source: "visible_node_label",
+          searchStatus: node.search_status,
+        },
+        {
+          fieldPath: `decision_tree.nodes[${nodeIndex}].search_status`,
+          text: node.search_status,
+          visible: true,
+          source: "visible_search_status",
+          searchStatus: node.search_status,
+        },
+      );
+      addActionVisibleFields(
+        fields,
+        `decision_tree.nodes[${nodeIndex}].action`,
+        node.action,
+        node.search_status,
+      );
+      node.options.forEach((option, optionIndex) => {
+        fields.push(
+          {
+            fieldPath: `decision_tree.nodes[${nodeIndex}].options[${optionIndex}].label`,
+            text: option.label,
+            visible: true,
+            source: "visible_branch_label",
+            searchStatus: option.search_status,
+          },
+          {
+            fieldPath: `decision_tree.nodes[${nodeIndex}].options[${optionIndex}].search_status`,
+            text: option.search_status,
+            visible: true,
+            source: "visible_search_status",
+            searchStatus: option.search_status,
+          },
+        );
+        addActionVisibleFields(
+          fields,
+          `decision_tree.nodes[${nodeIndex}].options[${optionIndex}].first_action`,
+          option.first_action,
+          option.search_status,
+        );
+      });
+    });
+  }
+
+  if (output.branchExpansion?.node) {
+    const node = output.branchExpansion.node;
+    fields.push({
+      fieldPath: "branch_expansion.node.title",
+      text: node.title,
+      visible: true,
+      source: "visible_node_label",
+      searchStatus: node.search_status,
+    });
+    node.options.forEach((option, optionIndex) => {
+      fields.push({
+        fieldPath: `branch_expansion.node.options[${optionIndex}].label`,
+        text: option.label,
+        visible: true,
+        source: "visible_branch_label",
+        searchStatus: option.search_status,
+      });
+    });
+  }
+
+  if (output.branchExpansion?.action_leaf) {
+    const action = output.branchExpansion.action_leaf;
+    fields.push(
+      {
+        fieldPath: "branch_expansion.action_leaf.title",
+        text: action.title,
+        visible: true,
+        source: "canonical_action",
+        searchStatus: action.search_status,
+      },
+      {
+        fieldPath: "branch_expansion.action_leaf.first_action",
+        text: action.first_action,
+        visible: true,
+        source: "canonical_action",
+        searchStatus: action.search_status,
+      },
+      {
+        fieldPath: "branch_expansion.action_leaf.success_condition",
+        text: action.success_condition ?? "",
+        visible: true,
+        source: "canonical_action",
+        searchStatus: action.search_status,
+      },
+      {
+        fieldPath: "branch_expansion.action_leaf.if_blocked",
+        text: action.if_blocked ?? "",
+        visible: true,
+        source: "canonical_action",
+        searchStatus: action.search_status,
+      },
+    );
+  }
+
+  if (output.reconciliation) {
+    fields.push(
+      {
+        fieldPath: "reconciliation.user_visible_explanation",
+        text: output.reconciliation.user_visible_explanation,
+        visible: true,
+        source: "visible_reconciliation",
+      },
+      {
+        fieldPath: "reconciliation.recommended_followup_action",
+        text: output.reconciliation.recommended_followup_action,
+        visible: true,
+        source: "visible_reconciliation",
+      },
+    );
+  }
+
+  if (output.trace?.actionLeaf) {
+    fields.push({
+      fieldPath: "trace.actionLeaf",
+      text: output.trace.actionLeaf,
+      visible: true,
+      source: "canonical_action",
+      searchStatus: output.trace.searchStatusSummary?.join(", "),
+    });
+  }
+
+  return fields.filter((field) => field.text.trim());
 }
 
 export function detectBranchQualityIssues(options: Pick<DecisionOption, "label">[]) {
@@ -208,6 +440,110 @@ export function detectBranchQualityIssues(options: Pick<DecisionOption, "label">
   };
 }
 
+export function detectMoveMapLabelQualityIssues(labels: string[]) {
+  return labels.filter((label) => hasInternalMoveMapLabelJargon(label));
+}
+
+export function detectSearchWorkflowGaps(actionText: string) {
+  const normalizedText = actionText.toLowerCase();
+  const gaps: string[] = [];
+  const hasSearchOrCheck = /\b(search|look up|check|verify|confirm|ask whether|fit-check|fit check|placement)\b/.test(
+    normalizedText,
+  );
+  const hasQueryTerms =
+    /\b(search terms?|use terms?|terms like|query|queries)\b/.test(normalizedText) ||
+    /['"“”][^'"“”]{8,}['"“”]/.test(actionText) ||
+    /\b(?:near|within)\s+(?:bed-stuy|11216|brooklyn|\d+)/i.test(actionText);
+  const hasTargetQuantity =
+    /\b(?:2|3|4|5|two|three|four|five)\b/.test(normalizedText) ||
+    /\b\d+\s*(?:-|–|to)\s*\d+\b/.test(normalizedText);
+  const hasCriteria = /\b(shortlist|criteria|filter|only|level fit|fit|recurring|beginner-friendly|beginner friendly|low-pressure|social|cohort|commute|schedule|accept|not competitive|not pickup)\b/.test(
+    normalizedText,
+  );
+  const hasTimeBoundary = /\b(today|within \d+|in \d+|this week|48 hours|24 hours|20 minutes|30 minutes)\b/.test(
+    normalizedText,
+  );
+  const hasSuccess = /\b(success|successful|candidates?|shortlist|message sent|sent|chosen|identified|one message)\b/.test(
+    normalizedText,
+  );
+  const hasFallback = /\b(if blocked|if no|if none|if nothing|fallback|otherwise|if unclear|if level|if fit)\b/.test(
+    normalizedText,
+  );
+
+  if (!hasSearchOrCheck) gaps.push("search/check verb");
+  if (!hasQueryTerms) gaps.push("search query terms");
+  if (!hasTargetQuantity) gaps.push("target quantity");
+  if (!hasCriteria) gaps.push("shortlist criteria");
+  if (!hasTimeBoundary) gaps.push("time boundary");
+  if (!hasSuccess) gaps.push("success condition");
+  if (!hasFallback) gaps.push("fallback");
+  return gaps;
+}
+
+function actionRequiresSearchWorkflow(scenario: EvalScenario, output: EvalOutput, text: string) {
+  if (!scenario.expected.requiresSearchWorkflowAction) return false;
+  if (output.webSearchCallCount > 0) return false;
+  const searchStatuses = collectSearchStatuses(output);
+  return (
+    searchStatuses.includes("needed") ||
+    searchStatuses.includes("unavailable") ||
+    searchStatuses.includes("failed") ||
+    LOCAL_SEARCH_SIGNAL.test(text)
+  );
+}
+
+function rootBranchStepMixing(scenario: EvalScenario, options: Pick<DecisionOption, "label">[]) {
+  const forbiddenLabels = scenario.expected.forbiddenRootBranchLabels ?? [];
+  if (!forbiddenLabels.length) return [];
+  return options
+    .map((option) => option.label)
+    .filter((label) =>
+      forbiddenLabels.some((forbidden) =>
+        label.toLowerCase().includes(forbidden.toLowerCase()),
+      ),
+    );
+}
+
+function vagueReconciliationFollowup(output: EvalOutput) {
+  if (!output.reconciliation) return false;
+  const followup = output.reconciliation.recommended_followup_action.trim().toLowerCase();
+  if (!followup) return true;
+  if (followup.startsWith("no action needed:")) return false;
+  const hasConcretePrivateWriting =
+    /\b(schedule|choose|write|protect|continue|set up)\b/.test(followup) &&
+    /\b(private|writing|project|session|piece|500-word|30-minute)\b/.test(followup);
+  const hasConcreteBoardUpdate =
+    /\b(recalculate|continue|choose|switch|preserve)\b/.test(followup) &&
+    /\b(weekend|constraint|compatible|branch|move map|path)\b/.test(followup) &&
+    /\b(success|if blocked|if no|if none|only)\b/.test(followup);
+  if (hasConcretePrivateWriting || hasConcreteBoardUpdate) return false;
+  return /\b(memory updated|board updated|recalculate(?: this| the)? board|update memory|updated)\b/.test(
+    followup,
+  );
+}
+
+function providerGroundingIssue(scenario: EvalScenario, output: EvalOutput, text: string) {
+  const providerKeywords = scenario.expected.providerSpecificKeywords ?? [];
+  if (!scenario.expected.requiresProviderGrounding || !providerKeywords.length) return false;
+  const hasProviderMention = providerKeywords.some((keyword) =>
+    text.includes(keyword.toLowerCase()),
+  );
+  if (!hasProviderMention) return false;
+  if (output.webSearchCallCount === 0) return true;
+  const hasSource =
+    output.decisionTree?.nodes.some((node) =>
+      node.options.some((option) => option.sources.length > 0),
+    ) ?? false;
+  const hasFitLanguage =
+    /\b(?:fit|placement|ask whether|confirm|verify|source|search found|because|level)\b/.test(
+      text,
+    );
+  if (/\blevel\s*\d+\b/.test(text) && !/\b(?:fit|placement|ask whether|confirm)\b/.test(text)) {
+    return true;
+  }
+  return !hasSource && !hasFitLanguage;
+}
+
 function collectSearchStatuses(output: EvalOutput) {
   const statuses: string[] = [];
   const tree = output.decisionTree;
@@ -235,17 +571,126 @@ function collectSearchStatuses(output: EvalOutput) {
   return statuses;
 }
 
-function hasSearchedClaimWithoutSearch(output: EvalOutput) {
-  if (output.webSearchCallCount > 0) return false;
-  return collectSearchStatuses(output).some((status) => status === "searched");
+function evidenceFromField(
+  output: EvalOutput,
+  field: VisibleEvalField,
+): CriticalFailureEvidence {
+  return {
+    fieldPath: field.fieldPath,
+    text: field.text.trim().slice(0, 500),
+    visible: field.visible,
+    source: field.source,
+    searchStatus: field.searchStatus,
+    webSearchCallCount: output.webSearchCallCount,
+  };
 }
 
-function hasUnverifiedLocalHallucination(output: EvalOutput) {
-  if (output.webSearchCallCount > 0) return false;
-  const text = outputText(output);
-  return /(?:verified|confirmed|available today|found today|closest verified|actual local option)/i.test(
-    text.replace(/not verified|unverified|not yet verified/g, ""),
+function searchedClaimWithoutSearchEvidence(output: EvalOutput) {
+  if (output.webSearchCallCount > 0) return null;
+  const field = visibleEvalFields(output).find(
+    (item) => item.source === "visible_search_status" && item.text === "searched",
   );
+  return field ? evidenceFromField(output, field) : null;
+}
+
+function normalizedForClaimDetection(value: string) {
+  return value
+    .replace(
+      /(?:not verified|unverified|not yet verified|not confirmed|unconfirmed|do not treat [^.]{0,140} as verified|treat [^.]{0,140} as unverified|details as unverified|still need confirmation|should be (?:confirmed|verified)|(?:confirmed|verified) before|ask [^.]{0,160} (?:to )?(?:confirm|verify|check)|confirm [^.]{0,160} before|verify [^.]{0,160} before|if [^.]{0,100} unclear|before enrolling|before you enroll)/gi,
+      " ",
+    )
+    .toLowerCase();
+}
+
+function isSearchOrCheckInstruction(value: string) {
+  const text = value.toLowerCase();
+  return (
+    /\b(search|look up|shortlist|use queries|queries like|use terms|terms like|filter|ask|ask whether|ask where|confirm|verify|check|fit-check|fit check|placement)\b/.test(
+      text,
+    ) ||
+    /\bdo not treat\b.{0,120}\bverified\b/.test(text) ||
+    /\bnot (?:locally )?verified\b/.test(text)
+  );
+}
+
+function hasLocalResourceSignal(value: string) {
+  return LOCAL_SEARCH_SIGNAL.test(value);
+}
+
+function hasExplicitVerificationClaim(value: string) {
+  const text = normalizedForClaimDetection(value);
+  if (/(?:available today|closest verified|actual local option|local options include|options include|verified option|confirmed option)/i.test(text)) {
+    return true;
+  }
+  if (
+    /\b(?:found today|search found)\b/i.test(text) &&
+    /\b(?:local|nearby|brooklyn|bed[-\s]?stuy|option|class|clinic|studio|coach|program|group|meetup)\b/i.test(text)
+  ) {
+    return true;
+  }
+  if (
+    /(?:verified|confirmed)\s+(?:local|nearby|brooklyn|bed[-\s]?stuy|option|class|clinic|studio|coach|program|availability|schedule|hours|price)|(?:local|nearby|brooklyn|bed[-\s]?stuy|option|class|clinic|studio|coach|program|availability|schedule|hours|price)[^.]{0,80}(?:verified|confirmed)/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return /\b(?:there is|there are|offers|runs|hosts|has)\b[^.]{0,100}\b(?:beginner|adult|class|clinic|studio|coach|program|group|meetup|availability|schedule|price)\b/i.test(
+    text,
+  );
+}
+
+function hasHardVerificationClaim(value: string) {
+  const text = normalizedForClaimDetection(value);
+  return /(?:available today|closest verified|actual local option|local options include|options include|verified option|confirmed option|\bfound today\b|\bsearch found\b|\bverified\b|\bconfirmed\b)/i.test(
+    text,
+  );
+}
+
+function providerKeywordEvidence(
+  scenario: EvalScenario,
+  output: EvalOutput,
+  field: VisibleEvalField,
+) {
+  const providerKeywords = scenario.expected.providerSpecificKeywords ?? [];
+  if (!providerKeywords.length) return null;
+  const lower = field.text.toLowerCase();
+  const hasProviderMention = providerKeywords.some((keyword) =>
+    lower.includes(keyword.toLowerCase()),
+  );
+  if (!hasProviderMention) return null;
+    if (isSearchOrCheckInstruction(field.text) && !hasHardVerificationClaim(field.text)) {
+      return null;
+    }
+  return evidenceFromField(output, field);
+}
+
+function unverifiedLocalHallucinationEvidence(
+  scenario: EvalScenario,
+  output: EvalOutput,
+) {
+  if (output.webSearchCallCount > 0) return null;
+  for (const field of visibleEvalFields(output)) {
+    const providerEvidence = providerKeywordEvidence(scenario, output, field);
+    if (providerEvidence) return providerEvidence;
+
+    if (field.source === "visible_branch_label" || field.source === "visible_node_label") {
+      if (!hasExplicitVerificationClaim(field.text)) continue;
+    }
+
+    if (!hasLocalResourceSignal(field.text) && !hasExplicitVerificationClaim(field.text)) {
+      continue;
+    }
+
+    if (isSearchOrCheckInstruction(field.text) && !hasHardVerificationClaim(field.text)) {
+      continue;
+    }
+
+    if (hasExplicitVerificationClaim(field.text)) {
+      return evidenceFromField(output, field);
+    }
+  }
+  return null;
 }
 
 function removeNegatedDatingContext(text: string) {
@@ -293,12 +738,20 @@ function hasSchemaFailure(output: EvalOutput) {
 }
 
 function addCritical(
-  failures: Array<{ id: CriticalFailureId; note: string }>,
+  failures: CriticalFailure[],
   id: CriticalFailureId,
   note: string,
+  evidence?: CriticalFailureEvidence,
 ) {
-  if (!failures.some((failure) => failure.id === id && failure.note === note)) {
-    failures.push({ id, note });
+  if (
+    !failures.some(
+      (failure) =>
+        failure.id === id &&
+        failure.note === note &&
+        failure.evidence?.fieldPath === evidence?.fieldPath,
+    )
+  ) {
+    failures.push({ id, note, evidence });
   }
 }
 
@@ -307,14 +760,30 @@ export function scoreEvalScenario(
   output: EvalOutput,
 ): EvalScenarioResult {
   const notes: string[] = [];
-  const criticalFailures: Array<{ id: CriticalFailureId; note: string }> = [];
+  const criticalFailures: CriticalFailure[] = [];
   const text = outputText(output);
   const options = rootOptions(output.decisionTree);
   const branchIssues = detectBranchQualityIssues(options);
+  const forbiddenRootBranches = rootBranchStepMixing(scenario, options);
+  const labelIssues = detectMoveMapLabelQualityIssues(visibleMoveMapLabels(output));
   const recommended = recommendedOption(output.decisionTree);
   const actionText = activeActionText(output);
+  const searchWorkflowGaps = actionRequiresSearchWorkflow(scenario, output, text)
+    ? detectSearchWorkflowGaps(actionText)
+    : [];
+  const searchedClaimEvidence = searchedClaimWithoutSearchEvidence(output);
+  const unverifiedLocalEvidence = scenario.expected.noUnverifiedLocalClaims
+    ? unverifiedLocalHallucinationEvidence(scenario, output)
+    : null;
 
   const schemaFailures = hasSchemaFailure(output);
+  if (output.generationFailure) {
+    addCritical(
+      criticalFailures,
+      output.generationFailure.id,
+      output.generationFailure.note,
+    );
+  }
   if (schemaFailures.length) {
     addCritical(
       criticalFailures,
@@ -322,18 +791,20 @@ export function scoreEvalScenario(
       `Invalid structured output: ${schemaFailures.join(", ")}.`,
     );
   }
-  if (hasSearchedClaimWithoutSearch(output)) {
+  if (searchedClaimEvidence) {
     addCritical(
       criticalFailures,
       "hallucinated_local_without_search",
       "Output claims search_status=searched without a web-search call.",
+      searchedClaimEvidence,
     );
   }
-  if (scenario.expected.noUnverifiedLocalClaims && hasUnverifiedLocalHallucination(output)) {
+  if (unverifiedLocalEvidence) {
     addCritical(
       criticalFailures,
       "hallucinated_local_without_search",
       "Output appears to verify local/current facts without search.",
+      unverifiedLocalEvidence,
     );
   }
   if (branchIssues.duplicateLabels.length || branchIssues.nearDuplicatePairs.length) {
@@ -341,6 +812,34 @@ export function scoreEvalScenario(
       criticalFailures,
       "duplicate_branches",
       "Root options contain duplicate or near-duplicate branch labels.",
+    );
+  }
+  if (forbiddenRootBranches.length) {
+    addCritical(
+      criticalFailures,
+      "branch_step_mixing",
+      `Root branches include step-like labels: ${forbiddenRootBranches.join(", ")}.`,
+    );
+  }
+  if (labelIssues.length) {
+    addCritical(
+      criticalFailures,
+      "internal_jargon_labels",
+      `Visible Move Map labels expose internal strategy language: ${labelIssues.join(", ")}.`,
+    );
+  }
+  if (providerGroundingIssue(scenario, output, text)) {
+    addCritical(
+      criticalFailures,
+      "ungrounded_provider_recommendation",
+      "Provider-specific recommendation is not adequately search-grounded or fit-framed.",
+    );
+  }
+  if (searchWorkflowGaps.length) {
+    addCritical(
+      criticalFailures,
+      "vague_search_action",
+      `Search-needed action is missing: ${searchWorkflowGaps.join(", ")}.`,
     );
   }
   if (
@@ -380,6 +879,16 @@ export function scoreEvalScenario(
       criticalFailures,
       "missing_concrete_action",
       "Action leaf/current action does not contain a concrete action.",
+    );
+  }
+  if (
+    scenario.expected.requiresPracticalReconciliationFollowup &&
+    vagueReconciliationFollowup(output)
+  ) {
+    addCritical(
+      criticalFailures,
+      "vague_reconciliation_followup",
+      "Reconciliation follow-up is only meta/update language instead of a practical next move or explicit no-action-needed reason.",
     );
   }
   if (
@@ -437,7 +946,9 @@ export function scoreEvalScenario(
     if (!branchIssues.duplicateLabels.length && !branchIssues.nearDuplicatePairs.length) {
       branchQualityScore += 0.8;
     }
-    if (!branchIssues.taskLikeLabels.length) branchQualityScore += 0.6;
+    if (!branchIssues.taskLikeLabels.length && !forbiddenRootBranches.length) {
+      branchQualityScore += 0.6;
+    }
     const expectedGroups = scenario.expected.branchKeywordGroups?.length ?? 0;
     if (!expectedGroups) {
       branchQualityScore += 0.8;
@@ -454,7 +965,21 @@ export function scoreEvalScenario(
   scores.push(score("branch_quality", branchQualityScore, [
     branchIssues.taskLikeLabels.length
       ? `Task-like peer branches: ${branchIssues.taskLikeLabels.join(", ")}.`
-      : "Root branches are not obviously sequential tasks.",
+      : forbiddenRootBranches.length
+        ? `Step-like root branches: ${forbiddenRootBranches.join(", ")}.`
+        : "Root branches are not obviously sequential tasks.",
+  ]));
+
+  let labelQualityScore = 3;
+  if (labelIssues.length) labelQualityScore -= Math.min(2.5, labelIssues.length * 1.2);
+  if (scenario.expected.avoidInternalJargonLabels && labelIssues.length) {
+    labelQualityScore = 0;
+  }
+  if (providerGroundingIssue(scenario, output, text)) labelQualityScore -= 1.5;
+  scores.push(score("label_quality", labelQualityScore, [
+    labelIssues.length
+      ? `Internal label jargon: ${labelIssues.join(", ")}.`
+      : "Visible Move Map labels are user-facing.",
   ]));
 
   let recommendedScore = 0;
@@ -492,15 +1017,26 @@ export function scoreEvalScenario(
   }
   if (/if blocked|fallback|if no|if that|if nothing/.test(actionText)) actionScore += 0.4;
   if (/today|this week|10 minutes|first|one /.test(actionText)) actionScore += 0.2;
+  if (searchWorkflowGaps.length) {
+    actionScore -= Math.min(1.5, searchWorkflowGaps.length * 0.25);
+  }
+  if (
+    scenario.expected.requiresPracticalReconciliationFollowup &&
+    vagueReconciliationFollowup(output)
+  ) {
+    actionScore -= 1.4;
+  }
   scores.push(score("action_concreteness", actionScore, [
-    actionLooksConcrete ? "Action contains an executable verb." : "Action is not concrete enough.",
+    searchWorkflowGaps.length
+      ? `Search/check action gaps: ${searchWorkflowGaps.join(", ")}.`
+      : actionLooksConcrete
+        ? "Action contains an executable verb."
+        : "Action is not concrete enough.",
   ]));
 
   let searchScore = 3;
-  if (hasSearchedClaimWithoutSearch(output)) searchScore -= 2;
-  if (scenario.expected.noUnverifiedLocalClaims && hasUnverifiedLocalHallucination(output)) {
-    searchScore -= 2;
-  }
+  if (searchedClaimEvidence) searchScore -= 2;
+  if (unverifiedLocalEvidence) searchScore -= 2;
   if (
     scenario.expected.noUnverifiedLocalClaims &&
     output.webSearchCallCount === 0 &&
@@ -508,6 +1044,7 @@ export function scoreEvalScenario(
   ) {
     searchScore -= 1;
   }
+  if (searchWorkflowGaps.length) searchScore -= 1.5;
   scores.push(score("search_honesty", searchScore, [
     output.webSearchCallCount
       ? `${output.webSearchCallCount} web-search call(s) reported.`

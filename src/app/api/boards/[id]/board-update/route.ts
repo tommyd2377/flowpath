@@ -246,6 +246,10 @@ export async function POST(request: Request, context: Context) {
             should_recalculate: reconciliation.move_map_effect?.should_recalculate ?? true,
             preserve_tree:
               reconciliation.move_map_effect?.should_preserve_existing_tree ?? false,
+            structured_output_repaired:
+              generated.structuredOutput.structuredOutputRepaired,
+            structured_output_repair_attempts:
+              generated.structuredOutput.structuredOutputRepairAttempts,
           },
         });
         generationEventCompleted = true;

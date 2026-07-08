@@ -73,7 +73,9 @@ import {
   sanitizeContextConstraintsForSession,
 } from "./constraints";
 import {
+  canonicalDecisionActionText,
   decisionBranchSourceSection,
+  decisionActionTaskNotes,
   findDecisionOption,
   normalizeDecisionTree,
 } from "./decision-tree";
@@ -3017,11 +3019,18 @@ export async function createTasksFromNextMovePlan(
   }
 
   const now = nowIso();
+  const canonicalAction = plan.decision_tree.current_action;
+  const canonicalActionText = canonicalDecisionActionText(canonicalAction);
+  const canonicalActionNotes = decisionActionTaskNotes(canonicalAction);
   const taskRows =
     plan.task_candidates.length > 0
-      ? plan.task_candidates.slice(0, 3).map((candidate) => ({
-          title: candidate.title,
-          details: `${candidate.details}\n\nWhy ranked: ${candidate.rank_reason}`,
+      ? plan.task_candidates.slice(0, 3).map((candidate, index) => ({
+          title: candidate.title || (index === 0 ? canonicalAction.title : candidate.title),
+          details: `${
+            index === 0 && canonicalActionText
+              ? canonicalActionNotes
+              : candidate.details
+          }\n\nWhy ranked: ${candidate.rank_reason}`,
           section: candidate.candidate_type,
           importance: candidate.importance,
           effort: candidate.effort,
@@ -3171,8 +3180,11 @@ function suggestedActionFromPlan(
   }
 
   const firstTask = plan.task_candidates[0];
-  const title = firstTask?.title || plan.first_10_minute_action.title;
+  const canonicalAction = plan.decision_tree.current_action;
+  const canonicalDescription = canonicalDecisionActionText(canonicalAction);
+  const title = firstTask?.title || canonicalAction.title || plan.first_10_minute_action.title;
   const description =
+    canonicalDescription ||
     firstTask?.description ||
     firstTask?.details ||
     plan.first_10_minute_action.details ||

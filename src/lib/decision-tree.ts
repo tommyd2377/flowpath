@@ -24,10 +24,48 @@ type PlanLike = Omit<NextMovePlan, "decision_tree"> & {
   created_at?: string;
 };
 
+export type ActionQualityFlag =
+  | "missing_time_boundary"
+  | "missing_quantity"
+  | "missing_search_terms"
+  | "missing_shortlist_criteria"
+  | "missing_success_condition"
+  | "missing_fallback"
+  | "vague_action_repaired"
+  | "search_needed_action_repaired";
+
+export type ActionQualityRepairResult = {
+  action: DecisionFirstAction;
+  flags: ActionQualityFlag[];
+  original_action_text: string;
+  canonical_action_text: string;
+  repaired: boolean;
+};
+
+export type ReconciliationFollowupQualityResult = {
+  recommended_followup_action: string;
+  flags: ActionQualityFlag[];
+  repaired: boolean;
+};
+
 const rootNodeId = "root";
 const fallbackTreeId = "decision-tree";
 const taskLikeBranchStart = /^(pick|identify|set|send|contact|choose|search|find one|write|draft|schedule|block|register|attend)\b/i;
 const childDecisionOptionLimit = 5;
+const internalMoveMapLabelPatterns = [
+  /\blowest[-\s]+friction\b/i,
+  /\bhighest[-\s]+signal\b/i,
+  /\bhigh[-\s]+signal\b/i,
+  /\boperator\b/i,
+  /\bleverage\b/i,
+  /\bsupporting\s+prerequisite\b/i,
+  /\bbroad\s+(?:nyc\s+)?comparison\b/i,
+  /\bfriction\s+version\b/i,
+  /\bsignal\s+version\b/i,
+  /\b(?:strategy|strategic)\s+container\b/i,
+  /\b(?:advanced\s+)?improv\s+container\b/i,
+  /\bactor[-\s]+centered\s+on[-\s]+camera\s+path\b/i,
+] as const;
 
 function nowIso() {
   return new Date().toISOString();
@@ -36,6 +74,77 @@ function nowIso() {
 function clipText(value: string | null | undefined, fallback: string, max = 160) {
   const text = (value ?? "").trim() || fallback;
   return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text;
+}
+
+export function hasInternalMoveMapLabelJargon(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (internalMoveMapLabelPatterns.some((pattern) => pattern.test(text))) return true;
+  if (/\bcontainer\b/i.test(text)) {
+    return /\b(class|clinic|group|studio|course|workshop|program|improv|acting|yoga|tennis|community|social|people|recurring|repeatable)\b/i.test(
+      text,
+    );
+  }
+  if (/\b(?:lowest|highest|supporting|broad|default|operator)\b.*\bversion\b/i.test(text)) {
+    return true;
+  }
+  if (/\b(?:operator|actor[-\s]+centered|supporting)\b.*\bpath\b/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+export function normalizeUserFacingMoveMapLabel(value: string) {
+  const text = value.trim();
+  if (!text) return text;
+  if (/brooklyn.*advanced.*improv.*container/i.test(text)) {
+    return "Improv class in Brooklyn";
+  }
+  if (/advanced.*improv.*container/i.test(text)) {
+    return "Advanced improv class";
+  }
+  if (/improv.*container/i.test(text)) {
+    return "Improv class";
+  }
+  if (/actor[-\s]+centered\s+on[-\s]+camera\s+path/i.test(text)) {
+    return "On-camera acting";
+  }
+  if (/observe\s+community\s+first,\s*then\s+enroll/i.test(text)) {
+    return "Visit or audit a class";
+  }
+  if (/broad\s+nyc\s+comparison/i.test(text)) {
+    return "Compare NYC options";
+  }
+  if (/broad\s+comparison/i.test(text)) {
+    return "Compare options";
+  }
+  if (/lowest[-\s]+friction(?:\s+version)?/i.test(text)) {
+    return "Low-commitment option";
+  }
+  if (/highest[-\s]+signal(?:\s+version)?/i.test(text)) {
+    return "Best proof option";
+  }
+  if (/high[-\s]+signal(?:\s+version)?/i.test(text)) {
+    return "Proof-building option";
+  }
+  if (/supporting\s+prerequisite/i.test(text)) {
+    return "Preparation step";
+  }
+  if (/supporting\s+path/i.test(text)) {
+    return "Supporting option";
+  }
+  if (/operator\s+path/i.test(text)) {
+    return "Recommended option";
+  }
+  if (/\bcontainer\b/i.test(text)) {
+    if (/\brecurring|repeatable\b/i.test(text)) return "Recurring group";
+    if (/\btennis|clinic\b/i.test(text)) return "Beginner clinic / recurring group";
+    if (/\byoga|studio|class\b/i.test(text)) return "Recurring class";
+    if (/\bacting\b/i.test(text)) return "Acting class";
+    if (/\bcommunity|social|people|group\b/i.test(text)) return "Recurring group";
+    return "Recurring option";
+  }
+  return text;
 }
 
 function slug(value: string, fallback: string) {
@@ -90,6 +199,305 @@ function textLooksExternal(value: string) {
   );
 }
 
+function textLooksUrgentStability(value: string) {
+  return /\b(urgent|crisis|evict|eviction|housing|shelter|hotline|911|988|legal aid|emergency|immediate danger|safety)\b/i.test(
+    value,
+  );
+}
+
+function textLooksLocalOrCurrent(value: string) {
+  return /\b(local|nearby|near me|neighborhood|zip|brooklyn|bed[-\s]?stuy|11216|within \d+|commute|current|latest|today|this week|availability|schedule|deadline|price|cost|class|clinic|studio|coach|program|group|meetup|event|resource|organization|public court|adult sports|volunteer)\b|\b\d{5}(?:-\d{4})?\b/i.test(
+    value,
+  );
+}
+
+function textNeedsLocalCurrentVerification(value: string) {
+  const hasLocalOrCurrentSignal =
+    /\b(local|nearby|near me|near you|neighborhood|zip|brooklyn|bed[-\s]?stuy|11216|within \d+|commute|current|latest|today|this week|availability|schedule|deadline|price|cost)\b|\b\d{5}(?:-\d{4})?\b/i.test(
+      value,
+    );
+  const hasResourceSignal =
+    /\b(class|clinic|studio|coach|program|group|meetup|event|resource|organization|provider|public court|adult sports|volunteer|tennis|acting|improv|scene study|on-camera|yoga)\b/i.test(
+      value,
+    );
+  return hasLocalOrCurrentSignal && hasResourceSignal;
+}
+
+function extractLocationHint(value: string) {
+  const text = value.trim();
+  const zip = text.match(/\b\d{5}(?:-\d{4})?\b/);
+  if (zip) return zip[0];
+  if (/\bbed[-\s]?stuy\b/i.test(text)) return "Bed-Stuy";
+  if (/\bbrooklyn\b/i.test(text)) return "Brooklyn";
+  if (/\bnear me\b/i.test(text)) return "near me";
+  if (/\bnearby\b/i.test(text)) return "near your ZIP/neighborhood";
+  return "near your ZIP/neighborhood";
+}
+
+function actionQualityParts(action: DecisionFirstAction) {
+  return [
+    action.title,
+    action.details,
+    action.success_condition,
+    action.fallback,
+  ].join(" ");
+}
+
+export function canonicalDecisionActionText(action: DecisionFirstAction) {
+  return action.details?.trim() || action.title.trim();
+}
+
+export function decisionActionTaskNotes(action: DecisionFirstAction) {
+  return [
+    canonicalDecisionActionText(action),
+    action.success_condition ? `Success: ${action.success_condition}` : "",
+    action.fallback ? `If blocked: ${action.fallback}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function actionQualityGaps(text: string): ActionQualityFlag[] {
+  const normalized = text.toLowerCase();
+  const flags: ActionQualityFlag[] = [];
+  const hasSearchTerms =
+    /\b(search terms?|use quer(?:y|ies)|queries? like|terms like)\b/.test(normalized) ||
+    /['"“”][^'"“”]{8,}['"“”]/.test(text);
+  const hasQuantity =
+    /\b(?:2|3|4|5|two|three|four|five)\b/.test(normalized) ||
+    /\b\d+\s*(?:-|–|to)\s*\d+\b/.test(normalized);
+  const hasCriteria = /\b(shortlist|criteria|filter|only|level fit|fit|recurring|beginner-friendly|beginner friendly|low-pressure|same people|cohort|commute|schedule|accept|not competitive|not pickup|not dating|weekly|biweekly)\b/.test(
+    normalized,
+  );
+  const hasTimeBoundary = /\b(today|within \d+|in \d+|this week|48 hours|24 hours|20 minutes|30 minutes|by tomorrow|before the end of)\b/.test(
+    normalized,
+  );
+  const hasSuccess = /\b(success|successful|candidate|shortlist|message sent|sent|chosen|identified|saved|drafted|on your calendar|calendar)\b/.test(
+    normalized,
+  );
+  const hasFallback = /\b(if blocked|if no|if none|if nothing|fallback|otherwise|if unclear|if level|if fit|widen)\b/.test(
+    normalized,
+  );
+  if (!hasTimeBoundary) flags.push("missing_time_boundary");
+  if (!hasQuantity) flags.push("missing_quantity");
+  if (!hasSearchTerms) flags.push("missing_search_terms");
+  if (!hasCriteria) flags.push("missing_shortlist_criteria");
+  if (!hasSuccess) flags.push("missing_success_condition");
+  if (!hasFallback) flags.push("missing_fallback");
+  return flags;
+}
+
+function vagueActionNeedsRepair(text: string) {
+  return /\b(check|find|research|explore|look into|look for|choose|pick)\b/i.test(text);
+}
+
+function searchTemplateForAction({
+  contextText,
+  branchLabel,
+  locationHint,
+}: {
+  contextText: string;
+  branchLabel?: string;
+  locationHint: string;
+}) {
+  const text = `${contextText} ${branchLabel ?? ""}`;
+  const brooklynContext = /\b(brooklyn|bed[-\s]?stuy|11216)\b/i.test(text);
+  const localQueryPlace = brooklynContext ? "Brooklyn" : "near me";
+  const specificQueryPlace = /\b\d{5}(?:-\d{4})?\b/.test(locationHint)
+    ? locationHint
+    : localQueryPlace;
+  if (/\btennis\b/i.test(text)) {
+    return {
+      title: "Search and shortlist beginner tennis options",
+      details: `Within 20 minutes today, search for 3 recurring beginner adult tennis options ${locationHint}. Use queries like 'beginner adult tennis clinic ${specificQueryPlace}', 'adult tennis clinic ${localQueryPlace} beginner', and 'social tennis drills near me'. Shortlist only options that are recurring, beginner-friendly, low-pressure, and not competitive pickup. Do not treat any local option as verified until you check it.`,
+      success_condition: "Three candidates are saved or one beginner-friendly inquiry is sent today.",
+      fallback:
+        "If none look right, search for one private or semi-private coach and ask where adult beginners move into group play.",
+    };
+  }
+  if (/\bacting|improv|scene study|on-camera|theater|theatre\b/i.test(text)) {
+    return {
+      title: "Search and shortlist acting class options",
+      details: `Within 30 minutes today, search for 3-5 adult acting or improv classes ${locationHint}. Use queries like 'adult acting class ${localQueryPlace}', 'on-camera acting class ${localQueryPlace}', 'scene study ${localQueryPlace} adult', and 'adult improv class ${localQueryPlace}'. Shortlist by level fit, recurring cohort, commute, schedule, and whether the class accepts your current experience level. Do not treat any local option as verified until you check it.`,
+      success_condition: "One fit-check message is drafted or sent within 48 hours.",
+      fallback:
+        "If level fit is unclear, ask whether the class fits your current experience before enrolling.",
+    };
+  }
+  if (/\byoga\b/i.test(text)) {
+    return {
+      title: "Search and shortlist beginner yoga options",
+      details: `Within 30 minutes today, search for 3 recurring beginner-friendly yoga classes ${locationHint}. Use queries like 'beginner yoga class near me', 'adult beginner yoga class ${locationHint}', and 'intro yoga series near me'. Shortlist only options that are recurring, beginner-friendly, schedule-compatible, and low-pressure. Do not treat any local option as verified until you check it.`,
+      success_condition: "Three candidates are saved or one trial-class question is sent today.",
+      fallback:
+        "If no good class appears, widen the search radius or look for one intro workshop instead.",
+    };
+  }
+  if (/\bcommunity|friend|belonging|social|volunteer|meetup|group|not dating\b/i.test(text)) {
+    return {
+      title: "Shortlist recurring community options",
+      details: `Within 30 minutes today, shortlist 3 recurring non-dating community options ${locationHint} that you could attend weekly or biweekly. Use queries like 'weekly community group near me', 'recurring volunteer shift near me', and 'adult class near me weekly'. Keep only options where the same people are likely to return. Do not treat any local option as verified until you check it.`,
+      success_condition: "One option is picked and the first visit is on your calendar.",
+      fallback:
+        "If none fit, widen the search radius or choose one online-to-offline group with recurring local meetups.",
+    };
+  }
+  return {
+    title: "Search and shortlist realistic options",
+      details: `Within 30 minutes today, search for 3-5 realistic options ${locationHint}. Use queries that include the goal, location, and format you want, then shortlist only options that match your constraints, schedule, level, and repeatability needs. Do not treat any local option as verified until you check it.`,
+    success_condition: "Three candidates are saved or one fit-check message is sent today.",
+    fallback:
+      "If no good option appears, widen the search radius, change the format, or ask one relevant local coordinator where beginners usually start.",
+  };
+}
+
+export function normalizeActionLeafQuality({
+  action,
+  boardText: boardContext = "",
+  branchLabel = "",
+  searchStatus = "not_needed",
+  webSearchCallCount = 0,
+}: {
+  action: DecisionFirstAction;
+  boardText?: string;
+  branchLabel?: string;
+  searchStatus?: DecisionSearchStatus;
+  webSearchCallCount?: number;
+}): ActionQualityRepairResult {
+  const contextText = `${boardContext} ${branchLabel} ${actionQualityParts(action)}`;
+  const originalActionText = canonicalDecisionActionText(action);
+  if (
+    webSearchCallCount > 0 ||
+    searchStatus === "not_needed" ||
+    searchStatus === "searched" ||
+    textLooksUrgentStability(contextText)
+  ) {
+    return {
+      action,
+      flags: [],
+      original_action_text: originalActionText,
+      canonical_action_text: decisionActionTaskNotes(action),
+      repaired: false,
+    };
+  }
+  if (!textLooksLocalOrCurrent(contextText)) {
+    return {
+      action,
+      flags: [],
+      original_action_text: originalActionText,
+      canonical_action_text: decisionActionTaskNotes(action),
+      repaired: false,
+    };
+  }
+
+  const gaps = actionQualityGaps(actionQualityParts(action));
+  const shouldRepair = gaps.length > 0 || vagueActionNeedsRepair(actionQualityParts(action));
+  if (!shouldRepair) {
+    return {
+      action,
+      flags: [],
+      original_action_text: originalActionText,
+      canonical_action_text: decisionActionTaskNotes(action),
+      repaired: false,
+    };
+  }
+
+  const template = searchTemplateForAction({
+    contextText,
+    branchLabel,
+    locationHint: extractLocationHint(contextText),
+  });
+  const repairedAction = {
+    ...action,
+    title: clipText(template.title, action.title, 180),
+    details: clipText(template.details, action.details, 2000),
+    success_condition: clipText(
+      template.success_condition,
+      action.success_condition,
+      1000,
+    ),
+    fallback: clipText(template.fallback, action.fallback, 1000),
+  };
+  return {
+    action: repairedAction,
+    flags: [
+      ...gaps,
+      "vague_action_repaired",
+      "search_needed_action_repaired",
+    ],
+    original_action_text: originalActionText,
+    canonical_action_text: decisionActionTaskNotes(repairedAction),
+    repaired: true,
+  };
+}
+
+function normalizeActionForSearchQuality({
+  action,
+  boardText,
+  branchLabel,
+  searchStatus,
+  webSearchCallCount,
+}: {
+  action: DecisionFirstAction;
+  boardText?: string;
+  branchLabel?: string;
+  searchStatus: DecisionSearchStatus;
+  webSearchCallCount: number;
+}) {
+  return normalizeActionLeafQuality({
+    action,
+    boardText,
+    branchLabel,
+    searchStatus,
+    webSearchCallCount,
+  }).action;
+}
+
+export function normalizeReconciliationFollowupQuality({
+  recommendedFollowupAction,
+  boardText: boardContext = "",
+}: {
+  recommendedFollowupAction: string;
+  boardText?: string;
+}): ReconciliationFollowupQualityResult {
+  const followup = recommendedFollowupAction.trim();
+  if (!followup || /^no action needed:/i.test(followup)) {
+    return {
+      recommended_followup_action: recommendedFollowupAction,
+      flags: [],
+      repaired: false,
+    };
+  }
+  const text = `${boardContext} ${followup}`;
+  if (textLooksUrgentStability(text)) {
+    return {
+      recommended_followup_action: recommendedFollowupAction,
+      flags: [],
+      repaired: false,
+    };
+  }
+  const privateWriting = /\b(private|non-commercial|noncommercial|not monetize|monetiz|writing)\b/i.test(
+    text,
+  );
+  const vagueMeta =
+    /\b(recalculate(?: this| the)? board|update memory|memory updated|board updated)\b/i.test(
+      followup,
+    ) && !/\b(schedule|write|choose|protect|session|piece|project|success|if blocked)\b/i.test(followup);
+  if (!privateWriting || !vagueMeta) {
+    return {
+      recommended_followup_action: recommendedFollowupAction,
+      flags: [],
+      repaired: false,
+    };
+  }
+  return {
+    recommended_followup_action:
+      "Schedule one private 30-minute writing session this week and choose a piece that will not be posted, submitted, or monetized. Success: the session is on your calendar or one private piece is chosen. If blocked, write privately for 10 minutes without choosing a project.",
+    flags: ["vague_action_repaired"],
+    repaired: true,
+  };
+}
+
 function honestSearchStatus({
   status,
   requiresWebSearch,
@@ -103,9 +511,17 @@ function honestSearchStatus({
   sourceCount?: number;
   webSearchCallCount: number;
 }): DecisionSearchStatus {
-  if (webSearchCallCount > 0 || status !== "searched") return status;
-  if (requiresWebSearch || sourceCount > 0 || textLooksExternal(text ?? "")) return "needed";
-  return "not_needed";
+  if (webSearchCallCount > 0) return status;
+  const needsSearch =
+    Boolean(requiresWebSearch) ||
+    sourceCount > 0 ||
+    textNeedsLocalCurrentVerification(text ?? "");
+  if (status === "searched") {
+    if (needsSearch || textLooksExternal(text ?? "")) return "needed";
+    return "not_needed";
+  }
+  if (status === "not_needed" && needsSearch) return "needed";
+  return status;
 }
 
 function addUniqueStep(
@@ -232,7 +648,7 @@ function optionFromPlan({
   return {
     id,
     node_id: rootNodeId,
-    label: clipText(label, "Available move", 120),
+    label: clipText(normalizeUserFacingMoveMapLabel(label), "Available move", 120),
     description: clipText(description, "A possible path from the current board.", 1000),
     move_type: recommendationLevel === "recommended" ? "mixed" : "progress",
     recommendation_level: recommendationLevel,
@@ -421,6 +837,7 @@ function normalizeRootOptions({
   const cleaned = strategicOptions.length > 0 ? strategicOptions : root.options;
 
   return cleaned.map((option) => {
+    const label = normalizeUserFacingMoveMapLabel(option.label);
     const isSelected = option.id === selected.id;
     const nextSteps = isSelected
       ? uniqueSteps([
@@ -431,6 +848,7 @@ function normalizeRootOptions({
       : uniqueSteps(option.next_steps).slice(0, 6);
     return {
       ...option,
+      label,
       selected: isSelected,
       next_steps: nextSteps,
     };
@@ -584,7 +1002,7 @@ export function buildFallbackDecisionTree(plan: PlanLike): DecisionTree {
             }),
       ]).slice(0, 6);
 
-  return {
+  const tree: DecisionTree = {
     id: fallbackTreeId,
     board_id: plan.situation_id ?? null,
     root_node_id: rootNodeId,
@@ -615,6 +1033,11 @@ export function buildFallbackDecisionTree(plan: PlanLike): DecisionTree {
     created_at: plan.created_at ?? nowIso(),
     updated_at: plan.created_at ?? nowIso(),
   };
+  return sanitizeDecisionTreeSearchStatuses(
+    tree,
+    plan.local_reality_scout.used_web_search || plan.local_reality_scout.findings.length > 0 ? 1 : 0,
+    boardText(plan),
+  );
 }
 
 export function normalizeDecisionTree(plan: PlanLike): DecisionTree {
@@ -644,6 +1067,7 @@ export function normalizeDecisionTree(plan: PlanLike): DecisionTree {
     node.id === root.id
       ? {
           ...node,
+          title: normalizeUserFacingMoveMapLabel(node.title),
           selected_option_id: selected.id,
           question: compactQuestion(
             node.question,
@@ -654,7 +1078,14 @@ export function normalizeDecisionTree(plan: PlanLike): DecisionTree {
             selected: option.id === selected.id,
           })),
         }
-      : node,
+      : {
+          ...node,
+          title: normalizeUserFacingMoveMapLabel(node.title),
+          options: node.options.map((option) => ({
+            ...option,
+            label: normalizeUserFacingMoveMapLabel(option.label),
+          })),
+        },
   );
   const normalizedTree = {
     ...tree,
@@ -1254,6 +1685,7 @@ export function normalizeBranchExpansionResult(
 export function sanitizeBranchExpansionSearchStatus(
   result: BranchExpansionResultInput,
   webSearchCallCount: number,
+  contextText = "",
 ): BranchExpansionResultInput {
   if (webSearchCallCount > 0) return result;
   const resultText = expansionStatusText(result);
@@ -1271,30 +1703,65 @@ export function sanitizeBranchExpansionSearchStatus(
         search_status: nodeSearchStatus,
         options: result.node.options.map((option) => {
           const text = `${option.label} ${option.short_rationale} ${option.first_action_preview}`;
+          const search_status = honestSearchStatus({
+            status: option.search_status ?? "not_needed",
+            requiresWebSearch: result.search_needed,
+            text,
+            webSearchCallCount,
+          });
+          const action = normalizeActionLeafQuality({
+            action: {
+              title: option.first_action_preview || option.label,
+              details: option.first_action_preview || option.short_rationale,
+              estimated_minutes: null,
+              success_condition: "You know whether this branch is worth continuing.",
+              fallback: "Choose another branch or tell FlowPath what changed.",
+            },
+            boardText: `${contextText} ${resultText}`,
+            branchLabel: option.label,
+            searchStatus: search_status,
+            webSearchCallCount,
+          });
           return {
             ...option,
-            search_status: honestSearchStatus({
-              status: option.search_status ?? "not_needed",
-              requiresWebSearch: result.search_needed,
-              text,
-              webSearchCallCount,
-            }),
+            search_status,
+            first_action_preview: action.repaired
+              ? action.action.title
+              : option.first_action_preview,
           };
         }),
       },
     };
   }
   if (result.result_type === "action_leaf" && result.action_leaf) {
+    const search_status = honestSearchStatus({
+      status: result.action_leaf.search_status ?? "not_needed",
+      requiresWebSearch: result.search_needed,
+      text: resultText,
+      webSearchCallCount,
+    });
+    const action = normalizeActionLeafQuality({
+      action: {
+        title: result.action_leaf.title,
+        details: result.action_leaf.first_action,
+        estimated_minutes: null,
+        success_condition: result.action_leaf.success_condition,
+        fallback: result.action_leaf.if_blocked,
+      },
+      boardText: `${contextText} ${resultText}`,
+      branchLabel: result.selected_path_summary,
+      searchStatus: search_status,
+      webSearchCallCount,
+    });
     return {
       ...result,
       action_leaf: {
         ...result.action_leaf,
-        search_status: honestSearchStatus({
-          status: result.action_leaf.search_status ?? "not_needed",
-          requiresWebSearch: result.search_needed,
-          text: resultText,
-          webSearchCallCount,
-        }),
+        title: action.action.title,
+        first_action: action.action.details,
+        success_condition: action.action.success_condition,
+        if_blocked: action.action.fallback,
+        search_status,
       },
     };
   }
@@ -1304,37 +1771,124 @@ export function sanitizeBranchExpansionSearchStatus(
 export function sanitizeDecisionTreeSearchStatuses(
   tree: DecisionTree,
   webSearchCallCount: number,
+  contextText = "",
 ): DecisionTree {
   if (webSearchCallCount > 0) return tree;
   const nodes = tree.nodes.map((node) => {
     const nodeText = `${node.title} ${node.question} ${node.context_summary}`;
+    const nodeSearchStatus = honestSearchStatus({
+      status: node.search_status,
+      requiresWebSearch: node.options.some((option) => option.requires_web_search),
+      text: `${contextText} ${nodeText}`,
+      webSearchCallCount,
+    });
     return {
       ...node,
-      search_status: honestSearchStatus({
-        status: node.search_status,
-        requiresWebSearch: node.options.some((option) => option.requires_web_search),
-        text: nodeText,
-        webSearchCallCount,
-      }),
+      search_status: nodeSearchStatus,
       options: node.options.map((option) => {
         const optionText = `${option.label} ${option.description} ${option.why} ${option.first_action.title} ${option.first_action.details}`;
         const search_status = honestSearchStatus({
           status: option.search_status,
           requiresWebSearch: option.requires_web_search,
-          text: optionText,
+          text: `${contextText} ${nodeText} ${optionText}`,
           sourceCount: option.sources.length,
+          webSearchCallCount,
+        });
+        const first_action = normalizeActionForSearchQuality({
+          action: option.first_action,
+          boardText: `${contextText} ${nodeText}`,
+          branchLabel: option.label,
+          searchStatus: search_status,
           webSearchCallCount,
         });
         return {
           ...option,
           search_status,
           requires_web_search: search_status !== "not_needed",
-          sources: option.search_status === "searched" ? [] : option.sources,
+          sources: [],
+          first_action,
+          success_condition: first_action.success_condition,
+          fallback: first_action.fallback,
         };
       }),
+      action: node.action
+        ? normalizeActionForSearchQuality({
+            action: node.action,
+            boardText: `${contextText} ${nodeText}`,
+            branchLabel: node.title,
+            searchStatus: nodeSearchStatus,
+            webSearchCallCount,
+          })
+        : null,
     };
   });
-  return decisionTreeSchema.parse({ ...tree, nodes });
+  const parsedTree = decisionTreeSchema.parse({ ...tree, nodes });
+  const trace = decisionTreeTrace(parsedTree, parsedTree.selected_path);
+  const selectedOption = trace.at(-1)?.selectedOption;
+  const currentActionSearchStatus =
+    selectedOption?.search_status ?? trace.at(-1)?.node.search_status ?? "not_needed";
+  const current_action = normalizeActionForSearchQuality({
+    action: parsedTree.current_action,
+    boardText: `${contextText} ${selectedOption?.first_action.details ?? ""}`,
+    branchLabel: selectedOption?.label ?? "",
+    searchStatus: currentActionSearchStatus,
+    webSearchCallCount,
+  });
+  return decisionTreeSchema.parse({ ...parsedTree, current_action });
+}
+
+export function normalizePlanOutputForPersistence<T extends NextMovePlan>(
+  plan: T,
+  {
+    webSearchCallCount,
+    contextText = "",
+  }: {
+    webSearchCallCount: number;
+    contextText?: string;
+  },
+): T {
+  return alignPlanActionsWithDecisionTree({
+    ...plan,
+    decision_tree: sanitizeDecisionTreeSearchStatuses(
+      plan.decision_tree,
+      webSearchCallCount,
+      contextText,
+    ),
+  });
+}
+
+export function alignPlanActionsWithDecisionTree<T extends NextMovePlan>(plan: T): T {
+  const action = plan.decision_tree.current_action;
+  const canonicalDetails = decisionActionTaskNotes(action);
+  if (!canonicalDetails.trim()) return plan;
+
+  const task_candidates =
+    plan.task_candidates.length > 0
+      ? plan.task_candidates.map((candidate, index) =>
+          index === 0
+            ? {
+                ...candidate,
+                title: candidate.title || action.title,
+                details: canonicalDetails,
+                description: canonicalDetails,
+                success_condition:
+                  action.success_condition || candidate.success_condition,
+                estimated_minutes:
+                  candidate.estimated_minutes ?? action.estimated_minutes ?? 20,
+              }
+            : candidate,
+        )
+      : plan.task_candidates;
+
+  return {
+    ...plan,
+    first_10_minute_action: {
+      ...plan.first_10_minute_action,
+      title: action.title || plan.first_10_minute_action.title,
+      details: canonicalDecisionActionText(action),
+    },
+    task_candidates,
+  };
 }
 
 function actionFromExpansionLeaf(
@@ -1494,6 +2048,7 @@ export function attachBranchExpansionToTree({
   selectedPath,
   expansion,
   webSearchCallCount = 0,
+  contextText = "",
 }: {
   tree: DecisionTree;
   nodeId: string;
@@ -1501,6 +2056,7 @@ export function attachBranchExpansionToTree({
   selectedPath: string[];
   expansion: BranchExpansionResultInput;
   webSearchCallCount?: number;
+  contextText?: string;
 }) {
   const now = nowIso();
   const node = getDecisionNode(tree, nodeId);
@@ -1515,6 +2071,7 @@ export function attachBranchExpansionToTree({
   const preparedExpansion = sanitizeBranchExpansionSearchStatus(
     normalizeBranchExpansionResult(expansion, option),
     webSearchCallCount,
+    `${contextText} ${node.title} ${node.question} ${node.context_summary} ${option.label} ${option.description} ${option.why}`,
   );
   const childNode = childNodeFromExpansion({
     tree,

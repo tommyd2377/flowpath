@@ -2,15 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  alignPlanActionsWithDecisionTree,
   attachBranchExpansionToTree,
   buildFallbackDecisionTree,
+  canonicalDecisionActionText,
   decisionBranchSourceSection,
+  decisionActionTaskNotes,
   decisionTreeTrace,
   expandDecisionTreeAtOption,
   findDecisionOption,
   getDecisionNode,
+  hasInternalMoveMapLabelJargon,
   normalizeDecisionTree,
+  normalizeActionLeafQuality,
+  normalizePlanOutputForPersistence,
+  normalizeUserFacingMoveMapLabel,
   normalizeBranchExpansionResult,
+  normalizeReconciliationFollowupQuality,
   rootDecisionNode,
   sanitizeBranchExpansionSearchStatus,
   sanitizeDecisionTreeSearchStatuses,
@@ -134,6 +142,28 @@ function tennisPlan(
   };
 }
 
+test("move map label quality helper normalizes obvious internal strategy labels", () => {
+  assert.equal(
+    hasInternalMoveMapLabelJargon("Brooklyn-first advanced improv container"),
+    true,
+  );
+  assert.equal(
+    normalizeUserFacingMoveMapLabel("Brooklyn-first advanced improv container"),
+    "Improv class in Brooklyn",
+  );
+  assert.equal(
+    normalizeUserFacingMoveMapLabel("Actor-centered on-camera path"),
+    "On-camera acting",
+  );
+  assert.equal(
+    normalizeUserFacingMoveMapLabel("Lowest-friction version"),
+    "Low-commitment option",
+  );
+  assert.equal(hasInternalMoveMapLabelJargon("On-camera acting"), false);
+  assert.equal(hasInternalMoveMapLabelJargon("Acting fundamentals"), false);
+  assert.equal(hasInternalMoveMapLabelJargon("Freelance/service path"), false);
+});
+
 test("fallback tree creates visible branches and stable branch task source", () => {
   const tree = buildFallbackDecisionTree(tennisPlan());
   const root = rootDecisionNode(tree);
@@ -155,7 +185,8 @@ test("fallback tree creates visible branches and stable branch task source", () 
   assert.equal(recommended?.requires_web_search, true);
   assert.equal(root.options.some((option) => /^Find one/i.test(option.label)), false);
   assert.equal(recommended?.next_steps[0]?.title, "Find one beginner clinic");
-  assert.equal(tree.current_action.title, "Find one beginner clinic");
+  assert.equal(tree.current_action.title, "Search and shortlist beginner tennis options");
+  assert.match(tree.current_action.details, /Within 20 minutes today/);
   assert.equal(
     decisionBranchSourceSection(recommended?.id),
     "decision_branch:beginner_clinic_group",
@@ -521,6 +552,386 @@ test("search honesty downgrades searched statuses when no search call happened",
   assert.deepEqual(recommended?.sources, []);
 });
 
+test("action quality gate repairs vague search-needed tennis actions", () => {
+  const repaired = normalizeActionLeafQuality({
+    action: {
+      title: "Check beginner tennis formats near you",
+      details: "Check beginner tennis formats near you.",
+      estimated_minutes: 20,
+      success_condition: "You know what to do next.",
+      fallback: "Try another option.",
+    },
+    boardText:
+      "Beginner in Bed-Stuy/11216 wants to start tennis and meet nearby people through tennis.",
+    branchLabel: "Beginner clinic",
+    searchStatus: "needed",
+    webSearchCallCount: 0,
+  });
+
+  assert.equal(repaired.repaired, true);
+  assert.ok(repaired.flags.includes("missing_time_boundary"));
+  assert.match(repaired.action.details, /Within 20 minutes today/);
+  assert.match(repaired.action.details, /3 recurring beginner adult tennis options/);
+  assert.match(repaired.action.details, /beginner adult tennis clinic 11216/);
+  assert.match(repaired.action.details, /recurring, beginner-friendly, low-pressure/);
+  assert.match(repaired.action.success_condition, /Three candidates/);
+  assert.match(repaired.action.fallback, /private or semi-private coach/);
+});
+
+test("action quality gate repairs acting and community search workflows without provider or location invention", () => {
+  const acting = normalizeActionLeafQuality({
+    action: {
+      title: "Find an acting class",
+      details: "Find an acting class in Brooklyn.",
+      estimated_minutes: 30,
+      success_condition: "A class is found.",
+      fallback: "Try another class.",
+    },
+    boardText: "The user wants an acting or improv class in Brooklyn.",
+    branchLabel: "Improv class",
+    searchStatus: "needed",
+    webSearchCallCount: 0,
+  });
+
+  assert.equal(acting.repaired, true);
+  assert.match(acting.action.details, /Within 30 minutes today/);
+  assert.match(acting.action.details, /3-5 adult acting or improv classes/);
+  assert.match(acting.action.details, /adult acting class Brooklyn/);
+  assert.match(acting.action.details, /level fit, recurring cohort, commute, schedule/);
+  assert.doesNotMatch(acting.action.details, /Brooklyn Comedy Collective|BCC|Level 3/);
+
+  const community = normalizeActionLeafQuality({
+    action: {
+      title: "Choose one weekly place",
+      details: "Choose one weekly place to keep showing up.",
+      estimated_minutes: 30,
+      success_condition: "One place is chosen.",
+      fallback: "Try again.",
+    },
+    boardText: "The user wants friends and community, not dating.",
+    branchLabel: "Recurring community group",
+    searchStatus: "needed",
+    webSearchCallCount: 0,
+  });
+
+  assert.equal(community.repaired, true);
+  assert.match(community.action.details, /3 recurring non-dating community options/);
+  assert.match(community.action.details, /same people are likely to return/);
+  assert.match(community.action.success_condition, /calendar/);
+  assert.doesNotMatch(community.action.details, /Brooklyn|Bed-Stuy|11216/);
+});
+
+test("action quality gate leaves concrete, non-search, searched, and urgent actions alone", () => {
+  const concrete = {
+    title: "Search and shortlist beginner tennis options",
+    details:
+      "Within 20 minutes today, search for 3 recurring beginner adult tennis options near your ZIP/neighborhood using 'beginner adult tennis clinic near me'. Shortlist only recurring beginner-friendly low-pressure options.",
+    estimated_minutes: 20,
+    success_condition: "Three candidates are saved or one inquiry is sent today.",
+    fallback: "If none appear, ask one coach where adult beginners move into group play.",
+  };
+  assert.equal(
+    normalizeActionLeafQuality({
+      action: concrete,
+      boardText: "tennis nearby",
+      branchLabel: "Beginner clinic",
+      searchStatus: "needed",
+      webSearchCallCount: 0,
+    }).repaired,
+    false,
+  );
+  assert.equal(
+    normalizeActionLeafQuality({
+      action: { ...concrete, details: "Find a class." },
+      boardText: "tennis nearby",
+      branchLabel: "Beginner clinic",
+      searchStatus: "not_needed",
+      webSearchCallCount: 0,
+    }).repaired,
+    false,
+  );
+  assert.equal(
+    normalizeActionLeafQuality({
+      action: { ...concrete, details: "Find a class." },
+      boardText: "tennis nearby",
+      branchLabel: "Beginner clinic",
+      searchStatus: "needed",
+      webSearchCallCount: 1,
+    }).repaired,
+    false,
+  );
+  assert.equal(
+    normalizeActionLeafQuality({
+      action: {
+        title: "Call urgent housing support",
+        details: "Call a housing hotline today.",
+        estimated_minutes: 20,
+        success_condition: "You reach human support.",
+        fallback: "If unavailable, call emergency assistance.",
+      },
+      boardText: "Urgent eviction pressure and housing crisis.",
+      branchLabel: "Immediate housing support",
+      searchStatus: "needed",
+      webSearchCallCount: 0,
+    }).repaired,
+    false,
+  );
+});
+
+test("repaired operational actions become canonical task and trace text", () => {
+  const action = {
+    title: "Search and shortlist beginner tennis options",
+    details: "Search and shortlist beginner tennis options.",
+    estimated_minutes: 20,
+    success_condition: "A next step is clear.",
+    fallback: "Try another option.",
+  };
+  const repaired = normalizeActionLeafQuality({
+    action,
+    boardText:
+      "Beginner in Bed-Stuy/11216 wants tennis as a new skill and a way to meet neighborhood people.",
+    branchLabel: "Beginner clinic",
+    searchStatus: "needed",
+    webSearchCallCount: 0,
+  });
+
+  assert.equal(repaired.repaired, true);
+  assert.equal(
+    repaired.original_action_text,
+    "Search and shortlist beginner tennis options.",
+  );
+  assert.notEqual(repaired.canonical_action_text, repaired.original_action_text);
+  assert.equal(canonicalDecisionActionText(repaired.action), repaired.action.details);
+  assert.match(repaired.canonical_action_text, /Within 20 minutes today/);
+  assert.match(repaired.canonical_action_text, /Success: Three candidates/);
+  assert.match(repaired.canonical_action_text, /If blocked:/);
+  assert.match(decisionActionTaskNotes(repaired.action), /Success: Three candidates/);
+  assert.match(decisionActionTaskNotes(repaired.action), /If blocked:/);
+});
+
+test("decision tree sanitizer repairs the live tennis failure before persistence", () => {
+  const tree = buildFallbackDecisionTree(tennisPlan());
+  const root = rootDecisionNode(tree);
+  const clinic = root.options.find((option) => option.id === tree.recommended_option_id);
+  assert.ok(clinic);
+  const weakTree = {
+    ...tree,
+    current_action: {
+      title: "Check beginner tennis formats near you",
+      details: "Check beginner tennis formats near you.",
+      estimated_minutes: 20,
+      success_condition: "You know what to do next.",
+      fallback: "Try another option.",
+    },
+    nodes: tree.nodes.map((node) =>
+      node.id === root.id
+        ? {
+            ...node,
+            options: node.options.map((option) =>
+              option.id === clinic.id
+                ? {
+                    ...option,
+                    first_action: {
+                      ...option.first_action,
+                      title: "Check beginner tennis formats near you",
+                      details: "Check beginner tennis formats near you.",
+                      success_condition: "You know what to do next.",
+                      fallback: "Try another option.",
+                    },
+                  }
+                : option,
+            ),
+          }
+        : node,
+    ),
+  };
+
+  const sanitized = sanitizeDecisionTreeSearchStatuses(
+    weakTree,
+    0,
+    "Beginner in Bed-Stuy/11216 wants to start tennis and meet nearby people.",
+  );
+
+  assert.match(sanitized.current_action.details, /Within 20 minutes today/);
+  assert.match(sanitized.current_action.success_condition, /Three candidates/);
+  assert.match(
+    findDecisionOption(sanitized, clinic.id)?.first_action.details ?? "",
+    /beginner adult tennis clinic 11216/,
+  );
+});
+
+test("decision tree sanitizer upgrades not-needed local actions before repair", () => {
+  const tree = buildFallbackDecisionTree(tennisPlan());
+  const root = rootDecisionNode(tree);
+  const clinic = root.options.find((option) => option.id === tree.recommended_option_id);
+  assert.ok(clinic);
+
+  const repairedModelTree = {
+    ...tree,
+    current_action: {
+      title: "Choose a beginner-friendly recurring tennis group",
+      details:
+        "Find a weekly adult beginner clinic, drill, or social group near Bed-Stuy and commit to the best plausible one.",
+      estimated_minutes: 20,
+      success_condition: "You identify one best-fit recurring beginner option and one backup.",
+      fallback: "If nothing fits, contact one provider directly and ask for placement guidance.",
+    },
+    nodes: tree.nodes.map((node) =>
+      node.id === root.id
+        ? {
+            ...node,
+            options: node.options.map((option) =>
+              option.id === clinic.id
+                ? {
+                    ...option,
+                    requires_web_search: false,
+                    search_status: "not_needed" as const,
+                    first_action: {
+                      ...option.first_action,
+                      title: "Choose a beginner-friendly recurring tennis group",
+                      details:
+                        "Find a weekly adult beginner clinic, drill, or social group near Bed-Stuy and commit to the best plausible one.",
+                      success_condition:
+                        "You identify one best-fit recurring beginner option and one backup.",
+                      fallback:
+                        "If nothing fits, contact one provider directly and ask for placement guidance.",
+                    },
+                  }
+                : option,
+            ),
+          }
+        : node,
+    ),
+  };
+
+  const sanitized = sanitizeDecisionTreeSearchStatuses(
+    repairedModelTree,
+    0,
+    "Beginner in Bed-Stuy/11216 wants to start tennis and meet nearby people.",
+  );
+  const sanitizedClinic = findDecisionOption(sanitized, clinic.id);
+
+  assert.equal(sanitizedClinic?.search_status, "needed");
+  assert.equal(sanitizedClinic?.requires_web_search, true);
+  assert.match(sanitized.current_action.details, /Within 20 minutes today/);
+  assert.match(sanitized.current_action.details, /3 recurring beginner adult tennis options/);
+  assert.match(sanitized.current_action.details, /beginner adult tennis clinic 11216/);
+  assert.match(sanitized.current_action.success_condition, /Three candidates/);
+  assert.match(
+    sanitizedClinic?.first_action.details ?? "",
+    /adult tennis clinic Brooklyn beginner/,
+  );
+});
+
+test("plan task candidates inherit canonical repaired Move Map action details", () => {
+  const basePlan = tennisPlan();
+  const tree = sanitizeDecisionTreeSearchStatuses(
+    {
+      ...buildFallbackDecisionTree(basePlan),
+      current_action: {
+        title: "Search and shortlist beginner tennis options",
+        details: "Search and shortlist beginner tennis options.",
+        estimated_minutes: 20,
+        success_condition: "A next step is clear.",
+        fallback: "Try another option.",
+      },
+    },
+    0,
+    "Beginner in Bed-Stuy/11216 wants tennis and local community.",
+  );
+  const aligned = alignPlanActionsWithDecisionTree({
+    ...basePlan,
+    decision_tree: tree,
+  });
+
+  assert.match(aligned.first_10_minute_action.details, /Within 20 minutes today/);
+  assert.match(aligned.task_candidates[0]?.details ?? "", /Within 20 minutes today/);
+  assert.match(aligned.task_candidates[0]?.details ?? "", /Success: Three candidates/);
+  assert.match(aligned.task_candidates[0]?.description ?? "", /If blocked:/);
+});
+
+test("plan persistence normalization runs search honesty before task alignment", () => {
+  const basePlan = tennisPlan();
+  const tree = buildFallbackDecisionTree(basePlan);
+  const root = rootDecisionNode(tree);
+  const clinic = root.options.find((option) => option.id === tree.recommended_option_id);
+  assert.ok(clinic);
+  const weakTree = {
+    ...tree,
+    current_action: {
+      title: "Choose a beginner-friendly recurring tennis group",
+      details:
+        "Find a weekly adult beginner clinic, drill, or social group near Bed-Stuy and commit to the best plausible one.",
+      estimated_minutes: 20,
+      success_condition: "You identify one best-fit recurring beginner option and one backup.",
+      fallback: "If nothing fits, contact one provider directly and ask for placement guidance.",
+    },
+    nodes: tree.nodes.map((node) =>
+      node.id === root.id
+        ? {
+            ...node,
+            options: node.options.map((option) =>
+              option.id === clinic.id
+                ? {
+                    ...option,
+                    requires_web_search: false,
+                    search_status: "not_needed" as const,
+                    first_action: {
+                      ...option.first_action,
+                      title: "Choose a beginner-friendly recurring tennis group",
+                      details:
+                        "Find a weekly adult beginner clinic, drill, or social group near Bed-Stuy and commit to the best plausible one.",
+                      success_condition:
+                        "You identify one best-fit recurring beginner option and one backup.",
+                      fallback:
+                        "If nothing fits, contact one provider directly and ask for placement guidance.",
+                    },
+                  }
+                : option,
+            ),
+          }
+        : node,
+    ),
+  };
+  const normalized = normalizePlanOutputForPersistence(
+    {
+      ...basePlan,
+      decision_tree: weakTree,
+    },
+    {
+      webSearchCallCount: 0,
+      contextText:
+        "Beginner in Bed-Stuy/11216 wants tennis and community; local current options matter.",
+    },
+  );
+
+  assert.match(normalized.decision_tree.current_action.details, /Within 20 minutes today/);
+  assert.match(normalized.first_10_minute_action.details, /Within 20 minutes today/);
+  assert.match(normalized.task_candidates[0]?.details ?? "", /Within 20 minutes today/);
+  assert.match(normalized.task_candidates[0]?.details ?? "", /Success: Three candidates/);
+});
+
+test("reconciliation followup quality repairs meta-only private writing next steps", () => {
+  const repaired = normalizeReconciliationFollowupQuality({
+    recommendedFollowupAction:
+      "Recalculate the board around a private-writing path.",
+    boardText:
+      "Forget monetizing writing. The user wants to keep writing private and non-commercial for now.",
+  });
+
+  assert.equal(repaired.repaired, true);
+  assert.match(repaired.recommended_followup_action, /private 30-minute writing session/);
+  assert.match(repaired.recommended_followup_action, /Success:/);
+  assert.match(repaired.recommended_followup_action, /If blocked/);
+
+  const noAction = normalizeReconciliationFollowupQuality({
+    recommendedFollowupAction:
+      "No action needed: this only changes future recommendations.",
+    boardText: "Private writing.",
+  });
+  assert.equal(noAction.repaired, false);
+});
+
 test("model-backed branch expansion attaches child decision nodes and action leaves", () => {
   const tree = buildFallbackDecisionTree(tennisPlan());
   const root = rootDecisionNode(tree);
@@ -533,6 +944,7 @@ test("model-backed branch expansion attaches child decision nodes and action lea
     optionId: coach.id,
     selectedPath: [coach.id],
     webSearchCallCount: 0,
+    contextText: "The user wants to start tennis near Bed-Stuy and meet people.",
     expansion: branchExpansionResultSchema.parse({
       result_type: "decision_node",
       node: {
@@ -592,6 +1004,7 @@ test("model-backed branch expansion attaches child decision nodes and action lea
     optionId: childOption.id,
     selectedPath: expanded.selected_path,
     webSearchCallCount: 0,
+    contextText: "The user wants to start tennis near Bed-Stuy and meet people.",
     expansion: branchExpansionResultSchema.parse({
       result_type: "action_leaf",
       node: null,
@@ -613,7 +1026,9 @@ test("model-backed branch expansion attaches child decision nodes and action lea
     }),
   });
   assert.equal(decisionTreeTrace(leafTree, leafTree.selected_path).at(-1)?.node.kind, "action");
-  assert.equal(leafTree.current_action.title, "Ask one coach for a beginner group route");
+  assert.equal(leafTree.current_action.title, "Search and shortlist beginner tennis options");
+  assert.match(leafTree.current_action.details, /Within 20 minutes today/);
+  assert.match(leafTree.current_action.details, /beginner adult tennis clinic/);
 });
 
 test("sequential branch expansion output is coerced into an action leaf", () => {

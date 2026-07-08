@@ -23,7 +23,11 @@ import {
   normalizePlanForIntervention,
   type CognitivePlanContext,
 } from "./cognitive-operating-layer";
-import { sanitizeDecisionTreeSearchStatuses } from "./decision-tree";
+import {
+  normalizePlanOutputForPersistence,
+  normalizeUserFacingMoveMapLabel,
+  normalizeReconciliationFollowupQuality,
+} from "./decision-tree";
 import { DEFAULT_APP_TIMEZONE } from "./env";
 import {
   countWebSearchCalls,
@@ -125,6 +129,7 @@ Rules:
 - Optimize for sustainable expected value under the user's constraints: upside, downside risk, time to feedback, cash/time/energy cost, access, local reality, proof, network, stability, meaning, and future options.
 - Do not be generic, cruel, therapy-coded, or motivational filler.
 - Do not over-encourage unrealistic paths. If the goal is not reachable from this board state, create prerequisite or adjacent viable branches.
+- ${nextMovePlanPromptModules.userFacingLabelInstruction}
 - ${nextMovePlanPromptModules.branchQualityInstruction}
 - ${nextMovePlanPromptModules.actionLeafInstruction}
 - A decision node should usually contain 2-5 options. Use fewer only when fewer are real; hard maximum is 6. Do not force exactly three options.
@@ -155,7 +160,7 @@ Rules:
 - Preserve the existing Move Map when the update does not materially invalidate the selected path.
 - If the selected path is invalidated, explain why briefly in move_map_effect.reason.
 - Use user-facing Board language in summaries and explanations. Do not expose implementation terms, legacy storage names, memory enum names, or reasoning internals in user_visible_explanation.
-- Always set recommended_followup_action. If no action is needed, say "No action needed:" and give the concrete reason. If action is useful, make it an executable next step with a verb, object, scope, success condition, and if-blocked fallback when relevant. For board updates that invalidate a path, say whether to preserve, recalculate, or continue with the new constraint. For memory corrections, say how future FlowPath moves should change and give an optional concrete next step only when it helps.`;
+- Always set recommended_followup_action. If no action is needed, say "No action needed:" and give the concrete reason. If action is useful, make it an executable next step with a verb, object, scope, success condition, and if-blocked fallback when relevant. For board updates that invalidate a path, say whether to preserve, recalculate, or continue with the new constraint, but do not stop at "recalculate" unless you also say what should change next. For memory corrections, say how future FlowPath moves should change and, when helpful, give a practical optional next step such as scheduling one private writing session, choosing one protected project, or continuing only with branches that respect the new constraint.`;
 
 export type BranchExpansionGenerationContext = {
   date: string;
@@ -773,6 +778,191 @@ function responseUsedWebSearch(response: unknown) {
   return countWebSearchCalls(response) > 0;
 }
 
+export type StructuredOutputRecoveryMetadata = {
+  structuredOutputRepaired: boolean;
+  structuredOutputAttempts: number;
+  structuredOutputRepairAttempts: number;
+  initialErrorSummary?: string;
+  initialRawOutputExcerpt?: string;
+  repairErrorSummary?: string;
+};
+
+export class StructuredOutputRecoveryError extends Error {
+  readonly initialErrorSummary: string;
+  readonly repairErrorSummary: string;
+  readonly initialRawOutputExcerpt: string;
+
+  constructor({
+    name,
+    initialErrorSummary,
+    repairErrorSummary,
+    initialRawOutputExcerpt,
+  }: {
+    name: string;
+    initialErrorSummary: string;
+    repairErrorSummary: string;
+    initialRawOutputExcerpt: string;
+  }) {
+    super(
+      `${name} structured output could not be parsed or repaired: ${repairErrorSummary}`,
+    );
+    this.name = "StructuredOutputRecoveryError";
+    this.initialErrorSummary = initialErrorSummary;
+    this.repairErrorSummary = repairErrorSummary;
+    this.initialRawOutputExcerpt = initialRawOutputExcerpt;
+  }
+}
+
+function structuredErrorSummary(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return error.issues
+      .slice(0, 8)
+      .map((issue) => {
+        const path = issue.path.length ? issue.path.join(".") : "root";
+        return `${path}: ${issue.message}`;
+      })
+      .join("; ")
+      .slice(0, 1200);
+  }
+  if (error instanceof Error) return error.message.slice(0, 1200);
+  return String(error).slice(0, 1200);
+}
+
+function rawOutputExcerpt(value: string, maxLength = 4000) {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, maxLength).trimEnd()}...`;
+}
+
+function compactSchemaForRepair(schema: Record<string, unknown>) {
+  const serialized = JSON.stringify(schema, null, 2);
+  if (serialized.length <= 18000) return serialized;
+  return `${serialized.slice(0, 18000).trimEnd()}\n... schema truncated; preserve required fields and types above.`;
+}
+
+export async function parseStructuredOutputWithRepair<T>({
+  name,
+  outputText,
+  parse,
+  repairOutputText,
+}: {
+  name: string;
+  outputText: string;
+  parse: (outputText: string) => T;
+  repairOutputText: (input: {
+    initialErrorSummary: string;
+    initialRawOutputExcerpt: string;
+  }) => Promise<{ outputText: string; usage?: AiUsageMetadata }>;
+}): Promise<
+  StructuredOutputRecoveryMetadata & {
+    parsed: T;
+    outputText: string;
+    repairUsage?: AiUsageMetadata;
+  }
+> {
+  try {
+    return {
+      parsed: parse(outputText),
+      outputText,
+      structuredOutputRepaired: false,
+      structuredOutputAttempts: 1,
+      structuredOutputRepairAttempts: 0,
+    };
+  } catch (initialError) {
+    const initialErrorSummary = structuredErrorSummary(initialError);
+    const initialRawOutputExcerpt = rawOutputExcerpt(outputText);
+    let repaired: { outputText: string; usage?: AiUsageMetadata };
+    try {
+      repaired = await repairOutputText({
+        initialErrorSummary,
+        initialRawOutputExcerpt,
+      });
+    } catch (repairError) {
+      throw new StructuredOutputRecoveryError({
+        name,
+        initialErrorSummary,
+        repairErrorSummary: structuredErrorSummary(repairError),
+        initialRawOutputExcerpt,
+      });
+    }
+    try {
+      return {
+        parsed: parse(repaired.outputText),
+        outputText: repaired.outputText,
+        repairUsage: repaired.usage,
+        structuredOutputRepaired: true,
+        structuredOutputAttempts: 2,
+        structuredOutputRepairAttempts: 1,
+        initialErrorSummary,
+        initialRawOutputExcerpt,
+      };
+    } catch (repairError) {
+      throw new StructuredOutputRecoveryError({
+        name,
+        initialErrorSummary,
+        repairErrorSummary: structuredErrorSummary(repairError),
+        initialRawOutputExcerpt,
+      });
+    }
+  }
+}
+
+async function createStructuredResponseWithRepair<T>({
+  parse,
+  ...input
+}: Parameters<typeof createStructuredResponse>[0] & {
+  parse: (outputText: string) => T;
+}): Promise<
+  Awaited<ReturnType<typeof createStructuredResponse>> &
+    StructuredOutputRecoveryMetadata & {
+      parsed: T;
+    }
+> {
+  const first = await createStructuredResponse(input);
+  const repairResult = await parseStructuredOutputWithRepair({
+    name: input.name,
+    outputText: first.outputText,
+    parse,
+    repairOutputText: async ({ initialErrorSummary, initialRawOutputExcerpt }) => {
+      const repair = await createStructuredResponse({
+        system:
+          "You repair invalid structured JSON for FlowPath. Convert the raw output into valid JSON matching the required schema. Do not add commentary. Do not change meaning except to satisfy the schema. Return only JSON.",
+        name: input.name,
+        description: `Repair output for ${input.description}`,
+        schema: input.schema,
+        user: {
+          instruction:
+            "The previous model response was invalid JSON or did not satisfy the schema. Return a corrected JSON object only.",
+          generation_name: input.name,
+          schema_description: input.description,
+          validation_error: initialErrorSummary,
+          compact_json_schema: compactSchemaForRepair(input.schema),
+          raw_output: initialRawOutputExcerpt,
+        },
+        maxOutputTokens: input.maxOutputTokens,
+        model: input.model,
+        modelRole: input.modelRole,
+      });
+      return { outputText: repair.outputText, usage: repair.usage };
+    },
+  });
+
+  return {
+    ...first,
+    outputText: repairResult.outputText,
+    usage: repairResult.structuredOutputRepaired
+      ? combineUsage(first.usage, repairResult.repairUsage ?? {})
+      : first.usage,
+    parsed: repairResult.parsed,
+    structuredOutputRepaired: repairResult.structuredOutputRepaired,
+    structuredOutputAttempts: repairResult.structuredOutputAttempts,
+    structuredOutputRepairAttempts: repairResult.structuredOutputRepairAttempts,
+    initialErrorSummary: repairResult.initialErrorSummary,
+    initialRawOutputExcerpt: repairResult.initialRawOutputExcerpt,
+    repairErrorSummary: repairResult.repairErrorSummary,
+  };
+}
+
 type JsonRecord = Record<string, unknown>;
 
 function isJsonRecord(value: unknown): value is JsonRecord {
@@ -995,8 +1185,8 @@ function trimDecisionOptions(value: unknown) {
   if (!Array.isArray(value)) return value;
   return value.map((option) =>
     isJsonRecord(option)
-      ? {
-          ...trimGeneratedRecordStrings(option, {
+      ? (() => {
+          const trimmedOption = trimGeneratedRecordStrings(option, {
             id: 120,
             node_id: 120,
             label: 120,
@@ -1007,15 +1197,23 @@ function trimDecisionOptions(value: unknown) {
             time_to_feedback: 160,
             success_condition: 1000,
             fallback: 1000,
-          }),
-          next_node_id:
-            typeof option.next_node_id === "string"
-              ? trimGeneratedString(option.next_node_id, 120)
-              : option.next_node_id,
-          first_action: trimDecisionAction(option.first_action),
-          next_steps: trimNextMoveSteps(option.next_steps),
-          sources: trimDecisionSources(option.sources),
-        }
+          });
+          const label =
+            typeof trimmedOption.label === "string"
+              ? normalizeUserFacingMoveMapLabel(trimmedOption.label)
+              : trimmedOption.label;
+          return {
+            ...trimmedOption,
+            label,
+            next_node_id:
+              typeof option.next_node_id === "string"
+                ? trimGeneratedString(option.next_node_id, 120)
+                : option.next_node_id,
+            first_action: trimDecisionAction(option.first_action),
+            next_steps: trimNextMoveSteps(option.next_steps),
+            sources: trimDecisionSources(option.sources),
+          };
+        })()
       : option,
   );
 }
@@ -1051,6 +1249,10 @@ function trimDecisionTree(value: unknown) {
                   question: 500,
                   context_summary: 1200,
                 });
+                const title =
+                  typeof trimmedNode.title === "string"
+                    ? normalizeUserFacingMoveMapLabel(trimmedNode.title)
+                    : trimmedNode.title;
                 const question =
                   typeof trimmedNode.question === "string" &&
                   trimmedNode.question.trim()
@@ -1058,25 +1260,26 @@ function trimDecisionTree(value: unknown) {
                     : fallbackDecisionNodeQuestion(trimmedNode);
                 return {
                   ...trimmedNode,
+                  title,
                   question,
-                parent_id:
-                  typeof node.parent_id === "string"
-                    ? trimGeneratedString(node.parent_id, 120)
-                    : node.parent_id,
-                selected_from_option_id:
-                  typeof node.selected_from_option_id === "string"
-                    ? trimGeneratedString(node.selected_from_option_id, 120)
-                    : node.selected_from_option_id,
-                selected_option_id:
-                  typeof node.selected_option_id === "string"
-                    ? trimGeneratedString(node.selected_option_id, 120)
-                    : node.selected_option_id,
-                generated_at:
-                  typeof node.generated_at === "string"
-                    ? trimGeneratedString(node.generated_at, 80)
-                    : node.generated_at,
-                action: trimDecisionAction(node.action),
-                options: trimDecisionOptions(node.options),
+                  parent_id:
+                    typeof node.parent_id === "string"
+                      ? trimGeneratedString(node.parent_id, 120)
+                      : node.parent_id,
+                  selected_from_option_id:
+                    typeof node.selected_from_option_id === "string"
+                      ? trimGeneratedString(node.selected_from_option_id, 120)
+                      : node.selected_from_option_id,
+                  selected_option_id:
+                    typeof node.selected_option_id === "string"
+                      ? trimGeneratedString(node.selected_option_id, 120)
+                      : node.selected_option_id,
+                  generated_at:
+                    typeof node.generated_at === "string"
+                      ? trimGeneratedString(node.generated_at, 80)
+                      : node.generated_at,
+                  action: trimDecisionAction(node.action),
+                  options: trimDecisionOptions(node.options),
                 };
               })()
             : node,
@@ -1095,37 +1298,63 @@ function trimBranchExpansionOutput(value: unknown) {
     memory_used: trimGeneratedStringArray(value.memory_used, 240),
     assumptions: trimGeneratedStringArray(value.assumptions, 500),
     node: isJsonRecord(value.node)
-      ? {
-          ...trimGeneratedRecordStrings(value.node, {
+      ? (() => {
+          const trimmedNode = trimGeneratedRecordStrings(value.node, {
             id: 120,
             title: 180,
             question: 500,
             summary: 1200,
-          }),
-          options: Array.isArray(value.node.options)
-            ? value.node.options.map((option) =>
-                isJsonRecord(option)
-                  ? trimGeneratedRecordStrings(option, {
-                      id: 120,
-                      label: 120,
-                      short_rationale: 600,
-                      time_to_feedback: 160,
-                      first_action_preview: 500,
-                    })
-                  : option,
-              )
-            : value.node.options,
-        }
+          });
+          const title =
+            typeof trimmedNode.title === "string"
+              ? normalizeUserFacingMoveMapLabel(trimmedNode.title)
+              : trimmedNode.title;
+          return {
+            ...trimmedNode,
+            title,
+            options: Array.isArray(value.node.options)
+              ? value.node.options.map((option) =>
+                  isJsonRecord(option)
+                    ? (() => {
+                        const trimmedOption = trimGeneratedRecordStrings(option, {
+                          id: 120,
+                          label: 120,
+                          short_rationale: 600,
+                          time_to_feedback: 160,
+                          first_action_preview: 500,
+                        });
+                        return {
+                          ...trimmedOption,
+                          label:
+                            typeof trimmedOption.label === "string"
+                              ? normalizeUserFacingMoveMapLabel(trimmedOption.label)
+                              : trimmedOption.label,
+                        };
+                      })()
+                    : option,
+                )
+              : value.node.options,
+          };
+        })()
       : value.node,
     action_leaf: isJsonRecord(value.action_leaf)
-      ? trimGeneratedRecordStrings(value.action_leaf, {
-          id: 120,
-          title: 180,
-          first_action: 1000,
-          first_10_minutes: 1000,
-          success_condition: 1000,
-          if_blocked: 1000,
-        })
+      ? (() => {
+          const trimmedLeaf = trimGeneratedRecordStrings(value.action_leaf, {
+            id: 120,
+            title: 180,
+            first_action: 1000,
+            first_10_minutes: 1000,
+            success_condition: 1000,
+            if_blocked: 1000,
+          });
+          return {
+            ...trimmedLeaf,
+            title:
+              typeof trimmedLeaf.title === "string"
+                ? normalizeUserFacingMoveMapLabel(trimmedLeaf.title)
+                : trimmedLeaf.title,
+          };
+        })()
       : value.action_leaf,
   };
 }
@@ -2222,6 +2451,7 @@ export type BranchExpansionGenerationResult = {
   webSearchCallCount: number;
   webSearchDecisionReason: ReturnType<typeof webSearchDecisionReason>;
   modelSelection: GenerationModelSelection;
+  structuredOutput: StructuredOutputRecoveryMetadata;
 };
 
 export async function generateBranchExpansion(
@@ -2250,7 +2480,7 @@ export async function generateBranchExpansion(
     competingPriorityCount: context.open_tasks.length,
     promptApproxChars: JSON.stringify(context).length,
   });
-  const response = await createStructuredResponse({
+  const response = await createStructuredResponseWithRepair({
     system: branchExpansionSystemPrompt,
     name: "flowpath_branch_expansion",
     description:
@@ -2264,7 +2494,7 @@ export async function generateBranchExpansion(
         allow_web_search: allowWebSearch,
         max_web_searches: tools ? 2 : 0,
         if_no_search:
-          "Do not claim local/current verification. Mark search_status needed/unavailable and make the action a concrete search/check step.",
+          "Do not claim local/current verification. Mark search_status needed/unavailable and make the action a concrete search/check workflow with search terms, target quantity, shortlist criteria, time boundary, success condition, and fallback.",
       },
     },
     tools,
@@ -2273,10 +2503,12 @@ export async function generateBranchExpansion(
     maxOutputTokens: BRANCH_EXPANSION_MAX_OUTPUT_TOKENS,
     model: selection.model,
     modelRole: selection.modelRole,
+    parse: (outputText) =>
+      branchExpansionResultSchema.parse(
+        trimBranchExpansionOutput(JSON.parse(outputText)),
+      ),
   });
-  const expansion = branchExpansionResultSchema.parse(
-    trimBranchExpansionOutput(JSON.parse(response.outputText)),
-  );
+  const expansion = response.parsed;
   const estimatedCostUsd = estimateModelCostDollars({
     branch_expansion: {
       model: response.model,
@@ -2298,6 +2530,14 @@ export async function generateBranchExpansion(
       context.search_context.allow_web_search && options.allowWebSearch !== false,
     ),
     modelSelection: selection,
+    structuredOutput: {
+      structuredOutputRepaired: response.structuredOutputRepaired,
+      structuredOutputAttempts: response.structuredOutputAttempts,
+      structuredOutputRepairAttempts: response.structuredOutputRepairAttempts,
+      initialErrorSummary: response.initialErrorSummary,
+      initialRawOutputExcerpt: response.initialRawOutputExcerpt,
+      repairErrorSummary: response.repairErrorSummary,
+    },
   };
 }
 
@@ -2307,6 +2547,7 @@ export type ReconciliationGenerationResult = {
   modelRole: ModelRole | null;
   usage: AiUsageMetadata;
   modelSelection: GenerationModelSelection;
+  structuredOutput: StructuredOutputRecoveryMetadata;
 };
 
 export async function reconcileMemoryAndBoardUpdate(
@@ -2322,7 +2563,7 @@ export async function reconcileMemoryAndBoardUpdate(
     competingPriorityCount: context.task_or_action_history.length,
     promptApproxChars: JSON.stringify(context).length,
   });
-  const response = await createStructuredResponse({
+  const response = await createStructuredResponseWithRepair({
     system: reconciliationSystemPrompt,
     name: "flowpath_memory_board_reconciliation",
     description:
@@ -2344,10 +2585,20 @@ export async function reconcileMemoryAndBoardUpdate(
     maxOutputTokens: RECONCILIATION_MAX_OUTPUT_TOKENS,
     model: selection.model,
     modelRole: selection.modelRole,
+    parse: (outputText) =>
+      reconciliationResultSchema.parse(
+        trimReconciliationOutput(JSON.parse(outputText)),
+      ),
   });
-  const reconciliation = reconciliationResultSchema.parse(
-    trimReconciliationOutput(JSON.parse(response.outputText)),
-  );
+  const reconciliation = response.parsed;
+  const followup = normalizeReconciliationFollowupQuality({
+    recommendedFollowupAction: reconciliation.recommended_followup_action,
+    boardText: JSON.stringify(context),
+  });
+  const repairedReconciliation = reconciliationResultSchema.parse({
+    ...reconciliation,
+    recommended_followup_action: followup.recommended_followup_action,
+  });
   const estimatedCostUsd = estimateModelCostDollars({
     reconciliation: {
       model: response.model,
@@ -2359,11 +2610,19 @@ export async function reconcileMemoryAndBoardUpdate(
   response.usage.estimatedCostUsd = estimatedCostUsd;
 
   return {
-    reconciliation,
+    reconciliation: repairedReconciliation,
     model: response.model,
     modelRole: response.modelRole,
     usage: response.usage,
     modelSelection: selection,
+    structuredOutput: {
+      structuredOutputRepaired: response.structuredOutputRepaired,
+      structuredOutputAttempts: response.structuredOutputAttempts,
+      structuredOutputRepairAttempts: response.structuredOutputRepairAttempts,
+      initialErrorSummary: response.initialErrorSummary,
+      initialRawOutputExcerpt: response.initialRawOutputExcerpt,
+      repairErrorSummary: response.repairErrorSummary,
+    },
   };
 }
 
@@ -2374,6 +2633,7 @@ export type TaskRevisionGenerationResult = {
   model: string;
   modelRole: ModelRole;
   usage?: AiUsageMetadata;
+  structuredOutput?: StructuredOutputRecoveryMetadata;
 };
 
 export async function generateTaskRevision({
@@ -2386,7 +2646,7 @@ export async function generateTaskRevision({
   intent: TaskRevisionIntent;
 }): Promise<TaskRevisionGenerationResult> {
   const modelRole: ModelRole = "revision_standard";
-  const { outputText, model, usage } = await createStructuredResponse({
+  const response = await createStructuredResponseWithRepair({
     system: taskRevisionSystemPrompt,
     name: "flowpath_task_revision",
     description: "A revised single FlowPath task.",
@@ -2412,21 +2672,29 @@ export async function generateTaskRevision({
     maxOutputTokens: TASK_REVISION_MAX_OUTPUT_TOKENS,
     model: getModelForRole(modelRole),
     modelRole,
+    parse: (outputText) =>
+      taskRevisionOutputSchema.parse(
+        trimGeneratedRecordStrings(JSON.parse(outputText), {
+          title: TASK_TITLE_MAX,
+          notes: TASK_NOTES_MAX,
+          friction_note: 1200,
+        }),
+      ),
   });
 
-  const parsed = taskRevisionOutputSchema.parse(
-    trimGeneratedRecordStrings(JSON.parse(outputText), {
-      title: TASK_TITLE_MAX,
-      notes: TASK_NOTES_MAX,
-      friction_note: 1200,
-    }),
-  );
-
   return {
-    revision: parsed,
-    model,
+    revision: response.parsed,
+    model: response.model,
     modelRole,
-    usage,
+    usage: response.usage,
+    structuredOutput: {
+      structuredOutputRepaired: response.structuredOutputRepaired,
+      structuredOutputAttempts: response.structuredOutputAttempts,
+      structuredOutputRepairAttempts: response.structuredOutputRepairAttempts,
+      initialErrorSummary: response.initialErrorSummary,
+      initialRawOutputExcerpt: response.initialRawOutputExcerpt,
+      repairErrorSummary: response.repairErrorSummary,
+    },
   };
 }
 
@@ -2563,7 +2831,7 @@ export async function generateFirstIntakePlan(
     urgency: situation.urgency,
     promptApproxChars: JSON.stringify(buildFirstIntakeQuestionPromptInput(situation)).length,
   });
-  const { outputText, model, usage } = await createStructuredResponse({
+  const response = await createStructuredResponseWithRepair({
     system: firstIntakeQuestionSystemPrompt,
     name: "flowpath_first_intake_question",
     description: "One situation-specific first intake question.",
@@ -2572,14 +2840,15 @@ export async function generateFirstIntakePlan(
     maxOutputTokens: FIRST_INTAKE_QUESTION_MAX_OUTPUT_TOKENS,
     model: selection.model,
     modelRole: selection.modelRole,
+    parse: (outputText) => parseFirstIntakeQuestionOutput(outputText, situation),
   });
 
   return {
-    plan: parseFirstIntakeQuestionOutput(outputText, situation),
+    plan: response.parsed,
     source: "ai",
-    model,
+    model: response.model,
     modelRole: selection.modelRole,
-    usage,
+    usage: response.usage,
   };
 }
 
@@ -2605,7 +2874,7 @@ export async function generateInterviewQuestion(
         messages: context.messages,
       }).length,
   });
-  const { outputText, model, usage } = await createStructuredResponse({
+  const response = await createStructuredResponseWithRepair({
     system: interviewerSystemPrompt,
     name: "flowpath_interviewer_turn",
     description: "One adaptive intake question and current intake progress.",
@@ -2644,23 +2913,25 @@ export async function generateInterviewQuestion(
     maxOutputTokens: INTERVIEW_MAX_OUTPUT_TOKENS,
     model: selection.model,
     modelRole: selection.modelRole,
-  });
-
-  return {
-    output: interviewerOutputSchema.parse(
-      {
-        ...trimGeneratedRecordStrings(JSON.parse(outputText), {
+    parse: (outputText) => {
+      const parsedJson = JSON.parse(outputText);
+      return interviewerOutputSchema.parse({
+        ...trimGeneratedRecordStrings(parsedJson, {
           question: 1200,
           summary_so_far: 5000,
         }),
         inferred_context_items: trimInferredContextItems(
-          JSON.parse(outputText).inferred_context_items,
+          parsedJson.inferred_context_items,
         ),
-      },
-    ),
-    model,
+      });
+    },
+  });
+
+  return {
+    output: response.parsed,
+    model: response.model,
     modelRole: selection.modelRole,
-    usage,
+    usage: response.usage,
   };
 }
 
@@ -2680,6 +2951,7 @@ export async function generateNextMovePlan(
   webSearchDecisionReason: ReturnType<typeof webSearchDecisionReason>;
   cognitiveMetadata?: ReturnType<typeof buildCognitiveMetadata>;
   modelSelection?: GenerationModelSelection;
+  structuredOutput: StructuredOutputRecoveryMetadata;
 }> {
   const route = classifySituationDomain(context.situation);
   const cognitiveContext = options.cognitiveContext;
@@ -2825,7 +3097,7 @@ export async function generateNextMovePlan(
       options.sourceMessageId ?? null,
     );
 
-  const first = await createStructuredResponse({
+  const first = await createStructuredResponseWithRepair({
     system: strategistSystemPrompt,
     name: "flowpath_next_move_plan",
     description: "A practical next best move plan for a user's current situation.",
@@ -2837,13 +3109,14 @@ export async function generateNextMovePlan(
     maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
     model: generationSelection.model,
     modelRole: generationSelection.modelRole,
+    parse: parsePlan,
   });
 
-  let plan = parsePlan(first.outputText);
+  let plan = first.parsed;
   let evaluator = cognitiveContext ? evaluateNextMovePlan(plan, cognitiveContext) : null;
   let responseRewritten = false;
   let revision:
-    | Awaited<ReturnType<typeof createStructuredResponse>>
+    | Awaited<ReturnType<typeof createStructuredResponseWithRepair<NextMovePlan>>>
     | null = null;
 
   if (cognitiveContext && evaluator && !evaluator.passes) {
@@ -2861,7 +3134,7 @@ export async function generateNextMovePlan(
       evaluatorScore: evaluator.score,
       promptApproxChars: JSON.stringify({ context, prior_plan: plan, evaluator }).length,
     });
-    revision = await createStructuredResponse({
+    revision = await createStructuredResponseWithRepair({
       system: strategistSystemPrompt,
       name: "flowpath_next_move_plan_revision",
       description: "A revised practical next best move plan for a user's current situation.",
@@ -2876,8 +3149,9 @@ export async function generateNextMovePlan(
       maxOutputTokens: NEXT_MOVE_PLAN_MAX_OUTPUT_TOKENS,
       model: revisionSelection.model,
       modelRole: revisionSelection.modelRole,
+      parse: parsePlan,
     });
-    plan = parsePlan(revision.outputText);
+    plan = revision.parsed;
     evaluator = evaluateNextMovePlan(plan, cognitiveContext);
   }
 
@@ -2912,18 +3186,40 @@ export async function generateNextMovePlan(
     };
   }
 
+  const structuredOutput: StructuredOutputRecoveryMetadata = {
+    structuredOutputRepaired:
+      first.structuredOutputRepaired || Boolean(revision?.structuredOutputRepaired),
+    structuredOutputAttempts:
+      first.structuredOutputAttempts + (revision?.structuredOutputAttempts ?? 0),
+    structuredOutputRepairAttempts:
+      first.structuredOutputRepairAttempts +
+      (revision?.structuredOutputRepairAttempts ?? 0),
+    initialErrorSummary:
+      first.initialErrorSummary ?? revision?.initialErrorSummary,
+    initialRawOutputExcerpt:
+      first.initialRawOutputExcerpt ?? revision?.initialRawOutputExcerpt,
+    repairErrorSummary:
+      first.repairErrorSummary ?? revision?.repairErrorSummary,
+  };
+
   const totalEstimatedCost = estimateModelCostDollars(costInput);
   usage.estimatedCostUsd = totalEstimatedCost;
   const webSearchUsed = first.usedWebSearch || Boolean(revision?.usedWebSearch);
   const webSearchCallCount =
     first.webSearchCallCount + (revision?.webSearchCallCount ?? 0);
-  plan = {
-    ...plan,
-    decision_tree: sanitizeDecisionTreeSearchStatuses(
-      plan.decision_tree,
-      webSearchCallCount,
-    ),
-  };
+  plan = normalizePlanOutputForPersistence(plan, {
+    webSearchCallCount,
+    contextText: [
+      plan.situation_read,
+      plan.situation_summary,
+      plan.core_bottleneck,
+      plan.highest_leverage_move_today.title,
+      plan.highest_leverage_move_today.description,
+      plan.why_this_move,
+      ...plan.key_constraints,
+      ...plan.assumptions,
+    ].join(" "),
+  });
   const cognitiveMetadata =
     cognitiveContext &&
     buildCognitiveMetadata({
@@ -2949,5 +3245,6 @@ export async function generateNextMovePlan(
     ),
     cognitiveMetadata: cognitiveMetadata || undefined,
     modelSelection: generationSelection,
+    structuredOutput,
   };
 }
