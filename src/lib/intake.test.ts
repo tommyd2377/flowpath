@@ -6,9 +6,9 @@ import { interviewerOutputSchema } from "./schemas";
 
 test("intake routing metadata is classification-only and does not create question text", () => {
   const metadata = buildIntakeRoutingMetadata({
-    title: "I need to onboard friend groups to try my screen-time app together.",
+    title: "I manage a restaurant and want to move into operations.",
     description:
-      "One-on-one Reddit outreach is not working, and I need a group onboarding path.",
+      "I am comparing logistics, vendor management, and training roles without relying on a new degree.",
     category: "creative_project",
     urgency: "medium",
   });

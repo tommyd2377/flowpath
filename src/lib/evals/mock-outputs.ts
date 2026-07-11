@@ -7,7 +7,8 @@ import type {
   DecisionTree,
   DecisionNode,
 } from "../types";
-import type { EvalOutput } from "./types";
+import { antiOverfitScenarios } from "./fixtures";
+import type { EvalOutput, EvalScenario } from "./types";
 
 const NOW = "2026-07-06T00:00:00.000Z";
 
@@ -588,6 +589,162 @@ const urgentTree = decisionTree({
   ]),
 });
 
+const courtDeadlineAction = action(
+  "Find the notice and copy the deadline facts",
+  "For 15 minutes now, find the notice and copy the court name, case number, deadline date/time, document title, and filing/contact instructions into one note. Keep this as process triage, not legal argument planning.",
+  {
+    success_condition:
+      "One deadline facts sheet exists with the core notice details or clear blanks for what is missing.",
+    fallback:
+      "If you cannot find the notice, call the court clerk or legal-aid intake and say you need help identifying what information is required before the deadline.",
+  },
+);
+
+const courtDeadlineTree = decisionTree({
+  id: "eval-court-deadline-tree",
+  rootQuestion: "How do you avoid missing the court paperwork deadline?",
+  rootSummary:
+    "The user has a court paperwork deadline in a few days, has the notice somewhere, and wants process triage instead of legal argument advice.",
+  recommendedOptionId: "notice_first",
+  currentAction: courtDeadlineAction,
+  options: branches("root", [
+    {
+      id: "notice_first",
+      label: "Find the notice first",
+      description:
+        "Best first move because the exact court, case number, deadline, document title, and filing instructions determine every safer next step.",
+      level: "recommended",
+      firstAction: courtDeadlineAction,
+    },
+    {
+      id: "court_clerk",
+      label: "Call the court clerk",
+      description:
+        "Viable for process-only questions once the notice facts are found or the missing facts are clear.",
+      level: "viable",
+      firstAction: action(
+        "Call the court clerk with process-only questions",
+        "Today, call the court clerk or self-help contact and ask how to confirm the exact deadline, document title, filing method, and required contact information. Do not ask what legal argument to make.",
+        {
+          success_condition:
+            "You have the exact deadline/filing instructions or know which office can confirm them.",
+          fallback:
+            "If the clerk cannot answer, ask what details they need from the notice or who handles procedural filing questions.",
+        },
+      ),
+    },
+    {
+      id: "legal_aid",
+      label: "Call legal aid intake",
+      description:
+        "Viable if risk is high or the notice cannot be found, but intake will likely need the notice facts.",
+      level: "viable",
+      firstAction: action(
+        "Call legal aid intake with deadline facts",
+        "Today, call legal aid intake with any notice facts you have. Ask whether they can help before the deadline and what documents they need. Keep it process-focused; do not rely on FlowPath for legal argument advice.",
+        {
+          success_condition:
+            "You know whether intake can help before the deadline and what information or documents they need next.",
+          fallback:
+            "If you cannot reach intake, call the court clerk or self-help line and ask what information is needed to identify the filing steps.",
+        },
+      ),
+    },
+    {
+      id: "more_time",
+      label: "Ask about more time",
+      description:
+        "A useful supplement only after the exact deadline and document are confirmed.",
+      level: "supplement",
+      firstAction: action(
+        "Ask about the process for more time",
+        "After confirming the exact deadline and document, ask the clerk or legal aid what the process is if more time is needed. Write down the form name or office to contact without assuming an extension is available.",
+        {
+          success_condition:
+            "You know the next process step for asking about more time or know that legal-aid/self-help guidance is needed first.",
+          fallback:
+            "If the process is unclear, return to notice-first triage and copy the deadline facts before making another call.",
+        },
+      ),
+    },
+    {
+      id: "forms_search",
+      label: "Search forms online",
+      description:
+        "Not now if the exact notice, court, deadline, and document are still unknown.",
+      level: "not_now",
+      search: "needed",
+      firstAction: action(
+        "Search only after copying notice facts",
+        "For 20 minutes today, search official court or self-help pages using the exact court name, document title, and deadline words from the notice. Save only process information that matches your court/document; do not treat general forms pages as verified for your case.",
+        {
+          success_condition:
+            "You save one official process page or decide the safer next step is a clerk/legal-aid call.",
+          fallback:
+            "If results are broad or conflicting, stop searching and call the clerk or legal aid with the notice facts.",
+        },
+      ),
+    },
+  ]),
+});
+
+const courtDeadlineBranchExpansion: BranchExpansionResultInput = {
+  result_type: "decision_node",
+  node: {
+    kind: "decision",
+    title: "Legal aid intake",
+    question: "What should you ask legal aid intake first?",
+    summary:
+      "Legal aid may be useful, but the next fork should stay procedural and deadline-focused.",
+    options: [
+      {
+        label: "Ask whether they can help before the deadline",
+        short_rationale:
+          "This checks timing without asking FlowPath for legal advice or assuming eligibility.",
+        recommendation_level: "recommended",
+        can_explore: true,
+        search_status: "not_needed",
+        friction: "medium",
+        time_to_feedback: "Today",
+        first_action_preview:
+          "Call intake today and ask whether they can help before the deadline.",
+      },
+      {
+        label: "Ask what documents they need",
+        short_rationale:
+          "This prevents a stalled intake call when the notice or case details are incomplete.",
+        recommendation_level: "viable",
+        can_explore: true,
+        search_status: "not_needed",
+        friction: "low",
+        time_to_feedback: "Today",
+        first_action_preview:
+          "Ask intake what notice facts or documents they need before they can help.",
+      },
+      {
+        label: "Prepare a notice facts sheet",
+        short_rationale:
+          "This makes the call easier if freezing or overwhelm is the main risk.",
+        recommendation_level: "supplement",
+        can_explore: true,
+        search_status: "not_needed",
+        friction: "low",
+        time_to_feedback: "15 minutes",
+        first_action_preview:
+          "Copy the court name, case number, deadline, document title, and filing instructions into one note.",
+      },
+    ],
+    search_status: "not_needed",
+  },
+  action_leaf: null,
+  reasoning_summary:
+    "Keep the legal-aid branch in process triage and avoid merits/legal-argument advice.",
+  selected_path_summary: "Call legal aid intake.",
+  memory_used: [],
+  assumptions: ["The notice facts are not fully copied yet."],
+  search_needed: false,
+};
+
 const privateWritingReconciliation: ReconciliationResultInput = {
   summary: "Removed monetization as an active writing assumption and stored privacy as the current preference.",
   confidence: "high",
@@ -728,6 +885,145 @@ const branchExpansion: BranchExpansionResultInput = {
   assumptions: ["A recurring beginner option exists nearby."],
   search_needed: true,
 };
+
+function titleFromScenario(scenario: EvalScenario) {
+  const keywords = scenario.expected.titleKeywords;
+  if (keywords?.length) {
+    return keywords
+      .join(" ")
+      .replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+  return scenario.name.replace(/\s*\/\s*/g, " - ");
+}
+
+function labelFromKeywordGroup(group: string[]) {
+  return group
+    .map((keyword) =>
+      keyword.replace(/\b[a-z]/g, (match) => match.toUpperCase()),
+    )
+    .join(" / ");
+}
+
+function recommendedOptionIdForScenario(scenario: EvalScenario, labels: string[]) {
+  const recommended = scenario.expected.recommendedBranchKeywords ?? [];
+  const index = labels.findIndex((label) =>
+    recommended.every((keyword) => label.toLowerCase().includes(keyword.toLowerCase())),
+  );
+  return `option_${Math.max(0, index)}`;
+}
+
+function actionDetailsForScenario(scenario: EvalScenario) {
+  const actionKeywords = scenario.expected.actionKeywords?.join(" ") || "take the first concrete step";
+  const locationPhrase =
+    scenario.expected.constraintKeywords?.find((keyword) =>
+      /zip|near|minute|rural|transit|local|no car|72 hours|few days/i.test(keyword),
+    ) ?? "your area";
+
+  if (scenario.expected.requiresSearchWorkflowAction) {
+    return [
+      `Within 30 minutes today, search for 3 realistic ${titleFromScenario(scenario).toLowerCase()} options near ${locationPhrase}.`,
+      `Use queries like '${actionKeywords} near me', '${scenario.name.toLowerCase()} options', and '${titleFromScenario(scenario).toLowerCase()} local resources'.`,
+      "Shortlist only options that match the stated constraints, budget, timing, level fit, and repeatability needs.",
+      "Success: three candidates are saved or one fit-check/contact message is sent today.",
+      "If none fit, widen the radius once or contact one relevant local organization to ask where people usually start.",
+      "Do not treat any local/current option as verified until checked.",
+    ].join(" ");
+  }
+
+  if (scenario.expected.urgentStability) {
+    return [
+      `Today, ${actionKeywords} using the most direct contact path available.`,
+      "Write down the deadline, account/document details, who was contacted, and the next promised callback or step.",
+      "Success: one urgent contact is reached or a callback/request is submitted.",
+      "If blocked, ask one trusted person or local resource line to help make the next call.",
+    ].join(" ");
+  }
+
+  return [
+    `This week, ${actionKeywords} with one bounded first step.`,
+    "Keep the move small enough to finish without opening a full research project.",
+    "Success: one concrete step is completed and the next decision is clearer.",
+    "If blocked, choose the lowest-commitment version that still tests the same path.",
+  ].join(" ");
+}
+
+function makeAntiOverfitMockOutput(scenario: EvalScenario): EvalOutput {
+  const labels =
+    scenario.expected.branchKeywordGroups?.map(labelFromKeywordGroup) ??
+    ["Practical first path", "Lower-friction alternative", "Defer until clearer"];
+  const recommendedOptionId = recommendedOptionIdForScenario(scenario, labels);
+  const currentAction = action(
+    scenario.expected.requiresSearchWorkflowAction
+      ? `Search and shortlist ${titleFromScenario(scenario).toLowerCase()} options`
+      : scenario.expected.urgentStability
+        ? `Reduce immediate risk for ${titleFromScenario(scenario).toLowerCase()}`
+        : `Take one concrete step for ${titleFromScenario(scenario).toLowerCase()}`,
+    actionDetailsForScenario(scenario),
+    {
+      success_condition: scenario.expected.requiresSearchWorkflowAction
+        ? "Three candidates are saved or one fit-check/contact message is sent today."
+        : scenario.expected.urgentStability
+          ? "One urgent contact is reached or one time-sensitive request is submitted today."
+          : "One concrete step is completed and the next decision is clearer.",
+      fallback: scenario.expected.requiresSearchWorkflowAction
+        ? "If no option fits, widen the radius once or ask one relevant local organization where people usually start."
+        : scenario.expected.urgentStability
+          ? "If blocked, ask one trusted person or local resource line to help make the next call."
+          : "If blocked, choose the lowest-commitment version that still tests the same path.",
+    },
+  );
+  const tree = decisionTree({
+    id: `anti-overfit-${scenario.id}`,
+    rootQuestion: `Which ${titleFromScenario(scenario).toLowerCase()} path should come first?`,
+    rootSummary: scenario.description,
+    recommendedOptionId,
+    currentAction,
+    options: labels.map((label, index) =>
+      option(
+        "root",
+        `option_${index}`,
+        label,
+        index === Number(recommendedOptionId.replace("option_", ""))
+          ? `Recommended because it prioritizes ${(scenario.expected.recommendedBranchKeywords ?? [label]).join(" ")} while respecting the fixture constraints.`
+          : `A user-facing option for ${scenario.name}; it reflects the fixture constraints without using developer-specific assumptions.`,
+        index === Number(recommendedOptionId.replace("option_", ""))
+          ? "recommended"
+          : index === labels.length - 1
+            ? "supplement"
+            : "viable",
+        {
+          search_status: scenario.expected.requiresSearchWorkflowAction ? "needed" : "not_needed",
+          requires_web_search: Boolean(scenario.expected.requiresSearchWorkflowAction),
+          first_action: currentAction,
+        },
+      ),
+    ),
+  });
+
+  return {
+    scenarioId: scenario.id,
+    boardTitle: titleFromScenario(scenario),
+    primaryDomain: scenario.expected.primaryDomain,
+    secondaryDomains: scenario.expected.secondaryDomains ?? [],
+    boardState: {
+      currentPosition: scenario.userInputs.join(" "),
+      goal: scenario.expected.goalKeywords?.join(" ") || scenario.userInputs[0] || scenario.name,
+      constraints: scenario.expected.constraintKeywords ?? [],
+      assets: scenario.expected.assetKeywords ?? ["The user has enough context to choose a first path"],
+      assumptions: scenario.expected.requiresSearchWorkflowAction
+        ? ["Local/current details need verification before acting."]
+        : ["The first move should be bounded and reversible."],
+    },
+    decisionTree: tree,
+    safetyMode: scenario.expected.urgentStability ? "urgent_stability" : undefined,
+    webSearchCallCount: 0,
+    notes: "Deterministic anti-overfit mock output.",
+  };
+}
+
+const antiOverfitMockOutputs = Object.fromEntries(
+  antiOverfitScenarios.map((scenario) => [scenario.id, makeAntiOverfitMockOutput(scenario)]),
+) as Record<string, EvalOutput>;
 
 export const mockOutputsByScenarioId: Record<string, EvalOutput> = {
   tennis_local_community: {
@@ -876,6 +1172,28 @@ export const mockOutputsByScenarioId: Record<string, EvalOutput> = {
     safetyMode: "urgent_stability",
     webSearchCallCount: 0,
   },
+  urgent_court_deadline_production_regression: {
+    scenarioId: "urgent_court_deadline_production_regression",
+    boardTitle: "Court paperwork deadline triage",
+    primaryDomain: "work_money_career",
+    secondaryDomains: [],
+    boardState: {
+      currentPosition:
+        "The user has a court paperwork deadline in a few days, does not know the exact deadline/court yet, and has the notice somewhere in the apartment.",
+      goal: "Avoid missing the deadline by confirming the paperwork due, process contacts, and document facts.",
+      constraints: [
+        "Deadline in a few days",
+        "Does not want legal argument advice",
+        "Exact court/deadline not known yet",
+      ],
+      assets: ["Notice is somewhere in the apartment", "Can call clerk or legal aid intake"],
+      assumptions: ["Court/legal-aid process details are not verified by search"],
+    },
+    decisionTree: courtDeadlineTree,
+    branchExpansion: courtDeadlineBranchExpansion,
+    safetyMode: "urgent_stability",
+    webSearchCallCount: 0,
+  },
   memory_correction_private_writing: {
     scenarioId: "memory_correction_private_writing",
     boardTitle: "Keep writing private for now",
@@ -936,4 +1254,5 @@ export const mockOutputsByScenarioId: Record<string, EvalOutput> = {
     ],
     webSearchCallCount: 0,
   },
+  ...antiOverfitMockOutputs,
 };

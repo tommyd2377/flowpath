@@ -68,13 +68,45 @@ test("self-harm-adjacent language routes to crisis safety", () => {
   assert.equal(result.domain, "crisis_safety");
 });
 
-test("product onboarding language routes to work and opportunity strategy", () => {
+test("broad operations language routes to work and opportunity strategy", () => {
   const result = classifySituationDomain({
-    title: "I built an app and need friend groups to try it out.",
-    description: "Reddit one-on-one outreach is not working for onboarding.",
+    title: "I manage a restaurant and want to move into operations.",
+    description: "I am comparing logistics, vendor management, and training roles.",
     category: "creative_project",
     urgency: "medium",
   });
 
   assert.equal(result.domain, "work_money_career");
+});
+
+test("urgent and crisis routing override the selected entry domain", () => {
+  assert.equal(
+    classifySituationDomain({
+      title: "Court filing deadline",
+      description: "Court paperwork is due in two days.",
+      category: "work_money_career",
+      urgency: "high",
+    }).domain,
+    "urgent_stability",
+  );
+  assert.equal(
+    classifySituationDomain({
+      title: "Immediate safety risk",
+      description: "I cannot stay safe right now.",
+      category: "people_community_belonging",
+      urgency: "crisis",
+    }).domain,
+    "crisis_safety",
+  );
+});
+
+test("fitness training remains craft rather than career", () => {
+  const result = classifySituationDomain({
+    title: "Improve my fitness training",
+    description: "I want better swimming technique and a repeatable practice.",
+    category: "custom",
+    urgency: "medium",
+  });
+
+  assert.equal(result.domain, "craft_creativity_mastery");
 });

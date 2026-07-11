@@ -27,6 +27,13 @@ const domainTitleFallbacks: Record<EntryDomainId, string> = {
   craft_creativity_mastery: "New Craft Board",
 };
 
+const workDomainPattern =
+  /\b(work|job|career|money|income|cash|wage|salary|freelance|business|client|offer|market|role|employment)\b/;
+const peopleDomainPattern =
+  /\b(friend|friendship|people|community|belong|connection|dating|social|meet|network|volunteer|group)\b/;
+const craftDomainPattern =
+  /\b(craft|creative|write|writing|art|music|dance|skill|sport|activity|hobby|practice|class|fitness|training|mastery)\b/;
+
 export const domainFirstQuestions: Record<EntryDomainId, string> = {
   work_money_career:
     "What work, money, or career decision are you trying to figure out right now?",
@@ -59,13 +66,13 @@ export function entryDomainFallbackTitle(id: string) {
 
 export function entryDomainFromText(value: string) {
   const normalized = value.toLowerCase();
-  if (/\b(work|job|career|money|income|cash|freelance|business|offer|market)\b/.test(normalized)) {
+  if (workDomainPattern.test(normalized)) {
     return "work_money_career" satisfies EntryDomainId;
   }
-  if (/\b(friend|people|community|belong|dating|social|meet|network)\b/.test(normalized)) {
+  if (peopleDomainPattern.test(normalized)) {
     return "people_community_belonging" satisfies EntryDomainId;
   }
-  if (/\b(craft|creative|write|writing|art|skill|sport|hobby|practice|tennis)\b/.test(normalized)) {
+  if (craftDomainPattern.test(normalized)) {
     return "craft_creativity_mastery" satisfies EntryDomainId;
   }
   return null;
@@ -74,13 +81,13 @@ export function entryDomainFromText(value: string) {
 export function inferSecondaryDomainIds(primaryDomain: string, text: string) {
   const normalized = text.toLowerCase();
   const candidates: EntryDomainId[] = [];
-  if (/\b(work|job|career|money|income|cash|freelance|business|offer|market)\b/.test(normalized)) {
+  if (workDomainPattern.test(normalized)) {
     candidates.push("work_money_career");
   }
-  if (/\b(friend|people|community|belong|dating|social|meet|network|real[-\s]?world connection)\b/.test(normalized)) {
+  if (peopleDomainPattern.test(normalized) || /\breal[-\s]?world connection\b/.test(normalized)) {
     candidates.push("people_community_belonging");
   }
-  if (/\b(craft|creative|write|writing|art|skill|sport|hobby|practice|tennis)\b/.test(normalized)) {
+  if (craftDomainPattern.test(normalized)) {
     candidates.push("craft_creativity_mastery");
   }
   return candidates.filter((domain) => domain !== primaryDomain);
@@ -106,7 +113,11 @@ export function inferMemoryCategoryFromText(text: string) {
   if (/\b(job|career|work|freelance|business|client|offer)\b/.test(normalized)) {
     return "work_career" as const;
   }
-  if (/\b(craft|creative|writing|art|project|sport|tennis|hobby|practice)\b/.test(normalized)) {
+  if (
+    /\b(craft|creative|writing|art|music|dance|project|skill|sport|activity|hobby|practice|class|fitness|training)\b/.test(
+      normalized,
+    )
+  ) {
     return "creative_personal_project" as const;
   }
   if (/\b(private|public|intimidating|scary|prefer|style)\b/.test(normalized)) {
@@ -119,30 +130,61 @@ export function inferBoardTitle(primaryDomain: string, text: string) {
   const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return entryDomainFallbackTitle(primaryDomain);
 
-  if (/\btennis\b/.test(normalized) && /\b(friend|people|community|meet|social)\b/.test(normalized)) {
-    return "Use tennis to build local community";
+  if (
+    /\bcourt\b/.test(normalized) &&
+    /\b(deadline|paperwork|filing|file|notice|case|due|forms?|documents?)\b/.test(normalized)
+  ) {
+    return "Court paperwork deadline triage";
   }
-  if (/\bfreelanc(e|ing)\b/.test(normalized) && /\bjob search|jobs?|applying|applications?\b/.test(normalized)) {
-    return "Choose between freelancing and job search";
+  if (
+    /\blegal\b/.test(normalized) &&
+    /\b(paperwork|documents?|forms?|deadline|due|notice)\b/.test(normalized)
+  ) {
+    return "Legal paperwork deadline triage";
   }
-  if (/\bwriting\b|\bwrite\b/.test(normalized) && /\bpractice|habit|routine|repeatable|consistent\b/.test(normalized)) {
-    return "Build a repeatable writing practice";
+  if (
+    /\b(utility|electricity|electric|gas|water|power)\b/.test(normalized) &&
+    /\b(shutoff|shut[-\s]?off|disconnect|disconnection|notice|deadline|due)\b/.test(normalized)
+  ) {
+    return "Utility shutoff triage";
   }
-  if (/\bpaid\b/.test(normalized) && /\bcreative|art|writing|craft\b/.test(normalized)) {
-    return "Find a better path into paid creative work";
+  if (
+    /\b(food|groceries|meals?)\b/.test(normalized) &&
+    /\b(access|insecurity|insecure|afford|shortage|running out|need)\b/.test(normalized)
+  ) {
+    return "Food access triage";
   }
-  if (/\bmoved\b|\bnew city\b|\bnew town\b/.test(normalized)) {
-    if (/\bmeet|friend|people|community|social\b/.test(normalized)) {
-      return "Meet people after moving to a new city";
-    }
+  if (
+    /\b(paperwork|notice|case)\b/.test(normalized) &&
+    /\b(deadline|due)\b/.test(normalized)
+  ) {
+    return "Paperwork deadline triage";
+  }
+  if (
+    primaryDomain === "craft_creativity_mastery" &&
+    /\b(practice|habit|routine|repeatable|consistent|consistency)\b/.test(normalized)
+  ) {
+    return "Build a repeatable practice";
+  }
+  if (
+    primaryDomain === "craft_creativity_mastery" &&
+    /\b(paid|income|professional|sell|selling)\b/.test(normalized)
+  ) {
+    return "Explore a paid creative path";
   }
 
   const concise = text
     .replace(/\s+/g, " ")
-    .replace(/^(i('| a)?m|i am|i want to|i need to|i need|trying to|help me)\s+/i, "")
+    .replace(
+      /^(?:i(?:'m| am|'d like to| would like to| want to| need to| need help(?: to)?|'m trying to| am trying to)|trying to|help me(?: to)?|please help me(?: to)?)\s+/i,
+      "",
+    )
     .trim();
   if (concise.length >= 12) {
-    const clipped = concise.length <= 58 ? concise : concise.slice(0, 55).trimEnd();
+    const clipped =
+      concise.length <= 58
+        ? concise
+        : concise.slice(0, 58).replace(/\s+\S*$/, "").trimEnd() || concise.slice(0, 58);
     return clipped.charAt(0).toUpperCase() + clipped.slice(1).replace(/[.?!,;:]+$/, "");
   }
 

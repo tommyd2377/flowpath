@@ -61,6 +61,25 @@ export const LIVE_COMPARISON_JUDGE_COMMAND = [
   "npm run evals:live:compare",
 ].join("\n");
 
+export const ANTI_OVERFIT_LIVE_COMPARISON_COMMAND = [
+  "FLOWPATH_LIVE_EVALS=1 \\",
+  "FLOWPATH_LIVE_EVAL_MAX_CALLS=40 \\",
+  "FLOWPATH_LIVE_EVAL_JUDGE=1 \\",
+  "FLOWPATH_LIVE_EVAL_SUITE=anti_overfit \\",
+  "FLOWPATH_LIVE_EVAL_MAX_SCENARIOS=10 \\",
+  "npm run evals:live:compare",
+].join("\n");
+
+export const ANTI_OVERFIT_LIVE_COMPARISON_SEARCH_COMMAND = [
+  "FLOWPATH_LIVE_EVALS=1 \\",
+  "FLOWPATH_LIVE_EVAL_MAX_CALLS=40 \\",
+  "FLOWPATH_LIVE_EVAL_JUDGE=1 \\",
+  "FLOWPATH_LIVE_EVAL_SUITE=anti_overfit \\",
+  "FLOWPATH_LIVE_EVAL_MAX_SCENARIOS=10 \\",
+  "OPENAI_WEB_SEARCH_ENABLED=true \\",
+  "npm run evals:live:compare",
+].join("\n");
+
 export const baselineAnswerSchema = z.object({
   summary: z.string().trim().min(1).max(1400),
   primary_domain: z.enum(entryDomainIds),
@@ -152,7 +171,9 @@ export function selectLiveComparisonScenarios(
   const scenarioById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
   const explicitIds =
     parseScenarioIds(env.FLOWPATH_LIVE_EVAL_SCENARIOS) ??
-    [...DEFAULT_LIVE_COMPARISON_SCENARIO_IDS];
+    (env.FLOWPATH_LIVE_EVAL_SUITE
+      ? scenarios.map((scenario) => scenario.id)
+      : [...DEFAULT_LIVE_COMPARISON_SCENARIO_IDS]);
   const unknown = explicitIds.filter((id) => !scenarioById.has(id));
   if (unknown.length) {
     throw new Error(`Unknown live comparison scenario id(s): ${unknown.join(", ")}.`);

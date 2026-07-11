@@ -5,7 +5,14 @@ import path from "node:path";
 import test from "node:test";
 
 import { branchExpansionResultSchema } from "../schemas";
-import { evalScenarios } from "./fixtures";
+import {
+  ANTI_OVERFIT_SCENARIO_COUNT,
+  EVAL_SCENARIO_TAGS,
+  antiOverfitScenarios,
+  evalScenarios,
+  regressionScenarios,
+  scenariosForSuite,
+} from "./fixtures";
 import { mockOutputsByScenarioId } from "./mock-outputs";
 import {
   renderEvalReportMarkdown,
@@ -15,6 +22,7 @@ import {
 } from "./report";
 import {
   detectBranchQualityIssues,
+  detectAntiOverfitLeakage,
   detectMoveMapLabelQualityIssues,
   detectSearchWorkflowGaps,
   scoreEvalScenario,
@@ -35,6 +43,7 @@ import {
   trimBaselineAnswerForSchema,
 } from "./live-comparison";
 import {
+  evalSuiteFromEnv,
   liveEvalReadiness,
   resolveEvalMode,
   selectLiveEvalScenarios,
@@ -52,7 +61,10 @@ function dimensionScore(result: ReturnType<typeof scoreEvalScenario>, id: string
 }
 
 test("offline eval fixtures cover the required scenario set and score successfully", () => {
-  assert.equal(evalScenarios.length, 11);
+  assert.equal(regressionScenarios.length, 12);
+  assert.equal(antiOverfitScenarios.length, 30);
+  assert.equal(ANTI_OVERFIT_SCENARIO_COUNT, 30);
+  assert.equal(evalScenarios.length, 42);
   for (const scenario of evalScenarios) {
     assert.ok(mockOutputsByScenarioId[scenario.id], `missing mock output for ${scenario.id}`);
   }
@@ -67,6 +79,65 @@ test("offline eval fixtures cover the required scenario set and score successful
   assert.equal(report.passed, true);
   assert.equal(report.results.every((result) => result.passed), true);
   assert.ok(report.overallScore / report.maxScore > 0.8);
+});
+
+test("anti-overfit fixtures have required metadata, unique IDs, valid tags, and no banned prompt leakage", () => {
+  const ids = new Set<string>();
+  const validTags = new Set<string>(EVAL_SCENARIO_TAGS);
+  for (const scenario of antiOverfitScenarios) {
+    assert.equal(scenario.suite, "anti_overfit");
+    assert.ok(!ids.has(scenario.id), `duplicate id ${scenario.id}`);
+    ids.add(scenario.id);
+    assert.ok(scenario.name, `missing name for ${scenario.id}`);
+    assert.ok(scenario.description, `missing description for ${scenario.id}`);
+    assert.ok(scenario.userInputs.length >= 1, `missing user input for ${scenario.id}`);
+    assert.ok(
+      scenario.tags?.includes("anti_overfit"),
+      `missing anti_overfit tag for ${scenario.id}`,
+    );
+    for (const tag of scenario.tags ?? []) {
+      assert.ok(validTags.has(tag), `invalid tag ${tag} on ${scenario.id}`);
+    }
+    assert.equal(
+      detectAntiOverfitLeakage(
+        scenario,
+        `${scenario.name} ${scenario.description} ${scenario.userInputs.join(" ")}`,
+      ).length,
+      0,
+      `fixture prompt leaks banned Tom-shaped terms: ${scenario.id}`,
+    );
+  }
+});
+
+test("anti-overfit leakage detector catches developer-shaped output concepts", () => {
+  const scenario = antiOverfitScenarios.find(
+    (item) => item.id === "career_nurse_leave_bedside",
+  );
+  assert.ok(scenario);
+  assert.deepEqual(detectAntiOverfitLeakage(scenario, "Try tennis in Brooklyn."), [
+    "tennis",
+    "Brooklyn",
+  ]);
+  assert.deepEqual(
+    detectAntiOverfitLeakage(scenario, "Try case management or utilization review."),
+    [],
+  );
+});
+
+test("suite selection separates regression, anti-overfit, and combined scenarios", () => {
+  assert.equal(scenariosForSuite("regression").length, 12);
+  assert.equal(scenariosForSuite("anti_overfit").length, 30);
+  assert.equal(scenariosForSuite("combined").length, 42);
+  assert.equal(evalSuiteFromEnv(["--suite=anti-overfit"], {}), "anti_overfit");
+  assert.equal(evalSuiteFromEnv([], { FLOWPATH_EVAL_SUITE: "regression" }), "regression");
+  assert.equal(
+    evalSuiteFromEnv([], { FLOWPATH_LIVE_EVAL_SUITE: "anti_overfit" }),
+    "anti_overfit",
+  );
+  assert.throws(
+    () => evalSuiteFromEnv([], { FLOWPATH_EVAL_SUITE: "unknown" }),
+    /Unknown eval suite/,
+  );
 });
 
 test("acting-class eval catches internal branch labels and weak provider grounding", () => {
@@ -572,6 +643,20 @@ test("report writer keeps live reports separate from offline reports", async () 
     assert.match(offlinePaths.jsonPath, /2026-07-06T00-00-00-000Z\.json$/);
     assert.match(livePaths.latestPath, /latest-flowpath-live-eval\.md$/);
     assert.match(livePaths.jsonPath, /2026-07-06T00-00-01-000Z-live\.json$/);
+
+    const antiReport = scoreEvalSuite(
+      antiOverfitScenarios.slice(0, 1),
+      mockOutputsByScenarioId,
+      {
+        generatedAt: "2026-07-06T00:00:02.000Z",
+        mode: "offline",
+        suite: "anti_overfit",
+        gitCommit: "test",
+        modelConfig: "offline mocked outputs",
+      },
+    );
+    const antiPaths = await writeEvalReport(antiReport, outputDir);
+    assert.match(antiPaths.latestPath, /latest-flowpath-anti-overfit-eval\.md$/);
   } finally {
     await rm(outputDir, { recursive: true, force: true });
   }
@@ -653,6 +738,15 @@ test("live comparison report includes FlowPath and baseline comparison fields", 
 
 test("live eval mode is explicitly gated without failing when env is missing", () => {
   assert.equal(resolveEvalMode(["--offline"], {}), "offline");
+  assert.equal(
+    resolveEvalMode(["--offline"], {
+      FLOWPATH_LIVE_EVALS: "1",
+      FLOWPATH_LIVE_COMPARE: "1",
+      OPENAI_API_KEY: "test",
+      FLOWPATH_LIVE_EVAL_MAX_CALLS: "3",
+    }),
+    "offline",
+  );
   assert.equal(resolveEvalMode(["--live"], {}), "live_unavailable");
   assert.equal(resolveEvalMode(["--live-compare"], {}), "live_compare_unavailable");
   assert.deepEqual(liveEvalReadiness(["--live"], {}).missing, [
@@ -726,6 +820,15 @@ test("live eval scenario selection supports explicit IDs and budget caps", () =>
       }),
     /Unknown live eval scenario/,
   );
+
+  const antiDefault = selectLiveEvalScenarios(antiOverfitScenarios, {
+    FLOWPATH_LIVE_EVAL_MAX_CALLS: "2",
+    FLOWPATH_LIVE_EVAL_MAX_SCENARIOS: "2",
+  });
+  assert.deepEqual(
+    antiDefault.map((scenario) => scenario.id),
+    antiOverfitScenarios.slice(0, 2).map((scenario) => scenario.id),
+  );
 });
 
 test("live comparison scenario selection slices explicit IDs to the call budget", () => {
@@ -764,6 +867,20 @@ test("live comparison scenario selection slices explicit IDs to the call budget"
       2,
     ).judgeEnabled,
     true,
+  );
+
+  const antiSuiteSelection = selectLiveComparisonScenarios(
+    antiOverfitScenarios,
+    {
+      FLOWPATH_LIVE_EVAL_MAX_CALLS: "6",
+      FLOWPATH_LIVE_EVAL_SUITE: "anti_overfit",
+      FLOWPATH_LIVE_EVAL_MAX_SCENARIOS: "2",
+    },
+    2,
+  );
+  assert.deepEqual(
+    antiSuiteSelection.scenarios.map((scenario) => scenario.id),
+    antiOverfitScenarios.slice(0, 2).map((scenario) => scenario.id),
   );
 });
 

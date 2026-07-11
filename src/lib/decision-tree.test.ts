@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   alignPlanActionsWithDecisionTree,
   attachBranchExpansionToTree,
+  branchSelectionCaution,
   buildFallbackDecisionTree,
   canonicalDecisionActionText,
   decisionBranchSourceSection,
@@ -14,6 +15,7 @@ import {
   getDecisionNode,
   hasInternalMoveMapLabelJargon,
   normalizeDecisionTree,
+  normalizeDecisionTreeLabelsRecursively,
   normalizeActionLeafQuality,
   normalizePlanOutputForPersistence,
   normalizeUserFacingMoveMapLabel,
@@ -25,7 +27,13 @@ import {
   selectedPathForChoice,
 } from "./decision-tree";
 import { branchExpansionResultSchema } from "./schemas";
-import type { NextMovePlan } from "./types";
+import type {
+  DecisionFirstAction,
+  DecisionOption,
+  DecisionRecommendationLevel,
+  DecisionTree,
+  NextMovePlan,
+} from "./types";
 
 function tennisPlan(
   overrides: Partial<Omit<NextMovePlan, "decision_tree">> = {},
@@ -142,26 +150,434 @@ function tennisPlan(
   };
 }
 
+function courtFirstAction(
+  title: string,
+  details: string,
+  overrides: Partial<DecisionFirstAction> = {},
+): DecisionFirstAction {
+  return {
+    title,
+    details,
+    estimated_minutes: 20,
+    success_condition: "The next process step is clear.",
+    fallback: "If blocked, call the court clerk or legal aid intake.",
+    ...overrides,
+  };
+}
+
+function courtOption(
+  id: string,
+  label: string,
+  recommendationLevel: DecisionRecommendationLevel,
+  overrides: Partial<DecisionOption> = {},
+): DecisionOption {
+  const firstAction =
+    overrides.first_action ??
+    courtFirstAction(label, "Shrink the path to the smallest action that still creates a real signal.");
+  return {
+    id,
+    node_id: "root",
+    label,
+    description: `${label} for a court paperwork deadline.`,
+    move_type: "protect",
+    recommendation_level: recommendationLevel,
+    why: "This branch affects deadline risk and process clarity.",
+    upside: "It can reduce the chance of missing the deadline.",
+    downside: "It may waste time if done before the notice facts are known.",
+    friction: recommendationLevel === "not_now" ? "high" : "medium",
+    time_to_feedback: recommendationLevel === "not_now" ? "Slow / broad" : "Today",
+    requires_web_search: false,
+    search_status: "not_needed",
+    next_node_id: null,
+    can_explore: true,
+    first_action: firstAction,
+    success_condition: firstAction.success_condition,
+    fallback: firstAction.fallback,
+    selected: false,
+    next_steps: [],
+    sources: [],
+    ...overrides,
+  };
+}
+
+function courtDeadlineTree(): DecisionTree {
+  const currentAction = courtFirstAction(
+    "Find the notice and copy the deadline facts",
+    "For 15 minutes now, find the notice and copy the court name, case number, deadline date/time, document title, and filing/contact instructions into one note.",
+    {
+      success_condition: "One deadline facts sheet exists.",
+      fallback: "If you cannot find the notice, call the court clerk or legal-aid intake.",
+    },
+  );
+  const options = [
+    courtOption("notice_first", "Find the notice first", "recommended", {
+      first_action: currentAction,
+      selected: true,
+    }),
+    courtOption("clerk", "Call the court clerk", "viable", {
+      first_action: courtFirstAction(
+        "Call the court clerk",
+        "Call the clerk and ask process-only questions about the deadline and filing instructions.",
+      ),
+    }),
+    courtOption("legal_aid", "Legal-aid routing first", "viable", {
+      first_action: courtFirstAction(
+        "Call legal aid intake",
+        "Call legal aid intake and ask whether they can help before the deadline.",
+      ),
+    }),
+    courtOption("extension", "Extension-process focus", "supplement"),
+    courtOption("forms_search", "General forms and rules search", "not_now", {
+      requires_web_search: true,
+      search_status: "needed",
+    }),
+  ];
+  return {
+    id: "court-deadline-tree",
+    board_id: null,
+    root_node_id: "root",
+    active_node_id: "root",
+    selected_path: ["notice_first"],
+    recommended_option_id: "notice_first",
+    current_action: currentAction,
+    nodes: [
+      {
+        id: "root",
+        parent_id: null,
+        selected_from_option_id: null,
+        kind: "decision",
+        title: "Current position",
+        question: "How do you avoid missing the court paperwork deadline?",
+        context_summary:
+          "The user has a court paperwork deadline in a few days, wants process triage, and is not asking for legal argument advice.",
+        options,
+        action: null,
+        selected_option_id: "notice_first",
+        status: "active",
+        search_status: "needed",
+        generated_at: "2026-07-08T00:00:00.000Z",
+      },
+    ],
+    created_at: "2026-07-08T00:00:00.000Z",
+    updated_at: "2026-07-08T00:00:00.000Z",
+  };
+}
+
 test("move map label quality helper normalizes obvious internal strategy labels", () => {
+  assert.equal(hasInternalMoveMapLabelJargon("Advanced pottery container"), true);
   assert.equal(
-    hasInternalMoveMapLabelJargon("Brooklyn-first advanced improv container"),
-    true,
+    normalizeUserFacingMoveMapLabel("Advanced pottery container"),
+    "Advanced pottery group",
   );
   assert.equal(
-    normalizeUserFacingMoveMapLabel("Brooklyn-first advanced improv container"),
-    "Improv class in Brooklyn",
-  );
-  assert.equal(
-    normalizeUserFacingMoveMapLabel("Actor-centered on-camera path"),
-    "On-camera acting",
+    normalizeUserFacingMoveMapLabel("Operator path"),
+    "Recommended option",
   );
   assert.equal(
     normalizeUserFacingMoveMapLabel("Lowest-friction version"),
-    "Low-commitment option",
+    "Smallest practical step",
   );
-  assert.equal(hasInternalMoveMapLabelJargon("On-camera acting"), false);
-  assert.equal(hasInternalMoveMapLabelJargon("Acting fundamentals"), false);
+  assert.equal(hasInternalMoveMapLabelJargon("Low-commitment option"), true);
+  assert.equal(
+    normalizeUserFacingMoveMapLabel("Best proof option"),
+    "Best fit-check step",
+  );
+  assert.equal(hasInternalMoveMapLabelJargon("Pottery fundamentals"), false);
+  assert.equal(hasInternalMoveMapLabelJargon("Recurring swim class"), false);
   assert.equal(hasInternalMoveMapLabelJargon("Freelance/service path"), false);
+});
+
+test("recursive label cleanup repairs child labels and action leaves on urgent court boards", () => {
+  const tree = courtDeadlineTree();
+  const badChild = {
+    id: "legal_aid_fork",
+    parent_id: "root",
+    selected_from_option_id: "legal_aid",
+    kind: "decision" as const,
+    title: "Preparation step",
+    question: "What version of legal-aid routing first should you try first?",
+    context_summary: "Legal aid intake will likely need notice facts before it can help.",
+    options: [
+      {
+        ...courtOption("low_commitment", "Low-commitment option", "recommended"),
+        node_id: "legal_aid_fork",
+      },
+      {
+        ...courtOption("best_proof", "Best proof option", "viable"),
+        node_id: "legal_aid_fork",
+      },
+      {
+        ...courtOption("supporting_prerequisite", "Supporting prerequisite", "supplement"),
+        node_id: "legal_aid_fork",
+      },
+    ],
+    action: null,
+    selected_option_id: "low_commitment",
+    status: "active" as const,
+    search_status: "not_needed" as const,
+    generated_at: "2026-07-08T00:00:00.000Z",
+  };
+  const badTree: DecisionTree = {
+    ...tree,
+    selected_path: ["legal_aid", "low_commitment"],
+    active_node_id: "legal_aid_fork",
+    nodes: [
+      {
+        ...tree.nodes[0],
+        selected_option_id: "legal_aid",
+        options: tree.nodes[0].options.map((option) =>
+          option.id === "legal_aid"
+            ? { ...option, selected: true, next_node_id: "legal_aid_fork" }
+            : { ...option, selected: false },
+        ),
+      },
+      badChild,
+      {
+        id: "legal_aid_action",
+        parent_id: "legal_aid_fork",
+        selected_from_option_id: "low_commitment",
+        kind: "action",
+        title: "Highest-signal version",
+        question: "Highest-signal version",
+        context_summary: "Court paperwork deadline process triage.",
+        options: [],
+        action: courtFirstAction(
+          "Highest-signal version",
+          "Choose the version most likely to reveal whether this path is worth continuing.",
+        ),
+        selected_option_id: null,
+        status: "active",
+        search_status: "not_needed",
+        generated_at: "2026-07-08T00:00:00.000Z",
+      },
+    ],
+  };
+
+  const normalized = normalizeDecisionTreeLabelsRecursively(badTree, {
+    contextText:
+      "Court paperwork deadline in a few days. User needs process triage, clerk or legal aid, and no legal argument advice.",
+  });
+  const labels = normalized.nodes.flatMap((node) => [
+    node.title,
+    ...node.options.map((option) => option.label),
+  ]);
+  assert.equal(labels.some(hasInternalMoveMapLabelJargon), false);
+  assert.ok(labels.includes("Call legal aid intake"));
+  assert.ok(labels.includes("Ask what documents they need"));
+  assert.ok(labels.includes("Prepare a notice facts sheet"));
+  assert.match(normalized.nodes[2]?.action?.details ?? "", /documents?|notice/i);
+  assert.match(normalized.nodes[2]?.action?.details ?? "", /deadline/i);
+  assert.doesNotMatch(normalized.nodes[2]?.action?.details ?? "", /call legal aid intake/i);
+  assert.doesNotMatch(normalized.nodes[2]?.action?.details ?? "", /real signal|worth continuing/i);
+});
+
+test("urgent court repairs use the selected branch rather than sibling branch text", () => {
+  assert.equal(
+    normalizeUserFacingMoveMapLabel(
+      "Low-commitment option",
+      "Call the court clerk for process information.",
+      "Court paperwork deadline with notice, clerk, and legal aid branches.",
+    ),
+    "Call the court clerk",
+  );
+
+  const tree = courtDeadlineTree();
+  const root = rootDecisionNode(tree);
+  const clerk = root.options.find((option) => option.id === "clerk");
+  assert.ok(clerk);
+  const weakClerkAction = courtFirstAction(
+    "Low-commitment option",
+    "Shrink this to the smallest practical step.",
+  );
+  const normalized = normalizeDecisionTreeLabelsRecursively({
+    ...tree,
+    current_action: weakClerkAction,
+    selected_path: [clerk.id],
+    nodes: tree.nodes.map((node) =>
+      node.id === root.id
+        ? {
+            ...node,
+            selected_option_id: clerk.id,
+            options: node.options.map((option) =>
+              option.id === clerk.id
+                ? { ...option, selected: true, first_action: weakClerkAction }
+                : { ...option, selected: false },
+            ),
+          }
+        : node,
+    ),
+  });
+  const normalizedClerk = findDecisionOption(normalized, clerk.id);
+
+  assert.match(normalizedClerk?.first_action.title ?? "", /court clerk/i);
+  assert.match(normalizedClerk?.first_action.details ?? "", /court clerk/i);
+  assert.doesNotMatch(normalizedClerk?.first_action.title ?? "", /legal aid/i);
+  assert.doesNotMatch(normalizedClerk?.first_action.details ?? "", /call legal aid intake/i);
+});
+
+test("urgent court action repair produces concrete process-only checklist actions", () => {
+  const repaired = normalizeActionLeafQuality({
+    action: courtFirstAction(
+      "Supporting prerequisite",
+      "Do the prerequisite that makes this path easier or safer.",
+      {
+        success_condition: "You know whether this path is worth continuing.",
+        fallback: "Choose another branch.",
+      },
+    ),
+    boardText:
+      "Court paperwork deadline in a few days. The user needs to identify exactly what paperwork is due and avoid legal argument advice.",
+    branchLabel: "Notice-first procedural triage",
+    searchStatus: "not_needed",
+    webSearchCallCount: 0,
+  });
+
+  assert.equal(repaired.repaired, true);
+  assert.match(repaired.action.title, /Find the notice/i);
+  assert.match(repaired.action.details, /For 15 minutes now/);
+  assert.match(repaired.action.details, /court name, case number, deadline date\/time, document title/);
+  assert.match(repaired.action.details, /process triage, not legal argument/i);
+  assert.match(repaired.action.success_condition, /deadline facts sheet/i);
+  assert.match(repaired.action.fallback, /court clerk|legal-aid intake/i);
+  assert.doesNotMatch(
+    `${repaired.action.details} ${repaired.action.success_condition}`,
+    /guaranteed|should argue|extension is available/i,
+  );
+});
+
+test("urgent court branch expansion fallback stays procedural", () => {
+  const tree = courtDeadlineTree();
+  const root = rootDecisionNode(tree);
+  const legalAid = root.options.find((option) => option.id === "legal_aid");
+  assert.ok(legalAid);
+
+  const expanded = expandDecisionTreeAtOption({
+    tree,
+    nodeId: root.id,
+    optionId: legalAid.id,
+    selectedPath: [legalAid.id],
+  });
+  const childId = rootDecisionNode(expanded).options.find(
+    (option) => option.id === "legal_aid",
+  )?.next_node_id;
+  const child = getDecisionNode(expanded, childId);
+  assert.equal(child?.kind, "decision");
+  assert.deepEqual(
+    child?.options.map((option) => option.label),
+    [
+      "Call legal aid intake",
+      "Ask what documents they need",
+      "Prepare a notice facts sheet",
+    ],
+  );
+  assert.equal(
+    child?.options.map((option) => option.label).some(hasInternalMoveMapLabelJargon),
+    false,
+  );
+
+  const leafTree = expandDecisionTreeAtOption({
+    tree: expanded,
+    nodeId: child!.id,
+    optionId: child!.options[0].id,
+    selectedPath: expanded.selected_path,
+  });
+  assert.match(
+    `${leafTree.current_action.title} ${leafTree.current_action.details}`,
+    /legal aid intake/i,
+  );
+  assert.match(leafTree.current_action.details, /deadline/i);
+  assert.doesNotMatch(leafTree.current_action.details, /real signal|worth continuing/i);
+});
+
+test("branch expansion sanitizer repairs urgent child labels and action leaves", () => {
+  const parsed = branchExpansionResultSchema.parse({
+    result_type: "decision_node",
+    node: {
+      kind: "decision",
+      title: "Preparation step",
+      question: "What version should happen next?",
+      summary: "Legal aid routing for a court paperwork deadline.",
+      options: [
+        {
+          label: "Low-commitment option",
+          short_rationale: "Start with the easiest legal-aid intake step.",
+          recommendation_level: "recommended",
+          can_explore: true,
+          search_status: "not_needed",
+          friction: "low",
+          time_to_feedback: "Today",
+          first_action_preview:
+            "Shrink the path to the smallest action that still creates a real signal.",
+        },
+        {
+          label: "Best proof option",
+          short_rationale: "Ask what documents intake needs.",
+          recommendation_level: "viable",
+          can_explore: true,
+          search_status: "not_needed",
+          friction: "medium",
+          time_to_feedback: "Today",
+          first_action_preview:
+            "Choose the version most likely to reveal whether this path is worth continuing.",
+        },
+      ],
+      search_status: "not_needed",
+    },
+    action_leaf: null,
+    reasoning_summary: "Court paperwork deadline, process triage only.",
+    selected_path_summary: "Legal-aid routing first.",
+    memory_used: [],
+    assumptions: [],
+    search_needed: false,
+  });
+
+  const sanitized = sanitizeBranchExpansionSearchStatus(
+    parsed,
+    0,
+    "Court paperwork deadline in a few days; legal aid intake may help but needs notice facts.",
+  );
+
+  assert.equal(hasInternalMoveMapLabelJargon(sanitized.node?.title ?? ""), false);
+  assert.deepEqual(sanitized.node?.options.map((option) => option.label), [
+    "Call legal aid intake",
+    "Ask what documents they need",
+  ]);
+  assert.equal(
+    sanitized.node?.options.map((option) => option.label).some(hasInternalMoveMapLabelJargon),
+    false,
+  );
+  assert.match(sanitized.node?.options[0]?.first_action_preview ?? "", /Call legal aid intake/i);
+});
+
+test("weak urgent branches show caution while recommended and normal viable branches do not", () => {
+  const tree = courtDeadlineTree();
+  const root = rootDecisionNode(tree);
+
+  assert.equal(
+    branchSelectionCaution(tree, root.options.find((option) => option.id === "notice_first")),
+    null,
+  );
+  assert.match(
+    branchSelectionCaution(tree, root.options.find((option) => option.id === "forms_search"))
+      ?.message ?? "",
+    /not the recommended first move/i,
+  );
+  assert.match(
+    branchSelectionCaution(tree, root.options.find((option) => option.id === "extension"))
+      ?.message ?? "",
+    /safer after you confirm the exact deadline and document/i,
+  );
+  assert.match(
+    branchSelectionCaution(tree, root.options.find((option) => option.id === "legal_aid"))
+      ?.message ?? "",
+    /intake will likely need the court name, case number, deadline, and document title/i,
+  );
+
+  const activityTree = buildFallbackDecisionTree(tennisPlan());
+  const viable = rootDecisionNode(activityTree).options.find(
+    (option) => option.id === "smallest_viable_path",
+  );
+  assert.equal(branchSelectionCaution(activityTree, viable), null);
 });
 
 test("fallback tree creates visible branches and stable branch task source", () => {
@@ -170,26 +586,24 @@ test("fallback tree creates visible branches and stable branch task source", () 
   const recommended = findDecisionOption(tree, tree.recommended_option_id);
 
   assert.equal(root.title, "Current position");
-  assert.deepEqual(
-    root.options.map((option) => option.label),
-    [
-      "Beginner clinic / recurring group",
-      "Hire a coach",
-      "Solo practice",
-      "Casual local games",
-    ],
-  );
-  assert.equal(recommended?.label, "Beginner clinic / recurring group");
+  assert.deepEqual(root.options.map((option) => option.label), [
+    "Join a beginner clinic",
+    "Practice solo until feeling ready.",
+    "Smallest viable path",
+    "Trap to avoid",
+  ]);
+  assert.equal(recommended?.label, "Join a beginner clinic");
   assert.equal(recommended?.recommendation_level, "recommended");
   assert.equal(recommended?.search_status, "needed");
   assert.equal(recommended?.requires_web_search, true);
   assert.equal(root.options.some((option) => /^Find one/i.test(option.label)), false);
   assert.equal(recommended?.next_steps[0]?.title, "Find one beginner clinic");
-  assert.equal(tree.current_action.title, "Search and shortlist beginner tennis options");
-  assert.match(tree.current_action.details, /Within 20 minutes today/);
+  assert.equal(tree.current_action.title, "Search and shortlist realistic options");
+  assert.match(tree.current_action.details, /Within 30 minutes today/);
+  assert.doesNotMatch(tree.current_action.title, /tennis/i);
   assert.equal(
     decisionBranchSourceSection(recommended?.id),
-    "decision_branch:beginner_clinic_group",
+    `decision_branch:${recommended?.id}`,
   );
 });
 
@@ -220,25 +634,25 @@ test("fallback tree marks searched branches only when scout has verified finding
 test("tree expansion adds recursive forks and action leaves without changing on selection", () => {
   const tree = buildFallbackDecisionTree(tennisPlan());
   const root = rootDecisionNode(tree);
-  const coach = root.options.find((option) => option.label === "Hire a coach");
-  assert.ok(coach);
+  const branch = root.options.find((option) => option.id === "smallest_viable_path");
+  assert.ok(branch);
 
-  const selectedOnlyPath = selectedPathForChoice(tree, tree.selected_path, root.id, coach.id);
-  assert.deepEqual(selectedOnlyPath, [coach.id]);
-  assert.equal(getDecisionNode(tree, coach.next_node_id), null);
+  const selectedOnlyPath = selectedPathForChoice(tree, tree.selected_path, root.id, branch.id);
+  assert.deepEqual(selectedOnlyPath, [branch.id]);
+  assert.equal(getDecisionNode(tree, branch.next_node_id), null);
 
   const expanded = expandDecisionTreeAtOption({
     tree,
     nodeId: root.id,
-    optionId: coach.id,
+    optionId: branch.id,
     selectedPath: selectedOnlyPath,
   });
-  const expandedCoach = rootDecisionNode(expanded).options.find(
-    (option) => option.id === coach.id,
+  const expandedBranch = rootDecisionNode(expanded).options.find(
+    (option) => option.id === branch.id,
   );
-  assert.ok(expandedCoach?.next_node_id);
-  assert.equal(expandedCoach.can_explore, false);
-  const childFork = getDecisionNode(expanded, expandedCoach.next_node_id);
+  assert.ok(expandedBranch?.next_node_id);
+  assert.equal(expandedBranch.can_explore, false);
+  const childFork = getDecisionNode(expanded, expandedBranch.next_node_id);
   assert.equal(childFork?.kind, "decision");
   assert.ok((childFork?.options.length ?? 0) >= 2);
   assert.ok((childFork?.options.length ?? 0) <= 5);
@@ -254,6 +668,45 @@ test("tree expansion adds recursive forks and action leaves without changing on 
   const trace = decisionTreeTrace(leafTree, leafTree.selected_path);
   assert.equal(trace.at(-1)?.node.kind, "action");
   assert.equal(leafTree.current_action.title, trace.at(-1)?.node.action?.title);
+});
+
+test("community and volunteer branches do not fall into class-shaped expansion", () => {
+  const tree = buildFallbackDecisionTree(
+    tennisPlan({
+      situation_read: "The user wants a recurring volunteer shift to meet neighbors.",
+      situation_summary: "A weekly volunteer role is the selected community option.",
+      highest_leverage_move_today: {
+        title: "Weekly volunteer shift",
+        description: "A recurring shift creates useful work and repeat contact.",
+        estimated_minutes: 20,
+        success_condition: "One suitable recurring shift is identified.",
+      },
+      operator_insight: {
+        naive_path: "Browse unrelated events.",
+        operator_path: "Choose one recurring volunteer role.",
+        wasted_motion_to_avoid: "Do not collect one-off options that cannot repeat.",
+      },
+    }),
+  );
+  const root = rootDecisionNode(tree);
+  const recommended = findDecisionOption(tree, tree.recommended_option_id);
+  assert.ok(recommended);
+  const expanded = expandDecisionTreeAtOption({
+    tree,
+    nodeId: root.id,
+    optionId: recommended.id,
+    selectedPath: [recommended.id],
+  });
+  const expandedRecommended = findDecisionOption(expanded, recommended.id);
+  const child = getDecisionNode(expanded, expandedRecommended?.next_node_id);
+  const labels = child?.options.map((option) => option.label) ?? [];
+
+  assert.deepEqual(labels, [
+    "Smallest practical step",
+    "Best fit-check step",
+    "Prepare required details first",
+  ]);
+  assert.equal(labels.some((label) => /beginner|class|course|workshop|drop-in/i.test(label)), false);
 });
 
 test("normalizer hydrates raw JSON, trims fields, and falls back to recommended option", () => {
@@ -356,7 +809,7 @@ test("normalizer hydrates raw JSON, trims fields, and falls back to recommended 
   assert.equal(root.title, "Current position");
   assert.equal(tree.selected_path[0], "clinic");
   assert.equal(selected?.label, "Join beginner clinic");
-  assert.equal(tree.current_action.title, "Contact a clinic");
+  assert.equal(tree.current_action.title, "Search and shortlist realistic options");
 });
 
 test("branch expansion schema accepts decision nodes and action leaves", () => {
@@ -552,53 +1005,55 @@ test("search honesty downgrades searched statuses when no search call happened",
   assert.deepEqual(recommended?.sources, []);
 });
 
-test("action quality gate repairs vague search-needed tennis actions", () => {
+test("action quality gate repairs an unfamiliar activity with the generic search workflow", () => {
   const repaired = normalizeActionLeafQuality({
     action: {
-      title: "Check beginner tennis formats near you",
-      details: "Check beginner tennis formats near you.",
+      title: "Check beginner fencing formats near you",
+      details: "Check beginner fencing formats near you.",
       estimated_minutes: 20,
       success_condition: "You know what to do next.",
       fallback: "Try another option.",
     },
-    boardText:
-      "Beginner in Bed-Stuy/11216 wants to start tennis and meet nearby people through tennis.",
-    branchLabel: "Beginner clinic",
+    boardText: "A beginner in Tacoma wants to start fencing through a recurring local class.",
+    branchLabel: "Beginner class",
     searchStatus: "needed",
     webSearchCallCount: 0,
   });
 
   assert.equal(repaired.repaired, true);
   assert.ok(repaired.flags.includes("missing_time_boundary"));
-  assert.match(repaired.action.details, /Within 20 minutes today/);
-  assert.match(repaired.action.details, /3 recurring beginner adult tennis options/);
-  assert.match(repaired.action.details, /beginner adult tennis clinic 11216/);
-  assert.match(repaired.action.details, /recurring, beginner-friendly, low-pressure/);
+  assert.match(repaired.action.details, /Within 30 minutes today/);
+  assert.match(repaired.action.details, /3-5 Beginner class/);
+  assert.match(repaired.action.details, /beginner class Tacoma/);
+  assert.match(repaired.action.details, /near Tacoma/);
+  assert.match(repaired.action.details, /constraints, schedule, experience level, and repeatability/);
   assert.match(repaired.action.success_condition, /Three candidates/);
-  assert.match(repaired.action.fallback, /private or semi-private coach/);
+  assert.match(repaired.action.fallback, /widen the search radius/);
+  assert.doesNotMatch(repaired.action.details, /Brooklyn|Bed-Stuy|11216/);
 });
 
-test("action quality gate repairs acting and community search workflows without provider or location invention", () => {
-  const acting = normalizeActionLeafQuality({
+test("action quality gate repairs class and community workflows without provider or location invention", () => {
+  const activity = normalizeActionLeafQuality({
     action: {
-      title: "Find an acting class",
-      details: "Find an acting class in Brooklyn.",
+      title: "Find a pottery class",
+      details: "Find a pottery class in Tacoma.",
       estimated_minutes: 30,
       success_condition: "A class is found.",
       fallback: "Try another class.",
     },
-    boardText: "The user wants an acting or improv class in Brooklyn.",
-    branchLabel: "Improv class",
+    boardText: "The user wants a beginner pottery class in Tacoma.",
+    branchLabel: "Beginner studio class",
     searchStatus: "needed",
     webSearchCallCount: 0,
   });
 
-  assert.equal(acting.repaired, true);
-  assert.match(acting.action.details, /Within 30 minutes today/);
-  assert.match(acting.action.details, /3-5 adult acting or improv classes/);
-  assert.match(acting.action.details, /adult acting class Brooklyn/);
-  assert.match(acting.action.details, /level fit, recurring cohort, commute, schedule/);
-  assert.doesNotMatch(acting.action.details, /Brooklyn Comedy Collective|BCC|Level 3/);
+  assert.equal(activity.repaired, true);
+  assert.match(activity.action.details, /Within 30 minutes today/);
+  assert.match(activity.action.details, /3-5 Beginner studio class/);
+  assert.match(activity.action.details, /beginner studio class Tacoma/);
+  assert.match(activity.action.details, /near Tacoma/);
+  assert.match(activity.action.details, /constraints, schedule, experience level, and repeatability/);
+  assert.doesNotMatch(activity.action.details, /Brooklyn|Bed-Stuy|11216/);
 
   const community = normalizeActionLeafQuality({
     action: {
@@ -618,22 +1073,22 @@ test("action quality gate repairs acting and community search workflows without 
   assert.match(community.action.details, /3 recurring non-dating community options/);
   assert.match(community.action.details, /same people are likely to return/);
   assert.match(community.action.success_condition, /calendar/);
-  assert.doesNotMatch(community.action.details, /Brooklyn|Bed-Stuy|11216/);
+  assert.doesNotMatch(community.action.details, /Tacoma|Brooklyn|Bed-Stuy|11216/);
 });
 
 test("action quality gate leaves concrete, non-search, searched, and urgent actions alone", () => {
   const concrete = {
-    title: "Search and shortlist beginner tennis options",
+    title: "Search and shortlist beginner class options",
     details:
-      "Within 20 minutes today, search for 3 recurring beginner adult tennis options near your ZIP/neighborhood using 'beginner adult tennis clinic near me'. Shortlist only recurring beginner-friendly low-pressure options.",
+      "Within 20 minutes today, search for 3 recurring beginner class options near your area using 'beginner class near me'. Shortlist only recurring beginner-friendly low-pressure options.",
     estimated_minutes: 20,
     success_condition: "Three candidates are saved or one inquiry is sent today.",
-    fallback: "If none appear, ask one coach where adult beginners move into group play.",
+    fallback: "If none appear, widen the search or ask one instructor where beginners start.",
   };
   assert.equal(
     normalizeActionLeafQuality({
       action: concrete,
-      boardText: "tennis nearby",
+      boardText: "activity nearby",
       branchLabel: "Beginner clinic",
       searchStatus: "needed",
       webSearchCallCount: 0,
@@ -643,7 +1098,7 @@ test("action quality gate leaves concrete, non-search, searched, and urgent acti
   assert.equal(
     normalizeActionLeafQuality({
       action: { ...concrete, details: "Find a class." },
-      boardText: "tennis nearby",
+      boardText: "activity nearby",
       branchLabel: "Beginner clinic",
       searchStatus: "not_needed",
       webSearchCallCount: 0,
@@ -653,7 +1108,7 @@ test("action quality gate leaves concrete, non-search, searched, and urgent acti
   assert.equal(
     normalizeActionLeafQuality({
       action: { ...concrete, details: "Find a class." },
-      boardText: "tennis nearby",
+      boardText: "activity nearby",
       branchLabel: "Beginner clinic",
       searchStatus: "needed",
       webSearchCallCount: 1,
@@ -702,10 +1157,10 @@ test("repaired operational actions become canonical task and trace text", () => 
   );
   assert.notEqual(repaired.canonical_action_text, repaired.original_action_text);
   assert.equal(canonicalDecisionActionText(repaired.action), repaired.action.details);
-  assert.match(repaired.canonical_action_text, /Within 20 minutes today/);
-  assert.match(repaired.canonical_action_text, /Success: Three candidates/);
+  assert.match(repaired.canonical_action_text, /Within 30 minutes today/);
+  assert.match(repaired.canonical_action_text, /Success:/);
   assert.match(repaired.canonical_action_text, /If blocked:/);
-  assert.match(decisionActionTaskNotes(repaired.action), /Success: Three candidates/);
+  assert.match(decisionActionTaskNotes(repaired.action), /Success:/);
   assert.match(decisionActionTaskNotes(repaired.action), /If blocked:/);
 });
 
@@ -752,11 +1207,11 @@ test("decision tree sanitizer repairs the live tennis failure before persistence
     "Beginner in Bed-Stuy/11216 wants to start tennis and meet nearby people.",
   );
 
-  assert.match(sanitized.current_action.details, /Within 20 minutes today/);
+  assert.match(sanitized.current_action.details, /Within 30 minutes today/);
   assert.match(sanitized.current_action.success_condition, /Three candidates/);
   assert.match(
     findDecisionOption(sanitized, clinic.id)?.first_action.details ?? "",
-    /beginner adult tennis clinic 11216/,
+    /3-5 beginner clinic near 11216/i,
   );
 });
 
@@ -813,13 +1268,13 @@ test("decision tree sanitizer upgrades not-needed local actions before repair", 
 
   assert.equal(sanitizedClinic?.search_status, "needed");
   assert.equal(sanitizedClinic?.requires_web_search, true);
-  assert.match(sanitized.current_action.details, /Within 20 minutes today/);
-  assert.match(sanitized.current_action.details, /3 recurring beginner adult tennis options/);
-  assert.match(sanitized.current_action.details, /beginner adult tennis clinic 11216/);
-  assert.match(sanitized.current_action.success_condition, /Three candidates/);
+  assert.match(sanitized.current_action.details, /Within 30 minutes today/);
+  assert.match(sanitized.current_action.details, /3 recurring non-dating community options/);
+  assert.match(sanitized.current_action.details, /near 11216/);
+  assert.match(sanitized.current_action.success_condition, /calendar/);
   assert.match(
     sanitizedClinic?.first_action.details ?? "",
-    /adult tennis clinic Brooklyn beginner/,
+    /same people are likely to return/,
   );
 });
 
@@ -844,9 +1299,9 @@ test("plan task candidates inherit canonical repaired Move Map action details", 
     decision_tree: tree,
   });
 
-  assert.match(aligned.first_10_minute_action.details, /Within 20 minutes today/);
-  assert.match(aligned.task_candidates[0]?.details ?? "", /Within 20 minutes today/);
-  assert.match(aligned.task_candidates[0]?.details ?? "", /Success: Three candidates/);
+  assert.match(aligned.first_10_minute_action.details, /Within 30 minutes today/);
+  assert.match(aligned.task_candidates[0]?.details ?? "", /Within 30 minutes today/);
+  assert.match(aligned.task_candidates[0]?.details ?? "", /Success:/);
   assert.match(aligned.task_candidates[0]?.description ?? "", /If blocked:/);
 });
 
@@ -905,24 +1360,31 @@ test("plan persistence normalization runs search honesty before task alignment",
     },
   );
 
-  assert.match(normalized.decision_tree.current_action.details, /Within 20 minutes today/);
-  assert.match(normalized.first_10_minute_action.details, /Within 20 minutes today/);
-  assert.match(normalized.task_candidates[0]?.details ?? "", /Within 20 minutes today/);
-  assert.match(normalized.task_candidates[0]?.details ?? "", /Success: Three candidates/);
+  assert.match(normalized.decision_tree.current_action.details, /Within 30 minutes today/);
+  assert.match(normalized.first_10_minute_action.details, /Within 30 minutes today/);
+  assert.match(normalized.task_candidates[0]?.details ?? "", /Within 30 minutes today/);
+  assert.match(normalized.task_candidates[0]?.details ?? "", /Success:/);
 });
 
-test("reconciliation followup quality repairs meta-only private writing next steps", () => {
-  const repaired = normalizeReconciliationFollowupQuality({
-    recommendedFollowupAction:
-      "Recalculate the board around a private-writing path.",
-    boardText:
-      "Forget monetizing writing. The user wants to keep writing private and non-commercial for now.",
-  });
+test("reconciliation followup quality repairs meta-only updates without privileging a medium", () => {
+  const followups = ["writing", "pottery", "music"].map((medium) =>
+    normalizeReconciliationFollowupQuality({
+      recommendedFollowupAction: "Recalculate the board around the updated constraint.",
+      boardText: `The user wants to keep ${medium} private and non-commercial for now.`,
+    }),
+  );
 
-  assert.equal(repaired.repaired, true);
-  assert.match(repaired.recommended_followup_action, /private 30-minute writing session/);
-  assert.match(repaired.recommended_followup_action, /Success:/);
-  assert.match(repaired.recommended_followup_action, /If blocked/);
+  for (const repaired of followups) {
+    assert.equal(repaired.repaired, true);
+    assert.match(repaired.recommended_followup_action, /30-minute block/);
+    assert.match(repaired.recommended_followup_action, /Success:/);
+    assert.match(repaired.recommended_followup_action, /If blocked/);
+    assert.doesNotMatch(repaired.recommended_followup_action, /writing|pottery|music/i);
+  }
+  assert.equal(
+    new Set(followups.map((result) => result.recommended_followup_action)).size,
+    1,
+  );
 
   const noAction = normalizeReconciliationFollowupQuality({
     recommendedFollowupAction:
@@ -935,66 +1397,65 @@ test("reconciliation followup quality repairs meta-only private writing next ste
 test("model-backed branch expansion attaches child decision nodes and action leaves", () => {
   const tree = buildFallbackDecisionTree(tennisPlan());
   const root = rootDecisionNode(tree);
-  const coach = root.options.find((option) => option.label === "Hire a coach");
-  assert.ok(coach);
+  const branch = root.options.find((option) => option.id === tree.recommended_option_id);
+  assert.ok(branch);
 
   const expanded = attachBranchExpansionToTree({
     tree,
     nodeId: root.id,
-    optionId: coach.id,
-    selectedPath: [coach.id],
+    optionId: branch.id,
+    selectedPath: [branch.id],
     webSearchCallCount: 0,
     contextText: "The user wants to start tennis near Bed-Stuy and meet people.",
     expansion: branchExpansionResultSchema.parse({
       result_type: "decision_node",
       node: {
         kind: "decision",
-        title: "Coaching path",
-        question: "What kind of coaching path fits this goal?",
-        summary: "The coach branch still needs a coaching-specific choice.",
+        title: "Instruction formats",
+        question: "Which instruction format fits the current constraints?",
+        summary: "The selected branch still needs a format choice.",
         options: [
           {
-            label: "Coach who routes into group play",
+            label: "Recurring beginner class",
             short_rationale:
-              "Best if the coach can correct basics and point you toward a recurring beginner container.",
+              "Best if structured practice and repeated contact both matter.",
             recommendation_level: "recommended",
             can_explore: true,
             search_status: "needed",
             friction: "medium",
             time_to_feedback: "One inquiry",
-            first_action_preview:
-              "Contact one coach and ask where adult beginners play repeatedly.",
+            first_action_preview: "Find one recurring beginner class and check level fit.",
           },
           {
-            label: "Small-group lesson",
+            label: "Small-group session",
             short_rationale:
-              "Keeps coaching feedback while adding repeated contact with other beginners.",
+              "Keeps direct feedback while adding contact with other learners.",
             recommendation_level: "viable",
             can_explore: true,
             search_status: "needed",
             friction: "medium",
-            time_to_feedback: "One lesson",
-            first_action_preview: "Find one small-group beginner lesson.",
+            time_to_feedback: "One session",
+            first_action_preview: "Find one small-group beginner session.",
           },
         ],
         search_status: "needed",
       },
       action_leaf: null,
-      reasoning_summary: "Coaching is useful only if it routes into a group.",
-      selected_path_summary: "Hire a coach.",
+      reasoning_summary: "The format should match both practice and repeat-contact goals.",
+      selected_path_summary: "Join a beginner clinic.",
       memory_used: [],
       assumptions: [],
       search_needed: true,
     }),
   });
-  const expandedCoach = rootDecisionNode(expanded).options.find(
-    (option) => option.id === coach.id,
+  const expandedBranch = rootDecisionNode(expanded).options.find(
+    (option) => option.id === branch.id,
   );
-  assert.ok(expandedCoach?.next_node_id);
-  const child = getDecisionNode(expanded, expandedCoach.next_node_id);
+  assert.ok(expandedBranch?.next_node_id);
+  const child = getDecisionNode(expanded, expandedBranch.next_node_id);
   assert.equal(child?.kind, "decision");
   assert.equal(child?.options.length, 2);
-  assert.equal(child?.options[0]?.label, "Coach who routes into group play");
+  assert.equal(child?.options[0]?.label, "Recurring beginner class");
 
   const childOption = child?.options[0];
   assert.ok(child && childOption);
@@ -1010,25 +1471,30 @@ test("model-backed branch expansion attaches child decision nodes and action lea
       node: null,
       action_leaf: {
         kind: "action",
-        title: "Ask one coach for a beginner group route",
-        first_action:
-          "Send one message asking whether they teach adult beginners and where those beginners play repeatedly.",
-        first_10_minutes: "Draft the message and choose one coach.",
+        title: "Ask one program about level fit",
+        first_action: "Send one message asking whether the recurring class fits a beginner.",
+        first_10_minutes: "Draft the question and choose one program.",
         success_condition: "One message is sent.",
-        if_blocked: "Ask a public recreation program instead.",
+        if_blocked: "Search for another recurring beginner format.",
         search_status: "needed",
       },
       reasoning_summary: "The branch is now specific enough to act.",
-      selected_path_summary: "Hire a coach -> coach who routes into group play.",
+      selected_path_summary: "Recurring beginner class -> ask about fit.",
       memory_used: [],
       assumptions: [],
       search_needed: true,
     }),
   });
   assert.equal(decisionTreeTrace(leafTree, leafTree.selected_path).at(-1)?.node.kind, "action");
-  assert.equal(leafTree.current_action.title, "Search and shortlist beginner tennis options");
-  assert.match(leafTree.current_action.details, /Within 20 minutes today/);
-  assert.match(leafTree.current_action.details, /beginner adult tennis clinic/);
+  assert.match(leafTree.current_action.details, /Within 30 minutes today/);
+  assert.match(leafTree.current_action.details, /3-5 realistic options/);
+  assert.match(leafTree.current_action.details, /Bed-Stuy/);
+  assert.match(leafTree.current_action.success_condition, /Three candidates/);
+  assert.match(leafTree.current_action.fallback, /widen the search radius/);
+  assert.doesNotMatch(
+    leafTree.current_action.details,
+    /adult tennis clinic|Brooklyn beginner|specific provider/i,
+  );
 });
 
 test("sequential branch expansion output is coerced into an action leaf", () => {

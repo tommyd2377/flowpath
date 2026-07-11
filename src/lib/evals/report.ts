@@ -64,6 +64,34 @@ function scenarioMarkdown(result: EvalScenarioResult) {
   return lines.join("\n");
 }
 
+function suiteBreakdownMarkdown(results: EvalScenarioResult[]) {
+  const grouped = new Map<string, EvalScenarioResult[]>();
+  for (const result of results) {
+    const suite = result.suite ?? "regression";
+    grouped.set(suite, [...(grouped.get(suite) ?? []), result]);
+  }
+  if (grouped.size <= 1) return [];
+  const lines = [
+    "## Suite Summary",
+    "",
+    "| Suite | Scenarios | Score | Critical failures |",
+    "| --- | ---: | ---: | ---: |",
+  ];
+  for (const [suite, suiteResults] of grouped) {
+    const score = suiteResults.reduce((sum, result) => sum + result.overallScore, 0);
+    const maxScore = suiteResults.reduce((sum, result) => sum + result.maxScore, 0);
+    const failures = suiteResults.reduce(
+      (sum, result) => sum + result.criticalFailures.length,
+      0,
+    );
+    lines.push(
+      `| ${suite} | ${suiteResults.length} | ${score.toFixed(1)} / ${maxScore} | ${failures} |`,
+    );
+  }
+  lines.push("");
+  return lines;
+}
+
 function comparisonFixCues(result: {
   flowpath: Pick<EvalScenarioResult, "criticalFailures">;
 }) {
@@ -114,6 +142,7 @@ export function renderEvalReportMarkdown(report: EvalSuiteReport) {
     "",
     `Generated: ${report.generatedAt}`,
     `Mode: ${report.mode}`,
+    ...(report.suite ? [`Suite: ${report.suite}`] : []),
     `Git commit: ${report.gitCommit ?? "unknown"}`,
     `Model config: ${report.modelConfig ?? "offline mocks"}`,
     ...(report.selectedScenarioIds?.length
@@ -135,6 +164,7 @@ export function renderEvalReportMarkdown(report: EvalSuiteReport) {
       1,
     )} / ${report.maxScore} (${percent(report.overallScore, report.maxScore)})`,
     "",
+    ...suiteBreakdownMarkdown(report.results),
     "## Scenario Summary",
     "",
     "| Scenario | Result | Score | Critical failures |",
@@ -234,7 +264,11 @@ export async function writeEvalReport(
     outputDir,
     report.mode === "live"
       ? "latest-flowpath-live-eval.md"
-      : "latest-flowpath-eval.md",
+      : report.suite === "anti_overfit"
+        ? "latest-flowpath-anti-overfit-eval.md"
+        : report.suite === "regression"
+          ? "latest-flowpath-regression-eval.md"
+          : "latest-flowpath-eval.md",
   );
   await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await writeFile(latestPath, `${renderEvalReportMarkdown(report)}\n`, "utf8");
@@ -266,11 +300,13 @@ export function renderLiveComparisonReportMarkdown(report: LiveComparisonReport)
     "",
     `Generated: ${report.generatedAt}`,
     `Mode: ${report.mode}`,
+    ...(report.suite ? [`Suite: ${report.suite}`] : []),
     `Git commit: ${report.gitCommit ?? "unknown"}`,
     `Model config: ${report.modelConfig ?? "unknown"}`,
     `Scenario IDs: ${report.selectedScenarioIds.join(", ")}`,
     `Model calls: ${report.totalModelCalls} / ${report.budget}`,
     `Web search enabled: ${report.webSearchEnabled ? "yes" : "no"}`,
+    ...(report.searchMode ? [`Search mode: ${report.searchMode}`] : []),
     `Pairwise judge: ${report.judgeEnabled ? "enabled" : report.judgeRequested ? "requested but skipped by budget" : "disabled"}`,
     `FlowPath structured output repairs: ${flowpathRepairSuccesses} succeeded / ${flowpathRepairAttempts} attempted; ${flowpathRepairFailures} failed`,
     "",

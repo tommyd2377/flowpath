@@ -132,16 +132,19 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
     /\bnetwork(ing)?\b/,
     /\bcareer change\b/,
     /\bcredential\b/,
-    /\bproduct polish\b/,
-    /\bproduct strategy\b/,
-    /\bonboard(ing)?\b/,
-    /\buser testing\b/,
-    /\btry it out\b/,
+    /\boperations?\b/,
+    /\bmanagement\b/,
+    /\btrade\b/,
+    /\bapprenticeship\b/,
+    /\bpromotion\b/,
+    /\bcontract\b/,
+    /\bclients?\b/,
+    /\bcustomers?\b/,
+    /\bvendors?\b/,
+    /\blogistics\b/,
     /\bpricing\b/,
     /\bprice\b/,
-    /\bearly users?\b/,
     /\bmarketing\b/,
-    /\bfeatures?\b/,
     /\bbusiness\b/,
     /\bopportunity\b/,
     /\boffer\b/,
@@ -150,10 +153,14 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
   craft_creativity_mastery: [
     /\bcreative\b/,
     /\bwriting\b/,
-    /\bcharacter\b/,
-    /\barc\b/,
+    /\bart\b/,
+    /\bmusic\b/,
+    /\bdance\b/,
+    /\bfitness\b/,
+    /\btraining\b/,
+    /\btechnique\b/,
     /\brevis(e|ion)\b/,
-    /\bapp idea\b/,
+    /\bproject idea\b/,
     /\bproject stuck\b/,
     /\bkeep switching\b/,
     /\bcraft\b/,
@@ -166,7 +173,7 @@ const domainPatterns: Record<Exclude<SituationDomain, "unknown">, RegExp[]> = {
   open_loops_prioritization: [
     /\bopen loops?\b/,
     /\btoo many\b/,
-    /\btoo many app ideas?\b/,
+    /\btoo many project ideas?\b/,
     /\b20 things\b/,
     /\bhealth, work, money, and relationships\b/,
     /\bdon't know what actually matters first\b/,
@@ -178,19 +185,29 @@ function isMoneyCentral(text: string) {
   return hasAny(text, domainPatterns.work_money_career);
 }
 
+function hasClearUrgentStabilitySignal(text: string) {
+  const urgentCourtDeadline =
+    /\b(court|legal|filing|paperwork|notice|case)\b/.test(text) &&
+    /\b(deadline|due|within \d+ (?:hours?|days?)|tomorrow|few days|miss(?:ing)?|urgent)\b/.test(
+      text,
+    );
+  const utilityShutoff =
+    /\b(utility|electricity|electric|gas|water|power)\b/.test(text) &&
+    /\b(shutoff|shut[-\s]?off|disconnect|disconnection|notice)\b/.test(text);
+  const foodAccessRisk =
+    /\b(food|groceries|meals?)\b/.test(text) &&
+    /\b(insecurity|insecure|running out|cannot afford|can't afford|no food)\b/.test(text);
+  const childcareWorkRisk =
+    /\bchildcare\b/.test(text) &&
+    /\b(miss work|lose (?:my )?job|job risk|cannot work|can't work)\b/.test(text);
+  return urgentCourtDeadline || utilityShutoff || foodAccessRisk || childcareWorkRisk;
+}
+
 export function classifySituationDomain(
   situation: SituationRoutingContext,
 ): SituationRoute {
   const text = fullText(situation);
   const category = situation.category.toLowerCase();
-
-  if (isEntryDomainId(situation.category)) {
-    return {
-      domain: situation.category,
-      confidence: "high",
-      reason: "The user selected this board as the primary entry domain.",
-    };
-  }
 
   if (
     situation.urgency === "crisis" ||
@@ -201,6 +218,28 @@ export function classifySituationDomain(
       domain: "crisis_safety",
       confidence: "high",
       reason: "Crisis or immediate safety language is present.",
+    };
+  }
+
+  if (
+    category.includes("urgent") ||
+    category.includes("health") ||
+    category.includes("housing") ||
+    hasClearUrgentStabilitySignal(text) ||
+    (situation.urgency === "high" && hasAny(text, domainPatterns.urgent_stability))
+  ) {
+    return {
+      domain: "urgent_stability",
+      confidence: "high",
+      reason: "Immediate stability, deadline, basic-needs, housing, or health risk is central.",
+    };
+  }
+
+  if (isEntryDomainId(situation.category)) {
+    return {
+      domain: situation.category,
+      confidence: "high",
+      reason: "The user selected this board as the primary entry domain.",
     };
   }
 

@@ -53,18 +53,21 @@ const fallbackTreeId = "decision-tree";
 const taskLikeBranchStart = /^(pick|identify|set|send|contact|choose|search|find one|write|draft|schedule|block|register|attend)\b/i;
 const childDecisionOptionLimit = 5;
 const internalMoveMapLabelPatterns = [
+  /\blow[-\s]+commitment\s+option\b/i,
+  /\bbest\s+proof\s+option\b/i,
+  /\bproof[-\s]+building\s+option\b/i,
+  /\bpreparation\s+step\b/i,
   /\blowest[-\s]+friction\b/i,
   /\bhighest[-\s]+signal\b/i,
   /\bhigh[-\s]+signal\b/i,
+  /\bsignal\b/i,
   /\boperator\b/i,
   /\bleverage\b/i,
   /\bsupporting\s+prerequisite\b/i,
-  /\bbroad\s+(?:nyc\s+)?comparison\b/i,
+  /\bbroad(?:\s+\S+){0,2}\s+comparison\b/i,
   /\bfriction\s+version\b/i,
   /\bsignal\s+version\b/i,
   /\b(?:strategy|strategic)\s+container\b/i,
-  /\b(?:advanced\s+)?improv\s+container\b/i,
-  /\bactor[-\s]+centered\s+on[-\s]+camera\s+path\b/i,
 ] as const;
 
 function nowIso() {
@@ -80,55 +83,122 @@ export function hasInternalMoveMapLabelJargon(value: string) {
   const text = value.trim();
   if (!text) return false;
   if (internalMoveMapLabelPatterns.some((pattern) => pattern.test(text))) return true;
-  if (/\bcontainer\b/i.test(text)) {
-    return /\b(class|clinic|group|studio|course|workshop|program|improv|acting|yoga|tennis|community|social|people|recurring|repeatable)\b/i.test(
-      text,
-    );
-  }
+  if (/\bcontainer\b/i.test(text)) return true;
   if (/\b(?:lowest|highest|supporting|broad|default|operator)\b.*\bversion\b/i.test(text)) {
     return true;
   }
-  if (/\b(?:operator|actor[-\s]+centered|supporting)\b.*\bpath\b/i.test(text)) {
+  if (/\b(?:operator|supporting)\b.*\bpath\b/i.test(text)) {
     return true;
   }
   return false;
 }
 
-export function normalizeUserFacingMoveMapLabel(value: string) {
+function normalizeUrgentCourtLabel(
+  value: string,
+  localContextText: string,
+  boardContextText: string,
+) {
+  const text = value.trim();
+  const localContext = `${localContextText} ${text}`;
+  if (!textLooksCourtDeadlineBoard(`${boardContextText} ${localContext}`)) return null;
+  const badInternal =
+    /\b(low[-\s]+commitment|lowest[-\s]+friction|highest[-\s]+signal|high[-\s]+signal|best\s+proof|preparation\s+step|supporting\s+prerequisite|smallest\s+practical\s+step|best\s+fit[-\s]+check\s+step|prepare\s+required\s+details\s+first|proof[-\s]+building\s+step|version|signal)\b/i.test(
+      text,
+    );
+  const hasProceduralSignal =
+    /\b(court|clerk|legal[-\s]+aid|intake|extension|more\s+time|extra\s+time|forms?|rules?|search|online|notice|case|organize|documents?|paperwork|proof|deadline|filing|file)\b/i.test(
+      text,
+    );
+  if (!badInternal && !hasProceduralSignal) return null;
+  const signalText = badInternal ? localContext : text;
+
+  if (/\b(preparation\s+step|supporting\s+prerequisite|prepare\s+required\s+details\s+first)\b/i.test(text)) {
+    return "Prepare a notice facts sheet";
+  }
+  if (/\b(best\s+proof|proof[-\s]+building|best\s+fit[-\s]+check)\b/i.test(text)) {
+    return "Ask what documents they need";
+  }
+  if (/\b(low[-\s]+commitment|lowest[-\s]+friction|smallest\s+practical\s+step)\b/i.test(text)) {
+    if (/\blegal[-\s]+aid|intake\b/i.test(localContext)) return "Call legal aid intake";
+    if (/\bclerk\b/i.test(localContext)) return "Call the court clerk";
+    return "Find the notice and copy deadline facts";
+  }
+  if (/\bask\b.*\bdocuments?\b.*\bneed\b/i.test(text)) {
+    return "Ask what documents they need";
+  }
+  if (/\blegal[-\s]+aid|intake\b/i.test(signalText)) {
+    if (/\bdocuments?|proof|need\b/i.test(signalText)) return "Ask what documents they need";
+    if (/\bdeadline|time|before\b/i.test(signalText)) {
+      return "Ask whether they can help before the deadline";
+    }
+    return "Call legal aid intake";
+  }
+  if (/\bclerk\b/i.test(signalText)) {
+    if (/\bdeadline\b/i.test(signalText)) return "Confirm the exact deadline";
+    return "Call the court clerk";
+  }
+  if (/\bextension|more\s+time|extra\s+time\b/i.test(signalText)) {
+    return "Ask about the process for more time";
+  }
+  if (/\bforms?|rules?|search|online|broad\b/i.test(signalText)) {
+    return "Search forms only after confirming facts";
+  }
+  if (/\bnotice\b/i.test(signalText)) {
+    if (/\bfacts?|sheet|copy|details?\b/i.test(signalText)) {
+      return "Prepare a notice facts sheet";
+    }
+    return "Find the notice";
+  }
+  if (/\bcase\s+(?:number|details?)|court name|document title\b/i.test(signalText)) {
+    return "Copy case details";
+  }
+  if (/\borganize|documents?|paperwork|proof\b/i.test(signalText)) {
+    return "Organize documents";
+  }
+  if (badInternal) {
+    return "Find the notice and copy deadline facts";
+  }
+  return null;
+}
+
+export function normalizeUserFacingMoveMapLabel(
+  value: string,
+  contextText = "",
+  boardContextText = contextText,
+) {
   const text = value.trim();
   if (!text) return text;
-  if (/brooklyn.*advanced.*improv.*container/i.test(text)) {
-    return "Improv class in Brooklyn";
+  const urgentCourtLabel = normalizeUrgentCourtLabel(text, contextText, boardContextText);
+  if (urgentCourtLabel) return urgentCourtLabel;
+  if (/low[-\s]+commitment\s+option/i.test(text)) {
+    return "Smallest practical step";
   }
-  if (/advanced.*improv.*container/i.test(text)) {
-    return "Advanced improv class";
+  if (/best\s+proof\s+option/i.test(text)) {
+    return "Best fit-check step";
   }
-  if (/improv.*container/i.test(text)) {
-    return "Improv class";
+  if (/proof[-\s]+building\s+option/i.test(text)) {
+    return "Proof-building step";
   }
-  if (/actor[-\s]+centered\s+on[-\s]+camera\s+path/i.test(text)) {
-    return "On-camera acting";
+  if (/preparation\s+step/i.test(text)) {
+    return "Prepare required details first";
   }
   if (/observe\s+community\s+first,\s*then\s+enroll/i.test(text)) {
     return "Visit or audit a class";
   }
-  if (/broad\s+nyc\s+comparison/i.test(text)) {
-    return "Compare NYC options";
-  }
-  if (/broad\s+comparison/i.test(text)) {
+  if (/\bbroad(?:\s+\S+){0,2}\s+comparison\b/i.test(text)) {
     return "Compare options";
   }
   if (/lowest[-\s]+friction(?:\s+version)?/i.test(text)) {
-    return "Low-commitment option";
+    return "Smallest practical step";
   }
   if (/highest[-\s]+signal(?:\s+version)?/i.test(text)) {
-    return "Best proof option";
+    return "Best fit-check step";
   }
   if (/high[-\s]+signal(?:\s+version)?/i.test(text)) {
-    return "Proof-building option";
+    return "Proof-building step";
   }
   if (/supporting\s+prerequisite/i.test(text)) {
-    return "Preparation step";
+    return "Prepare required details first";
   }
   if (/supporting\s+path/i.test(text)) {
     return "Supporting option";
@@ -137,12 +207,12 @@ export function normalizeUserFacingMoveMapLabel(value: string) {
     return "Recommended option";
   }
   if (/\bcontainer\b/i.test(text)) {
-    if (/\brecurring|repeatable\b/i.test(text)) return "Recurring group";
-    if (/\btennis|clinic\b/i.test(text)) return "Beginner clinic / recurring group";
-    if (/\byoga|studio|class\b/i.test(text)) return "Recurring class";
-    if (/\bacting\b/i.test(text)) return "Acting class";
-    if (/\bcommunity|social|people|group\b/i.test(text)) return "Recurring group";
-    return "Recurring option";
+    const cleaned = text
+      .replace(/\b(?:strategy|strategic)\b/gi, "")
+      .replace(/\bcontainer\b/gi, "group")
+      .replace(/\s+/g, " ")
+      .trim();
+    return cleaned || "Recurring option";
   }
   return text;
 }
@@ -160,9 +230,6 @@ function compactQuestion(value: string, fallback: string) {
   const text = value.trim();
   if (!text) return fallback;
   if (text.endsWith("?") && text.length <= 120) return text;
-  if (/\btennis\b/i.test(text) && /\b(friend|people|community|meet|social)\b/i.test(text)) {
-    return "How should you start tennis while meeting people nearby?";
-  }
   return clipText(text, fallback, 140);
 }
 
@@ -205,19 +272,38 @@ function textLooksUrgentStability(value: string) {
   );
 }
 
+function textLooksCourtDeadlineBoard(value: string) {
+  return (
+    /\b(court|clerk|filing|filed|case number|case no|legal aid|self[-\s]?help)\b/i.test(
+      value,
+    ) &&
+    /\b(deadline|paperwork|document|notice|filing|file|due|forms?|case)\b/i.test(value)
+  );
+}
+
+function textLooksUrgentCourtDeadlineBoard(value: string) {
+  return (
+    textLooksCourtDeadlineBoard(value) &&
+    /\b(urgent|overwhelmed|freeze|few days|deadline|due|miss(?:ing)?|risk|time[-\s]?sensitive|before the deadline)\b/i.test(
+      value,
+    )
+  );
+}
+
 function textLooksLocalOrCurrent(value: string) {
-  return /\b(local|nearby|near me|neighborhood|zip|brooklyn|bed[-\s]?stuy|11216|within \d+|commute|current|latest|today|this week|availability|schedule|deadline|price|cost|class|clinic|studio|coach|program|group|meetup|event|resource|organization|public court|adult sports|volunteer)\b|\b\d{5}(?:-\d{4})?\b/i.test(
+  return /\b(local|nearby|near me|near you|neighborhood|zip|postal code|postcode|city|town|suburb|region|state|province|county|within \d+|commute|current|latest|today|this week|availability|schedule|deadline|price|cost|class|clinic|studio|coach|instructor|program|course|workshop|group|club|league|meetup|event|resource|organization|provider|facility|venue|service|volunteer)\b|\b\d{5}(?:-\d{4})?\b/i.test(
     value,
   );
 }
 
 function textNeedsLocalCurrentVerification(value: string) {
   const hasLocalOrCurrentSignal =
-    /\b(local|nearby|near me|near you|neighborhood|zip|brooklyn|bed[-\s]?stuy|11216|within \d+|commute|current|latest|today|this week|availability|schedule|deadline|price|cost)\b|\b\d{5}(?:-\d{4})?\b/i.test(
+    /\b(local|nearby|near me|near you|neighborhood|zip|postal code|postcode|city|town|suburb|region|state|province|county|within \d+|commute|current|latest|today|this week|availability|schedule|deadline|price|cost)\b|\b\d{5}(?:-\d{4})?\b/i.test(
       value,
-    );
+    ) ||
+    /\b(?:in|near|around)\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2}\b/.test(value);
   const hasResourceSignal =
-    /\b(class|clinic|studio|coach|program|group|meetup|event|resource|organization|provider|public court|adult sports|volunteer|tennis|acting|improv|scene study|on-camera|yoga)\b/i.test(
+    /\b(class|clinic|studio|coach|instructor|program|course|workshop|group|club|league|meetup|event|resource|organization|provider|facility|venue|service|volunteer|activity|training)\b/i.test(
       value,
     );
   return hasLocalOrCurrentSignal && hasResourceSignal;
@@ -226,12 +312,20 @@ function textNeedsLocalCurrentVerification(value: string) {
 function extractLocationHint(value: string) {
   const text = value.trim();
   const zip = text.match(/\b\d{5}(?:-\d{4})?\b/);
-  if (zip) return zip[0];
-  if (/\bbed[-\s]?stuy\b/i.test(text)) return "Bed-Stuy";
-  if (/\bbrooklyn\b/i.test(text)) return "Brooklyn";
+  if (zip) return `near ${zip[0]}`;
+  const namedLocation = text.match(
+    /\b(?:in|near|around|location\s*[:=-])\s+(?:the\s+)?([A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,2})\b/,
+  );
+  const suppliedLocation = namedLocation?.[1]?.trim();
+  if (
+    suppliedLocation &&
+    !/^(FlowPath|Today|Tomorrow|Success|If|The|A|An)$/i.test(suppliedLocation)
+  ) {
+    return `near ${suppliedLocation}`;
+  }
   if (/\bnear me\b/i.test(text)) return "near me";
-  if (/\bnearby\b/i.test(text)) return "near your ZIP/neighborhood";
-  return "near your ZIP/neighborhood";
+  if (/\bnearby|near you|local|neighborhood\b/i.test(text)) return "near your area";
+  return "near your area";
 }
 
 function actionQualityParts(action: DecisionFirstAction) {
@@ -301,38 +395,6 @@ function searchTemplateForAction({
   locationHint: string;
 }) {
   const text = `${contextText} ${branchLabel ?? ""}`;
-  const brooklynContext = /\b(brooklyn|bed[-\s]?stuy|11216)\b/i.test(text);
-  const localQueryPlace = brooklynContext ? "Brooklyn" : "near me";
-  const specificQueryPlace = /\b\d{5}(?:-\d{4})?\b/.test(locationHint)
-    ? locationHint
-    : localQueryPlace;
-  if (/\btennis\b/i.test(text)) {
-    return {
-      title: "Search and shortlist beginner tennis options",
-      details: `Within 20 minutes today, search for 3 recurring beginner adult tennis options ${locationHint}. Use queries like 'beginner adult tennis clinic ${specificQueryPlace}', 'adult tennis clinic ${localQueryPlace} beginner', and 'social tennis drills near me'. Shortlist only options that are recurring, beginner-friendly, low-pressure, and not competitive pickup. Do not treat any local option as verified until you check it.`,
-      success_condition: "Three candidates are saved or one beginner-friendly inquiry is sent today.",
-      fallback:
-        "If none look right, search for one private or semi-private coach and ask where adult beginners move into group play.",
-    };
-  }
-  if (/\bacting|improv|scene study|on-camera|theater|theatre\b/i.test(text)) {
-    return {
-      title: "Search and shortlist acting class options",
-      details: `Within 30 minutes today, search for 3-5 adult acting or improv classes ${locationHint}. Use queries like 'adult acting class ${localQueryPlace}', 'on-camera acting class ${localQueryPlace}', 'scene study ${localQueryPlace} adult', and 'adult improv class ${localQueryPlace}'. Shortlist by level fit, recurring cohort, commute, schedule, and whether the class accepts your current experience level. Do not treat any local option as verified until you check it.`,
-      success_condition: "One fit-check message is drafted or sent within 48 hours.",
-      fallback:
-        "If level fit is unclear, ask whether the class fits your current experience before enrolling.",
-    };
-  }
-  if (/\byoga\b/i.test(text)) {
-    return {
-      title: "Search and shortlist beginner yoga options",
-      details: `Within 30 minutes today, search for 3 recurring beginner-friendly yoga classes ${locationHint}. Use queries like 'beginner yoga class near me', 'adult beginner yoga class ${locationHint}', and 'intro yoga series near me'. Shortlist only options that are recurring, beginner-friendly, schedule-compatible, and low-pressure. Do not treat any local option as verified until you check it.`,
-      success_condition: "Three candidates are saved or one trial-class question is sent today.",
-      fallback:
-        "If no good class appears, widen the search radius or look for one intro workshop instead.",
-    };
-  }
   if (/\bcommunity|friend|belonging|social|volunteer|meetup|group|not dating\b/i.test(text)) {
     return {
       title: "Shortlist recurring community options",
@@ -342,12 +404,182 @@ function searchTemplateForAction({
         "If none fit, widen the search radius or choose one online-to-offline group with recurring local meetups.",
     };
   }
+  const topic = (branchLabel ?? "")
+    .replace(
+      /^(?:search(?:\s+and\s+shortlist)?(?:\s+for)?|find|check|choose|pick|compare|contact|shortlist|explore|join|attend|try|register(?:\s+for)?|enroll(?:\s+in)?)\s+/i,
+      "",
+    )
+    .replace(/^(?:a|an|the)\s+/i, "")
+    .replace(/\b(?:near me|near you|nearby|local)\b/gi, "")
+    .replace(/["'“”]/g, "")
+    .replace(/[.?!,;:]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const queryTopic = topic.length >= 3 && topic.length <= 80 ? topic : "relevant options";
+  const searchTopic = queryTopic.toLowerCase();
+  const queryPlace = /\bnear (?:your area|me)\b/i.test(locationHint)
+    ? "near me"
+    : locationHint.replace(/^near\s+/i, "");
+  const beginnerQuery = /\bbeginner\b/i.test(searchTopic)
+    ? `${searchTopic} ${queryPlace}`
+    : `beginner ${searchTopic} ${queryPlace}`;
   return {
     title: "Search and shortlist realistic options",
-      details: `Within 30 minutes today, search for 3-5 realistic options ${locationHint}. Use queries that include the goal, location, and format you want, then shortlist only options that match your constraints, schedule, level, and repeatability needs. Do not treat any local option as verified until you check it.`,
+    details: `Within 30 minutes today, search for 3-5 ${queryTopic} ${locationHint}. Use queries like '${searchTopic} ${queryPlace}', '${beginnerQuery}', and 'recurring ${searchTopic} ${queryPlace}'. Shortlist only options that match the board's constraints, schedule, experience level, and repeatability needs. Do not treat any local option as verified until you check it.`,
     success_condition: "Three candidates are saved or one fit-check message is sent today.",
     fallback:
       "If no good option appears, widen the search radius, change the format, or ask one relevant local coordinator where beginners usually start.",
+  };
+}
+
+function vagueUrgentCourtActionNeedsRepair(text: string) {
+  return (
+    /\b(shrink|smallest action|real signal|worth continuing|supporting prerequisite|prerequisite that makes|continue (?:down )?this path|recalculate|choose the version|lowest[-\s]+friction|highest[-\s]+signal|best proof|preparation step)\b/i.test(
+      text,
+    ) ||
+    !/\b(notice|court|clerk|case number|case details|deadline|document title|filing|legal aid|intake|documents?|paperwork|more time|process-only|process information)\b/i.test(
+      text,
+    )
+  );
+}
+
+function urgentCourtActionTemplate(contextText: string, branchLabel: string) {
+  const branchLegalAid = /\blegal[-\s]+aid|intake\b/i.test(branchLabel);
+  const branchClerk = /\bclerk\b/i.test(branchLabel);
+  const contextLegalAid = /\blegal[-\s]+aid|intake\b/i.test(contextText);
+  const contextClerk = /\bclerk\b/i.test(contextText);
+  const legalAid =
+    branchLegalAid || (!branchClerk && contextLegalAid && !contextClerk);
+  const clerk = branchClerk || (!branchLegalAid && contextClerk && !contextLegalAid);
+  const moreTime = /\bextension|more\s+time|extra\s+time\b/i.test(contextText);
+  const search = /\bforms?|rules?|search|online|broad\b/i.test(contextText);
+  const noticeFirst = /\bnotice[-\s]+first|notice\s+facts?|find\s+the\s+notice|copy\s+.*notice|deadline\s+facts/i.test(
+    contextText,
+  );
+  const documents = /\borganize|documents?|paperwork|proof\b/i.test(contextText);
+
+  if (legalAid) {
+    return {
+      title: "Call legal aid intake with deadline facts",
+      details:
+        "Today, call legal aid intake with any notice facts you have: court name, case number, deadline date/time, document title, and filing instructions. Ask whether they can help before the deadline and what documents they need. Keep it process-focused; do not rely on FlowPath for legal argument advice.",
+      success_condition:
+        "You know whether intake can help before the deadline and what information or documents they need next.",
+      fallback:
+        "If you cannot reach intake, call the court clerk or self-help line and ask what information is needed to identify the deadline and filing steps.",
+    };
+  }
+
+  if (clerk) {
+    return {
+      title: "Call the court clerk with process-only questions",
+      details:
+        "Today, call the court clerk or self-help contact and ask process-only questions: how to confirm the exact deadline, document title, filing method, and required contact information. Do not ask what legal argument to make.",
+      success_condition:
+        "You have the exact deadline/filer instructions or know which office/contact can confirm them.",
+      fallback:
+        "If the clerk cannot answer, ask what details they need from the notice or who handles procedural filing questions.",
+    };
+  }
+
+  if (moreTime) {
+    return {
+      title: "Ask about the process for more time",
+      details:
+        "After confirming the exact deadline and document, ask the clerk or legal aid what the process is if more time is needed. Write down the form name or office to contact, without assuming an extension is available or guaranteed.",
+      success_condition:
+        "You know the next process step for asking about more time, or you know that you need legal-aid/self-help guidance first.",
+      fallback:
+        "If the process is unclear, return to notice-first triage and copy the deadline facts before making another call.",
+    };
+  }
+
+  if (search) {
+    return {
+      title: "Search only after copying notice facts",
+      details:
+        "For 20 minutes today, search official court or self-help pages using the exact court name, document title, and deadline words from the notice. Save only process information that matches your court/document; do not treat general forms pages as verified for your case.",
+      success_condition:
+        "You save one official process page or decide the next safer step is a clerk/legal-aid call.",
+      fallback:
+        "If results are broad or conflicting, stop searching and call the clerk or legal aid with the notice facts.",
+    };
+  }
+
+  if (noticeFirst) {
+    return {
+      title: "Find the notice and copy the deadline facts",
+      details:
+        "For 15 minutes now, find the notice and copy the court name, case number, deadline date/time, document title, and filing/contact instructions into one note. Keep this as process triage, not legal argument planning.",
+      success_condition:
+        "One deadline facts sheet exists with the core notice details or clear blanks for what is missing.",
+      fallback:
+        "If you cannot find the notice, call the court clerk or legal-aid intake and say you need help identifying what information is required before the deadline.",
+    };
+  }
+
+  if (documents) {
+    return {
+      title: "Organize documents around the notice",
+      details:
+        "For 20 minutes now, put the notice first, then gather related paperwork in one folder or note. Label court name, case number, deadline date/time, document title, filing instructions, and any missing documents to ask about.",
+      success_condition:
+        "One organized packet or notes page exists before any call or filing step.",
+      fallback:
+        "If you cannot find a document, write 'missing' next to it and ask the clerk or legal aid what information is required.",
+    };
+  }
+
+  return {
+    title: "Find the notice and copy the deadline facts",
+    details:
+      "For 15 minutes now, find the notice and copy the court name, case number, deadline date/time, document title, and filing/contact instructions into one note. Keep this as process triage, not legal argument planning.",
+    success_condition:
+      "One deadline facts sheet exists with the core notice details or clear blanks for what is missing.",
+    fallback:
+      "If you cannot find the notice, call the court clerk or legal-aid intake and say you need help identifying what information is required before the deadline.",
+  };
+}
+
+function normalizeUrgentCourtActionQuality({
+  action,
+  contextText,
+  branchLabel,
+}: {
+  action: DecisionFirstAction;
+  contextText: string;
+  branchLabel: string;
+}): ActionQualityRepairResult {
+  const originalActionText = canonicalDecisionActionText(action);
+  const actionText = actionQualityParts(action);
+  const needsRepair = vagueUrgentCourtActionNeedsRepair(`${contextText} ${actionText}`);
+  if (!needsRepair) {
+    return {
+      action,
+      flags: [],
+      original_action_text: originalActionText,
+      canonical_action_text: decisionActionTaskNotes(action),
+      repaired: false,
+    };
+  }
+  const template = urgentCourtActionTemplate(`${contextText} ${actionText}`, branchLabel);
+  const repairedAction = {
+    ...action,
+    title: clipText(template.title, action.title, 180),
+    details: clipText(template.details, action.details, 2000),
+    success_condition: clipText(
+      template.success_condition,
+      action.success_condition,
+      1000,
+    ),
+    fallback: clipText(template.fallback, action.fallback, 1000),
+  };
+  return {
+    action: repairedAction,
+    flags: ["vague_action_repaired"],
+    original_action_text: originalActionText,
+    canonical_action_text: decisionActionTaskNotes(repairedAction),
+    repaired: true,
   };
 }
 
@@ -364,8 +596,16 @@ export function normalizeActionLeafQuality({
   searchStatus?: DecisionSearchStatus;
   webSearchCallCount?: number;
 }): ActionQualityRepairResult {
-  const contextText = `${boardContext} ${branchLabel} ${actionQualityParts(action)}`;
+  const localContextText = `${branchLabel} ${actionQualityParts(action)}`;
+  const contextText = `${boardContext} ${localContextText}`;
   const originalActionText = canonicalDecisionActionText(action);
+  if (textLooksUrgentCourtDeadlineBoard(contextText)) {
+    return normalizeUrgentCourtActionQuality({
+      action,
+      contextText: localContextText,
+      branchLabel,
+    });
+  }
   if (
     webSearchCallCount > 0 ||
     searchStatus === "not_needed" ||
@@ -403,9 +643,9 @@ export function normalizeActionLeafQuality({
   }
 
   const template = searchTemplateForAction({
-    contextText,
+    contextText: localContextText,
     branchLabel,
-    locationHint: extractLocationHint(contextText),
+    locationHint: extractLocationHint(boardContext),
   });
   const repairedAction = {
     ...action,
@@ -476,14 +716,14 @@ export function normalizeReconciliationFollowupQuality({
       repaired: false,
     };
   }
-  const privateWriting = /\b(private|non-commercial|noncommercial|not monetize|monetiz|writing)\b/i.test(
-    text,
-  );
   const vagueMeta =
     /\b(recalculate(?: this| the)? board|update memory|memory updated|board updated)\b/i.test(
       followup,
-    ) && !/\b(schedule|write|choose|protect|session|piece|project|success|if blocked)\b/i.test(followup);
-  if (!privateWriting || !vagueMeta) {
+    ) &&
+    !/\b(schedule|choose|contact|call|send|draft|practice|review|organize|complete|session|project|success|if blocked)\b/i.test(
+      followup,
+    );
+  if (!vagueMeta) {
     return {
       recommended_followup_action: recommendedFollowupAction,
       flags: [],
@@ -492,7 +732,7 @@ export function normalizeReconciliationFollowupQuality({
   }
   return {
     recommended_followup_action:
-      "Schedule one private 30-minute writing session this week and choose a piece that will not be posted, submitted, or monetized. Success: the session is on your calendar or one private piece is chosen. If blocked, write privately for 10 minutes without choosing a project.",
+      "Choose one concrete next action that respects the updated constraint, then schedule a 30-minute block this week to do it. Success: the action and time are recorded. If blocked, shrink it to a 10-minute preparation step or tell FlowPath what still prevents action.",
     flags: ["vague_action_repaired"],
     repaired: true,
   };
@@ -552,9 +792,120 @@ function boardText(plan: PlanLike) {
   ].join(" ");
 }
 
-function isTennisCommunityBoard(plan: PlanLike) {
-  const text = boardText(plan).toLowerCase();
-  return /\btennis\b/.test(text) && /\b(friend|people|community|meet|social)\b/.test(text);
+function decisionTreeText(tree: DecisionTree) {
+  return [
+    tree.current_action.title,
+    tree.current_action.details,
+    tree.current_action.success_condition,
+    tree.current_action.fallback,
+    ...tree.nodes.flatMap((node) => [
+      node.title,
+      node.question,
+      node.context_summary,
+      node.action?.title ?? "",
+      node.action?.details ?? "",
+      node.action?.success_condition ?? "",
+      node.action?.fallback ?? "",
+      ...node.options.flatMap((option) => [
+        option.label,
+        option.description,
+        option.why,
+        option.upside,
+        option.downside,
+        option.time_to_feedback,
+        option.first_action.title,
+        option.first_action.details,
+        option.first_action.success_condition,
+        option.first_action.fallback,
+      ]),
+    ]),
+  ].join(" ");
+}
+
+function normalizeDecisionActionForContext({
+  action,
+  boardContext,
+  branchLabel,
+  searchStatus,
+  webSearchCallCount,
+}: {
+  action: DecisionFirstAction;
+  boardContext: string;
+  branchLabel: string;
+  searchStatus: DecisionSearchStatus;
+  webSearchCallCount: number;
+}) {
+  return normalizeActionLeafQuality({
+    action,
+    boardText: boardContext,
+    branchLabel,
+    searchStatus,
+    webSearchCallCount,
+  }).action;
+}
+
+export function normalizeDecisionTreeLabelsRecursively(
+  tree: DecisionTree,
+  {
+    contextText = "",
+    webSearchCallCount = 0,
+  }: {
+    contextText?: string;
+    webSearchCallCount?: number;
+  } = {},
+): DecisionTree {
+  const fullContext = `${contextText} ${decisionTreeText(tree)}`;
+  const nodes = tree.nodes.map((node) => {
+    const nodeContext = `${node.title} ${node.question} ${node.context_summary} ${node.action ? actionQualityParts(node.action) : ""}`;
+    const title = normalizeUserFacingMoveMapLabel(node.title, nodeContext, fullContext);
+    const options = node.options.map((option) => {
+      const optionContext = `${nodeContext} ${option.label} ${option.description} ${option.why} ${option.first_action.details}`;
+      const label = normalizeUserFacingMoveMapLabel(option.label, optionContext, fullContext);
+      const first_action = normalizeDecisionActionForContext({
+        action: option.first_action,
+        boardContext: `${fullContext} ${optionContext}`,
+        branchLabel: label,
+        searchStatus: option.search_status,
+        webSearchCallCount,
+      });
+      return {
+        ...option,
+        label,
+        first_action,
+        success_condition: first_action.success_condition,
+        fallback: first_action.fallback,
+      };
+    });
+    const action = node.action
+      ? normalizeDecisionActionForContext({
+          action: node.action,
+          boardContext: `${fullContext} ${nodeContext}`,
+          branchLabel: title,
+          searchStatus: node.search_status,
+          webSearchCallCount,
+        })
+      : null;
+    return {
+      ...node,
+      title,
+      action,
+      options,
+    };
+  });
+  const treeWithLabels = decisionTreeSchema.parse({ ...tree, nodes });
+  const trace = decisionTreeTrace(treeWithLabels, treeWithLabels.selected_path);
+  const selectedOption = trace.at(-1)?.selectedOption;
+  const selectedNode = trace.at(-1)?.node;
+  const currentActionSearchStatus =
+    selectedOption?.search_status ?? selectedNode?.search_status ?? "not_needed";
+  const current_action = normalizeDecisionActionForContext({
+    action: treeWithLabels.current_action,
+    boardContext: `${fullContext} ${selectedNode?.context_summary ?? ""}`,
+    branchLabel: selectedOption?.label ?? selectedNode?.title ?? "",
+    searchStatus: currentActionSearchStatus,
+    webSearchCallCount,
+  });
+  return decisionTreeSchema.parse({ ...treeWithLabels, current_action });
 }
 
 function selectedLineSteps(plan: PlanLike, firstAction: DecisionFirstAction) {
@@ -680,132 +1031,6 @@ function uniqueOptions(options: DecisionOption[]) {
   });
 }
 
-function tennisCommunityOptions({
-  firstAction,
-  nextSteps,
-  scoutStatus,
-  sources,
-}: {
-  firstAction: DecisionFirstAction;
-  nextSteps: NextMoveStep[];
-  scoutStatus: DecisionSearchStatus;
-  sources: DecisionBranchSource[];
-}) {
-  return [
-    optionFromPlan({
-      id: "beginner_clinic_group",
-      label: "Beginner clinic / recurring group",
-      description: "Best mix of skill, structure, and repeated people.",
-      recommendationLevel: "recommended",
-      why: "A recurring beginner container gives you level match, structure, and repeated exposure to the same people.",
-      upside: "You get skill feedback and community signal from one move.",
-      downside: "It requires showing up around strangers before you feel fully ready.",
-      friction: "medium",
-      timeToFeedback: "One session",
-      firstAction,
-      nextSteps,
-      selected: true,
-      search: scoutStatus,
-      sources,
-    }),
-    optionFromPlan({
-      id: "hire_coach",
-      label: "Hire a coach",
-      description: "Fast skill feedback, weaker for community unless it routes you into groups.",
-      recommendationLevel: "viable",
-      why: "A coach can correct beginner mistakes quickly, especially if you ask them where adult beginners should play repeatedly.",
-      upside: "Fast confidence and fewer bad habits.",
-      downside: "One-on-one coaching can stay socially isolated unless it leads into clinics, ladders, or group lessons.",
-      friction: "medium",
-      timeToFeedback: "One lesson",
-      firstAction: {
-        title: "Search for one beginner-friendly coach or small-group lesson",
-        details:
-          "Look for a coach or small-group lesson nearby and ask whether they place beginners into recurring groups.",
-        estimated_minutes: 15,
-        success_condition: "One coach or small-group lesson is contacted.",
-        fallback: "Ask a local tennis center where adult beginners usually start.",
-      },
-      nextSteps: [
-        {
-          title: "Ask about group routing",
-          details: "Confirm whether the coach can route you into clinics, ladders, or beginner groups.",
-        },
-        {
-          title: "Try one lesson",
-          details: "Use the lesson to get a level read and one recommended recurring container.",
-        },
-      ],
-      selected: false,
-      search: scoutStatus === "searched" ? "searched" : "needed",
-      sources: scoutStatus === "searched" ? sources : [],
-    }),
-    optionFromPlan({
-      id: "solo_practice",
-      label: "Solo practice",
-      description: "Builds comfort, but does not create social contact.",
-      recommendationLevel: "supplement",
-      why: "Solo practice can lower awkwardness before the first group session, but it should support the social path rather than replace it.",
-      upside: "Low-pressure reps and basic comfort.",
-      downside: "It does not solve the community goal on its own.",
-      friction: "low",
-      timeToFeedback: "This week",
-      firstAction: {
-        title: "Schedule one low-pressure practice session",
-        details: "Block one short wall-practice or public-court practice session before the group option.",
-        estimated_minutes: 20,
-        success_condition: "One practice block is on the calendar.",
-        fallback: "Do ten minutes of footwork or grip practice at home.",
-      },
-      nextSteps: [
-        {
-          title: "Practice once",
-          details: "Get comfortable holding a racket and moving without making this the main plan.",
-        },
-        {
-          title: "Return to a group",
-          details: "Use the solo session as a bridge into a recurring beginner container.",
-        },
-      ],
-      selected: false,
-      search: "not_needed",
-      sources: [],
-    }),
-    optionFromPlan({
-      id: "casual_local_games",
-      label: "Casual local games",
-      description: "Organic, but higher mismatch and awkwardness risk for a beginner.",
-      recommendationLevel: "not_now",
-      why: "Open play can be social, but beginner skill mismatch can make it harder before you have a level read.",
-      upside: "Potentially more organic friendships if the level is right.",
-      downside: "Higher chance of awkwardness, discouragement, or mismatched play.",
-      friction: "high",
-      timeToFeedback: "One outing",
-      firstAction: {
-        title: "Ask whether any casual group is beginner-friendly",
-        details:
-          "Search for beginner/open-play tennis groups and ask about level before showing up.",
-        estimated_minutes: 15,
-        success_condition: "You know whether one casual group welcomes beginners.",
-        fallback: "Use a clinic or coach first, then revisit casual games.",
-      },
-      nextSteps: [
-        {
-          title: "Check level fit",
-          details: "Message the organizer before attending so you do not walk into the wrong level.",
-        },
-        {
-          title: "Attend only if beginner-safe",
-          details: "Treat it as a later branch unless someone confirms it is beginner-friendly.",
-        },
-      ],
-      selected: false,
-      search: scoutStatus === "searched" ? "searched" : "needed",
-      sources: scoutStatus === "searched" ? sources : [],
-    }),
-  ];
-}
-
 function normalizeRootOptions({
   root,
   selectedId,
@@ -867,23 +1092,14 @@ export function buildFallbackDecisionTree(plan: PlanLike): DecisionTree {
     plan.restraint_guidance.recovery_move,
   );
   const nextSteps = selectedLineSteps(plan, fallbackAction);
-  const recommendedId = isTennisCommunityBoard(plan)
-    ? "beginner_clinic_group"
-    : slug(
-        plan.operator_insight.operator_path ||
-          plan.highest_leverage_move_today.title ||
-          recommendedTask?.title ||
-          "best move",
-        "best_move",
-      );
-  const options = isTennisCommunityBoard(plan)
-    ? tennisCommunityOptions({
-        firstAction: fallbackAction,
-        nextSteps,
-        scoutStatus,
-        sources,
-      })
-    : uniqueOptions([
+  const recommendedId = slug(
+    plan.operator_insight.operator_path ||
+      plan.highest_leverage_move_today.title ||
+      recommendedTask?.title ||
+      "best move",
+    "best_move",
+  );
+  const options = uniqueOptions([
         optionFromPlan({
           id: recommendedId,
           label: taskLikeBranchStart.test(plan.highest_leverage_move_today.title)
@@ -1000,7 +1216,7 @@ export function buildFallbackDecisionTree(plan: PlanLike): DecisionTree {
               search: "not_needed",
               sources: [],
             }),
-      ]).slice(0, 6);
+    ]).slice(0, 6);
 
   const tree: DecisionTree = {
     id: fallbackTreeId,
@@ -1102,12 +1318,18 @@ export function normalizeDecisionTree(plan: PlanLike): DecisionTree {
   );
   const currentAction = currentActionForPath(normalizedTree, selectedPath);
 
-  return {
+  return normalizeDecisionTreeLabelsRecursively({
     ...normalizedTree,
     active_node_id: activeNodeIdForPath(normalizedTree, selectedPath),
     selected_path: selectedPath,
     current_action: currentAction,
-  };
+  }, {
+    contextText: boardText(plan),
+    webSearchCallCount:
+      plan.local_reality_scout.used_web_search || plan.local_reality_scout.findings.length > 0
+        ? 1
+        : 0,
+  });
 }
 
 export function rootDecisionNode(tree: DecisionTree) {
@@ -1136,6 +1358,72 @@ export function findDecisionOption(
     root.options.find((option) => option.id === tree.recommended_option_id) ??
     root.options[0]
   );
+}
+
+export type DecisionBranchCaution = {
+  title: string;
+  message: string;
+  recommendedOptionId: string | null;
+  recommendedLabel: string | null;
+};
+
+export function branchSelectionCaution(
+  tree: DecisionTree,
+  option: DecisionOption | null | undefined,
+): DecisionBranchCaution | null {
+  if (!option || option.id === tree.recommended_option_id) return null;
+  const root = rootDecisionNode(tree);
+  const recommended =
+    root.options.find((item) => item.id === tree.recommended_option_id) ??
+    root.options.find((item) => item.recommendation_level === "recommended") ??
+    null;
+  const treeText = decisionTreeText(tree);
+  const optionText = `${option.label} ${option.description} ${option.why} ${option.downside} ${option.time_to_feedback} ${option.first_action.title} ${option.first_action.details}`;
+  const text = `${treeText} ${optionText}`;
+  const weakLevel = ["not_now", "supplement", "risky"].includes(
+    option.recommendation_level,
+  );
+  const slowOrWasteful =
+    /\b(not now|too broad|broad|slow|low signal|waste|later|supplement|only after|not the first move|not recommended)\b/i.test(
+      optionText,
+    ) || option.friction === "high";
+  const urgentCourt = textLooksUrgentCourtDeadlineBoard(text);
+  const needsCaution = weakLevel || slowOrWasteful || urgentCourt;
+  if (!needsCaution) return null;
+
+  const recommendedLabel = recommended?.label ?? null;
+  const recommendedPhrase = recommendedLabel
+    ? ` The recommended first move is still ${recommendedLabel}.`
+    : "";
+  let message =
+    "This is not the recommended first move. Continue only if you intentionally want to explore this branch.";
+
+  if (urgentCourt && /\bforms?|rules?|search|online|broad\b/i.test(optionText)) {
+    message =
+      "This is not the recommended first move. It may waste time before you confirm the exact notice, court, deadline, and document.";
+  } else if (urgentCourt && /\bextension|more\s+time|extra\s+time\b/i.test(optionText)) {
+    message =
+      "This may matter, but it is safer after you confirm the exact deadline and document.";
+  } else if (urgentCourt && /\blegal[-\s]+aid|intake\b/i.test(optionText)) {
+    message =
+      "This is viable if risk is high or you cannot find the notice, but intake will likely need the court name, case number, deadline, and document title.";
+  } else if (urgentCourt && /\bclerk\b/i.test(optionText)) {
+    message =
+      "This can help with process information, but it works best when you have the notice facts or know what details are missing.";
+  } else if (option.recommendation_level === "supplement") {
+    message =
+      "This may help as a supplement, but it should not displace the recommended first move.";
+  } else if (option.recommendation_level === "risky") {
+    message =
+      "This branch carries more downside or wasted-motion risk than the recommended first move.";
+  }
+
+  return {
+    title: "Check before continuing",
+    message: `${message}${recommendedPhrase}`,
+    recommendedOptionId: recommended?.id ?? null,
+    recommendedLabel,
+  };
 }
 
 export function decisionTreeDefaultOptionId(tree: DecisionTree) {
@@ -1296,74 +1584,214 @@ function childOption({
 function childOptionsForBranch(parent: DecisionOption): DecisionOption[] {
   const label = parent.label.toLowerCase();
   const status = optionSearchStatus(parent);
+  const branchText = `${parent.label} ${parent.description} ${parent.why} ${parent.first_action.title} ${parent.first_action.details}`;
+  if (textLooksCourtDeadlineBoard(branchText)) {
+    if (/\blegal[-\s]+aid|intake\b/i.test(branchText)) {
+      return [
+        childOption({
+          parent,
+          suffix: "call_legal_aid_intake",
+          label: "Call legal aid intake",
+          description:
+            "Ask whether they can help before the deadline and what notice details they need.",
+          recommendationLevel: "recommended",
+          searchStatus: status,
+        }),
+        childOption({
+          parent,
+          suffix: "documents_needed",
+          label: "Ask what documents they need",
+          description:
+            "Confirm what paperwork, notice facts, or case details intake needs before they can help.",
+          recommendationLevel: "viable",
+          searchStatus: "not_needed",
+        }),
+        childOption({
+          parent,
+          suffix: "prepare_notice_facts",
+          label: "Prepare a notice facts sheet",
+          description:
+            "Copy court name, case number, deadline, document title, and filing instructions before calling.",
+          recommendationLevel: "supplement",
+          searchStatus: "not_needed",
+        }),
+      ];
+    }
+
+    if (/\bextension|more\s+time|extra\s+time\b/i.test(branchText)) {
+      return [
+        childOption({
+          parent,
+          suffix: "confirm_deadline_first",
+          label: "Confirm the exact deadline",
+          description:
+            "Verify the deadline date/time and document title before focusing on more-time process.",
+          recommendationLevel: "recommended",
+          searchStatus: "not_needed",
+        }),
+        childOption({
+          parent,
+          suffix: "ask_more_time_process",
+          label: "Ask about the process for more time",
+          description:
+            "Ask the clerk or legal aid what process exists without assuming an extension is available.",
+          recommendationLevel: "viable",
+          searchStatus: status,
+        }),
+        childOption({
+          parent,
+          suffix: "prepare_questions",
+          label: "Prepare process-only questions",
+          description:
+            "Write down exactly what to ask about filing method, deadline, and where self-help guidance lives.",
+          recommendationLevel: "supplement",
+          searchStatus: "not_needed",
+        }),
+      ];
+    }
+
+    if (/\bforms?|rules?|search|online|broad\b/i.test(branchText)) {
+      return [
+        childOption({
+          parent,
+          suffix: "find_notice_first",
+          label: "Find the notice first",
+          description:
+            "Use the notice facts before searching so you do not waste time on broad or wrong forms.",
+          recommendationLevel: "recommended",
+          searchStatus: "not_needed",
+        }),
+        childOption({
+          parent,
+          suffix: "official_pages_only",
+          label: "Search official pages only",
+          description:
+            "Search using exact court and document terms, and treat results as unverified until matched to the notice.",
+          recommendationLevel: "viable",
+          searchStatus: status,
+        }),
+        childOption({
+          parent,
+          suffix: "call_clerk_if_unclear",
+          label: "Call the clerk if results are broad",
+          description:
+            "Stop broad searching and ask the clerk what process information matches the notice.",
+          recommendationLevel: "supplement",
+          searchStatus: "not_needed",
+        }),
+      ];
+    }
+
+    return [
+      childOption({
+        parent,
+        suffix: "find_notice",
+        label: "Find the notice",
+        description:
+          "Locate the notice and copy the deadline, court, case number, document title, and filing instructions.",
+        recommendationLevel: "recommended",
+        searchStatus: "not_needed",
+      }),
+      childOption({
+        parent,
+        suffix: "call_court_clerk",
+        label: "Call the court clerk",
+        description:
+          "Ask process-only questions about the deadline, filing method, and who can confirm missing details.",
+        recommendationLevel: "viable",
+        searchStatus: status,
+      }),
+      childOption({
+        parent,
+        suffix: "call_legal_aid",
+        label: "Call legal aid intake",
+        description:
+          "Ask whether intake can help before the deadline and what documents they need.",
+        recommendationLevel: "viable",
+        searchStatus: status,
+      }),
+      childOption({
+        parent,
+        suffix: "organize_documents",
+        label: "Organize documents",
+        description:
+          "Put the notice and related paperwork in one packet before making calls or filing.",
+        recommendationLevel: "supplement",
+        searchStatus: "not_needed",
+      }),
+    ];
+  }
   if (/\bcoach|coaching|instructor|lesson\b/.test(label)) {
     return [
       childOption({
         parent,
-        suffix: "group_routing",
-        label: "Coach who routes you into group play",
-        description: "Best if the coach can correct basics and point you toward a recurring beginner container.",
+        suffix: "next_stage_support",
+        label: "Coach who supports the next stage",
+        description:
+          "Best if the coach can correct basics and recommend an appropriate next setting for continued practice.",
         recommendationLevel: "recommended",
         searchStatus: status,
       }),
       childOption({
         parent,
-        suffix: "small_group_lesson",
-        label: "Small-group lesson",
-        description: "Keeps skill feedback while adding repeated contact with other beginners.",
+        suffix: "small_group_session",
+        label: "Small-group session",
+        description: "Keeps direct feedback while adding repeated contact with other learners.",
         recommendationLevel: "viable",
         searchStatus: status,
       }),
       childOption({
         parent,
-        suffix: "private_then_referral",
-        label: "One private lesson, then group referral",
-        description: "Use one lesson to get a level read, then ask where adult beginners should play repeatedly.",
+        suffix: "individual_then_referral",
+        label: "One individual session, then a referral",
+        description:
+          "Use one session to assess the starting point, then ask what ongoing format fits the goal and constraints.",
         recommendationLevel: "viable",
         searchStatus: status,
       }),
       childOption({
         parent,
-        suffix: "public_court_instructor",
-        label: "Community/public-court instructor",
-        description: "May be cheaper and more connected to public beginner programs.",
+        suffix: "community_instructor",
+        label: "Community-based instructor",
+        description: "May be more affordable and connected to accessible beginner programs.",
         recommendationLevel: "supplement",
         searchStatus: status,
       }),
     ];
   }
 
-  if (/\bclinic|class|group|community|volunteer|studio|recurring|walk\b/.test(label)) {
+  if (/\bclinic|class|studio|course|workshop|lesson|instruction\b/.test(label)) {
     return [
       childOption({
         parent,
-        suffix: "recurring_beginner_option",
-        label: "Recurring beginner option",
-        description: "Prioritize a repeated container where the same people can recognize you over time.",
+        suffix: "recurring_course_or_cohort",
+        label: "Recurring course or cohort",
+        description:
+          "Prioritize a repeated format that matches the user's level, schedule, and practice goals.",
         recommendationLevel: "recommended",
         searchStatus: status,
       }),
       childOption({
         parent,
-        suffix: "intro_series",
-        label: "Intro series or workshop",
-        description: "Good when a one-off drop-in feels too ambiguous and you want a clear beginner ramp.",
+        suffix: "short_workshop_or_series",
+        label: "Short workshop or series",
+        description: "Useful for testing the format without assuming a long commitment or skill level.",
         recommendationLevel: "viable",
         searchStatus: status,
       }),
       childOption({
         parent,
-        suffix: "community_center",
-        label: "Community or public program",
-        description: "Often lower-pressure and cheaper, but may require more schedule checking.",
+        suffix: "individual_instruction",
+        label: "Individual instruction",
+        description: "Offers direct feedback, but may provide less peer contact or repeated group practice.",
         recommendationLevel: "viable",
         searchStatus: status,
       }),
       childOption({
         parent,
-        suffix: "drop_in_trial",
-        label: "Drop-in trial",
-        description: "Fastest feedback, but weaker than a recurring option if community is the goal.",
+        suffix: "single_session_trial",
+        label: "Single-session trial",
+        description: "Creates fast fit feedback before a larger commitment.",
         recommendationLevel: "supplement",
         searchStatus: status,
       }),
@@ -1400,24 +1828,24 @@ function childOptionsForBranch(parent: DecisionOption): DecisionOption[] {
     childOption({
       parent,
       suffix: "lowest_friction",
-      label: "Lowest-friction version",
-      description: "Shrink the path to the smallest action that still creates a real signal.",
+      label: "Smallest practical step",
+      description: "Choose the smallest concrete action that can move this option forward today.",
       recommendationLevel: "recommended",
       searchStatus: status,
     }),
     childOption({
       parent,
       suffix: "highest_signal",
-      label: "Highest-signal version",
-      description: "Choose the version most likely to reveal whether this path is worth continuing.",
+      label: "Best fit-check step",
+      description: "Choose the step most likely to show whether this option fits the current board.",
       recommendationLevel: "viable",
       searchStatus: status,
     }),
     childOption({
       parent,
       suffix: "supporting_prerequisite",
-      label: "Supporting prerequisite",
-      description: "Do the prerequisite that makes this path easier or safer.",
+      label: "Prepare required details first",
+      description: "Prepare the detail that makes the next action easier or safer.",
       recommendationLevel: "supplement",
       searchStatus: "not_needed",
     }),
@@ -1501,7 +1929,7 @@ function nextQuestionForOption(option: DecisionOption) {
   }
   if (/\bwalk\b/.test(label)) return "What walkable option should you try first?";
   if (/\bclinic|class|group|community|studio|recurring\b/.test(label)) {
-    return "Which recurring container should you check first?";
+    return "Which recurring option should you check first?";
   }
   if (/\bnetwork|contact|outreach|people|friend\b/.test(label)) {
     return "What network entry point should you use first?";
@@ -1567,10 +1995,19 @@ export function expandDecisionTreeAtOption({
     ),
     updated_at: now,
   };
+  const normalizedExpandedTree = normalizeDecisionTreeLabelsRecursively(expandedTree, {
+    contextText: decisionTreeText(expandedTree),
+  });
   return {
-    ...expandedTree,
-    active_node_id: activeNodeIdForPath(expandedTree, expandedTree.selected_path),
-    current_action: currentActionForPath(expandedTree, expandedTree.selected_path),
+    ...normalizedExpandedTree,
+    active_node_id: activeNodeIdForPath(
+      normalizedExpandedTree,
+      normalizedExpandedTree.selected_path,
+    ),
+    current_action: currentActionForPath(
+      normalizedExpandedTree,
+      normalizedExpandedTree.selected_path,
+    ),
   };
 }
 
@@ -1687,7 +2124,6 @@ export function sanitizeBranchExpansionSearchStatus(
   webSearchCallCount: number,
   contextText = "",
 ): BranchExpansionResultInput {
-  if (webSearchCallCount > 0) return result;
   const resultText = expansionStatusText(result);
   if (result.result_type === "decision_node" && result.node) {
     const nodeSearchStatus = honestSearchStatus({
@@ -1700,6 +2136,11 @@ export function sanitizeBranchExpansionSearchStatus(
       ...result,
       node: {
         ...result.node,
+        title: normalizeUserFacingMoveMapLabel(
+          result.node.title,
+          `${result.node.title} ${result.node.question} ${result.node.summary}`,
+          `${contextText} ${resultText}`,
+        ),
         search_status: nodeSearchStatus,
         options: result.node.options.map((option) => {
           const text = `${option.label} ${option.short_rationale} ${option.first_action_preview}`;
@@ -1709,21 +2150,27 @@ export function sanitizeBranchExpansionSearchStatus(
             text,
             webSearchCallCount,
           });
+          const label = normalizeUserFacingMoveMapLabel(
+            option.label,
+            text,
+            `${contextText} ${resultText}`,
+          );
           const action = normalizeActionLeafQuality({
             action: {
-              title: option.first_action_preview || option.label,
+              title: option.first_action_preview || label,
               details: option.first_action_preview || option.short_rationale,
               estimated_minutes: null,
               success_condition: "You know whether this branch is worth continuing.",
               fallback: "Choose another branch or tell FlowPath what changed.",
             },
             boardText: `${contextText} ${resultText}`,
-            branchLabel: option.label,
+            branchLabel: label,
             searchStatus: search_status,
             webSearchCallCount,
           });
           return {
             ...option,
+            label,
             search_status,
             first_action_preview: action.repaired
               ? action.action.title
@@ -1740,9 +2187,14 @@ export function sanitizeBranchExpansionSearchStatus(
       text: resultText,
       webSearchCallCount,
     });
+    const title = normalizeUserFacingMoveMapLabel(
+      result.action_leaf.title,
+      `${result.action_leaf.title} ${result.action_leaf.first_action}`,
+      `${contextText} ${resultText}`,
+    );
     const action = normalizeActionLeafQuality({
       action: {
-        title: result.action_leaf.title,
+        title,
         details: result.action_leaf.first_action,
         estimated_minutes: null,
         success_condition: result.action_leaf.success_condition,
@@ -1773,7 +2225,6 @@ export function sanitizeDecisionTreeSearchStatuses(
   webSearchCallCount: number,
   contextText = "",
 ): DecisionTree {
-  if (webSearchCallCount > 0) return tree;
   const nodes = tree.nodes.map((node) => {
     const nodeText = `${node.title} ${node.question} ${node.context_summary}`;
     const nodeSearchStatus = honestSearchStatus({
@@ -1805,7 +2256,7 @@ export function sanitizeDecisionTreeSearchStatuses(
           ...option,
           search_status,
           requires_web_search: search_status !== "not_needed",
-          sources: [],
+          sources: webSearchCallCount > 0 ? option.sources : [],
           first_action,
           success_condition: first_action.success_condition,
           fallback: first_action.fallback,
@@ -1834,7 +2285,10 @@ export function sanitizeDecisionTreeSearchStatuses(
     searchStatus: currentActionSearchStatus,
     webSearchCallCount,
   });
-  return decisionTreeSchema.parse({ ...parsedTree, current_action });
+  return normalizeDecisionTreeLabelsRecursively(
+    decisionTreeSchema.parse({ ...parsedTree, current_action }),
+    { contextText, webSearchCallCount },
+  );
 }
 
 export function normalizePlanOutputForPersistence<T extends NextMovePlan>(
@@ -2120,7 +2574,10 @@ export function attachBranchExpansionToTree({
     active_node_id: activeNodeIdForPath(treeWithChild, nextPath),
     current_action: currentActionForPath(treeWithChild, nextPath),
   };
-  return decisionTreeSchema.parse(expandedTree);
+  return normalizeDecisionTreeLabelsRecursively(decisionTreeSchema.parse(expandedTree), {
+    contextText,
+    webSearchCallCount,
+  });
 }
 
 export function decisionBranchSourceSection(optionId: string | null | undefined) {

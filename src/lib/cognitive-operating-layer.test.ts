@@ -142,7 +142,7 @@ test("state detector classifies core cognitive modes", () => {
     "implementation_mode",
   );
   assert.equal(
-    stateFor("Give me story feedback on the character subtext.").primary_state,
+    stateFor("Give me craft feedback on technique and structure.").primary_state,
     "creative_mode",
   );
   assert.equal(
@@ -265,10 +265,10 @@ test("web search gating turns on for volatile docs and off for pure creative wor
   );
   assert.equal(docsDecision.should_use_web_search, true);
 
-  const creativeState = stateFor("Rewrite this story scene for more subtext.");
+  const creativeState = stateFor("Help me revise this creative draft for stronger structure.");
   const creativeIntervention = selectIntervention(creativeState, { userMessage: creativeState.user_intent });
   const creativeDecision = shouldUseWebSearch(
-    { userMessage: "Rewrite this story scene for more subtext.", allowWebSearch: true },
+    { userMessage: "Help me revise this creative draft for stronger structure.", allowWebSearch: true },
     creativeState,
     creativeIntervention,
   );

@@ -171,9 +171,9 @@ test("next move plan prompt modules separate board, move map, action, memory, se
 
   assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /user-facing product copy/i);
   assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /plain-language real-world option/i);
-  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Acting fundamentals/i);
-  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /On-camera acting/i);
-  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Improv class/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Operations role/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Paid apprenticeship/i);
+  assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /Weekly volunteer shift/i);
   assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /container/i);
   assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /highest-signal/i);
   assert.match(nextMovePlanPromptModules.userFacingLabelInstruction, /provider/i);
@@ -209,7 +209,7 @@ test("user-facing label module bans internal strategy labels", () => {
   assert.match(instruction, /lowest-friction/i);
   assert.match(instruction, /supporting prerequisite/i);
   assert.match(instruction, /class, course, clinic, group, or workshop/i);
-  assert.match(instruction, /ask whether this level fits/i);
+  assert.match(instruction, /ask whether this fits/i);
 });
 
 test("action leaf module requires concrete executable actions", () => {
@@ -226,7 +226,7 @@ test("action leaf module requires concrete executable actions", () => {
   assert.match(instruction, /Network more/i);
   assert.match(instruction, /memory corrections/i);
   assert.match(instruction, /No action needed/i);
-  assert.match(instruction, /private 30-minute writing session/i);
+  assert.match(instruction, /protected 30-minute practice block/i);
 });
 
 test("search honesty module forbids local verification claims without search", () => {
@@ -332,7 +332,7 @@ test("reconciliation prompt prevents append-only contradictory memory", () => {
   assert.match(reconciliationSystemPrompt, /No action needed/i);
   assert.match(reconciliationSystemPrompt, /recalculate, or continue/i);
   assert.match(reconciliationSystemPrompt, /do not stop at "recalculate"/i);
-  assert.match(reconciliationSystemPrompt, /private writing session/i);
+  assert.match(reconciliationSystemPrompt, /protected practice block/i);
 });
 
 test("reconciliation JSON schema exposes memory ids and board move-map effects", () => {

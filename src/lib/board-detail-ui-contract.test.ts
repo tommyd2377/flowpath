@@ -57,7 +57,9 @@ test("move map exposes visual tree nodes, embedded action controls, and search s
   assert.match(source, /Choose this path/);
   assert.match(source, /aria-pressed/);
   assert.match(source, /DecisionNodeView/);
-  assert.match(source, /Your path/);
+  assert.match(source, /Alternate path/);
+  assert.match(source, /Check before continuing/);
+  assert.match(source, /Return to recommended path/);
   assert.match(source, /I&amp;apos;m blocked|I&apos;m blocked/);
   assert.match(source, /Change this/);
   assert.match(source, /Open tasks/);

@@ -100,24 +100,20 @@ function hasAny(text: string, patterns: RegExp[]) {
 
 function hasOpportunityStrategySignal(text: string) {
   return hasAny(text, [
-    /\bgtm\b/,
-    /\bgo[-\s]?to[-\s]?market\b/,
-    /\bproduct strategy\b/,
+    /\bopportunit(y|ies)\b/,
+    /\bbusiness\b/,
     /\bpricing\b/,
-    /\bactivation\b/,
-    /\bretention\b/,
-    /\barchitecture\b/,
-    /\bmvp\b/,
-    /\bprototype\b/,
+    /\bdemand\b/,
     /\bcustomers?\b/,
     /\bbuyers?\b/,
-    /\blanding page\b/,
+    /\bclients?\b/,
+    /\bvendors?\b/,
+    /\bpartners?(hip)?\b/,
+    /\bsales\b/,
     /\bpilot\b/,
     /\bvalidation\b/,
-    /\bsales discovery\b/,
     /\boffer\b/,
     /\bmarket\b/,
-    /\bcustomer discovery\b/,
   ]);
 }
 
@@ -316,17 +312,16 @@ function stateForText(text: string, repeatedTopic: boolean): FlowPathState {
 
   if (
     hasAny(text, [
-      /\btypescript\b/,
-      /\bjavascript\b/,
-      /\breact\b/,
-      /\bnext\.?js\b/,
       /\bdebug\b/,
       /\bbug\b/,
       /\berror\b/,
-      /\bstack trace\b/,
       /\bimplement\b/,
-      /\bcodebase\b/,
-      /\bapi route\b/,
+      /\btechnical\b/,
+      /\b(?:technical|operational) system\b/,
+      /\bworkflow\b/,
+      /\bintegration\b/,
+      /\bconfiguration\b/,
+      /\barchitecture\b/,
       /\bschema\b/,
       /\bmigration\b/,
     ])
@@ -336,14 +331,15 @@ function stateForText(text: string, repeatedTopic: boolean): FlowPathState {
 
   if (
     hasAny(text, [
-      /\bscene\b/,
-      /\bcharacter\b/,
-      /\bnovel\b/,
-      /\bstory\b/,
-      /\bsubtext\b/,
-      /\bdraft\b/,
-      /\brewrite\b/,
+      /\bcraft\b/,
       /\bcreative\b/,
+      /\btechnique\b/,
+      /\bpractice\b/,
+      /\brehears(e|al)\b/,
+      /\bcomposition\b/,
+      /\bcreative project\b/,
+      /\bdraft\b/,
+      /\brevis(e|ion)\b/,
     ])
   ) {
     return "creative_mode";
@@ -367,8 +363,10 @@ function stateForText(text: string, repeatedTopic: boolean): FlowPathState {
       /\bfriends?\b/,
       /\bsocial\b/,
       /\blonel(y|iness)\b/,
-      /\bnyc\b/,
       /\blocation\b/,
+      /\bneighborhood\b/,
+      /\bregion\b/,
+      /\bcommute\b/,
       /\bin person\b/,
       /\bcommunity\b/,
       /\brelationship\b/,
@@ -527,9 +525,9 @@ function baseIntervention(state: StateDetection, text: string): InterventionSele
     successCriteria.push("Avoids overclaiming in high-stakes domains.");
   }
   if (primary === "creative_mode") {
-    mustInclude.push("Subtext, character psychology, structure, or emotional coherence");
+    mustInclude.push("Medium-appropriate technique, structure, or execution feedback");
     mustAvoid.push("Generic creativity encouragement");
-    successCriteria.push("Turns creative feedback into a writing or revision action.");
+    successCriteria.push("Turns craft feedback into a concrete practice or revision action.");
   }
   if (primary === "opportunity_strategy_mode") {
     mustInclude.push("Tradeoffs", "Access path", "Wasted motion to avoid");
@@ -663,10 +661,18 @@ function statePreferenceKeywords(state: FlowPathState) {
     research_mode: ["location", "tool", "preference", "project"],
     rumination_mode: ["challenge", "pattern", "avoid", "energy", "working style"],
     anxiety_mode: ["energy", "support", "safety", "constraint", "time"],
-    creative_mode: ["creative", "writing", "story", "project", "draft", "practice"],
+    creative_mode: ["creative", "craft", "project", "technique", "practice", "revision"],
     opportunity_strategy_mode: ["opportunity", "customer", "market", "pricing", "validation", "proof"],
     implementation_mode: ["implementation", "debug", "system", "project", "tool", "architecture"],
-    social_real_world_mode: ["location", "nyc", "social", "dating", "connection", "community"],
+    social_real_world_mode: [
+      "location",
+      "neighborhood",
+      "region",
+      "social",
+      "dating",
+      "connection",
+      "community",
+    ],
     health_caution_mode: ["health", "energy", "recovery", "safety", "constraint"],
     legal_financial_caution_mode: ["money", "financial", "housing", "legal", "deadline", "runway"],
     unclear_mode: [],
@@ -840,7 +846,10 @@ export function shouldEscalateModel(
   ) {
     return true;
   }
-  if (state.primary_state === "creative_mode" && /\bstructure|act two|character arc|theme\b/i.test(text)) {
+  if (
+    state.primary_state === "creative_mode" &&
+    /\bstructure|composition|technique|form|sequence|theme|complex\b/i.test(text)
+  ) {
     return true;
   }
   return /\b(deep analysis|think hard|thorough|complex)\b/i.test(text);

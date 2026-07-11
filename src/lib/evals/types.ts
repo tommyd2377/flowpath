@@ -18,6 +18,9 @@ export const RUBRIC_DIMENSIONS = [
 
 export type RubricDimensionId = (typeof RUBRIC_DIMENSIONS)[number];
 
+export type EvalScenarioSuite = "regression" | "anti_overfit";
+export type EvalSuiteSelection = EvalScenarioSuite | "combined";
+
 export type EvalMemoryItem = {
   id: string;
   label: string;
@@ -29,6 +32,8 @@ export type EvalScenario = {
   id: string;
   name: string;
   description: string;
+  suite?: EvalScenarioSuite;
+  tags?: string[];
   entryDomain: EntryDomainId;
   userInputs: string[];
   expected: {
@@ -52,6 +57,7 @@ export type EvalScenario = {
     requiresPracticalReconciliationFollowup?: boolean;
     providerSpecificKeywords?: string[];
     requiresProviderGrounding?: boolean;
+    requiresWeakBranchCaution?: boolean;
     staleMemoryLabels?: string[];
     activeMemoryLabels?: string[];
     moveMapShouldRecalculate?: boolean;
@@ -126,6 +132,8 @@ export type CriticalFailureId =
   | "branch_step_mixing"
   | "vague_reconciliation_followup"
   | "missing_concrete_action"
+  | "missing_weak_branch_warning"
+  | "anti_overfit_leakage"
   | "malformed_model_json"
   | "schema_validation_failed"
   | "structured_repair_failed";
@@ -164,6 +172,7 @@ export type RubricScore = {
 export type EvalScenarioResult = {
   scenarioId: string;
   scenarioName: string;
+  suite?: EvalScenarioSuite;
   scores: RubricScore[];
   criticalFailures: CriticalFailure[];
   overallScore: number;
@@ -175,6 +184,7 @@ export type EvalScenarioResult = {
 export type EvalSuiteReport = {
   generatedAt: string;
   mode: "offline" | "live";
+  suite?: EvalSuiteSelection;
   gitCommit: string | null;
   modelConfig: string | null;
   selectedScenarioIds?: string[];
@@ -223,11 +233,13 @@ export type LiveComparisonScenarioResult = {
 export type LiveComparisonReport = {
   generatedAt: string;
   mode: "live_compare";
+  suite?: EvalSuiteSelection;
   gitCommit: string | null;
   modelConfig: string | null;
   selectedScenarioIds: string[];
   totalModelCalls: number;
   webSearchEnabled: boolean;
+  searchMode?: string;
   judgeEnabled: boolean;
   judgeRequested: boolean;
   budget: number;

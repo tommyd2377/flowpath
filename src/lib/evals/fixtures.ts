@@ -1,11 +1,19 @@
 import type { EvalScenario } from "./types";
+import {
+  ANTI_OVERFIT_SCENARIO_COUNT,
+  EVAL_SCENARIO_TAGS,
+  antiOverfitScenarios,
+} from "./anti-overfit-fixtures";
 
-export const evalScenarios: EvalScenario[] = [
+export { ANTI_OVERFIT_SCENARIO_COUNT, EVAL_SCENARIO_TAGS, antiOverfitScenarios };
+
+export const regressionScenarios: EvalScenario[] = [
   {
     id: "tennis_local_community",
     name: "Tennis / local community",
     description:
       "Craft-selected board where tennis is the activity, but community is an important secondary aim.",
+    suite: "regression",
     entryDomain: "craft_creativity_mastery",
     userInputs: [
       "I want to start playing tennis, but also meet people in my neighborhood by playing tennis. I am around Bed-Stuy / 11216.",
@@ -37,6 +45,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Yoga / social connection",
     description:
       "Beginner-friendly social board where the user wants connection through yoga without high social pressure.",
+    suite: "regression",
     entryDomain: "people_community_belonging",
     userInputs: [
       "I want to meet people through yoga, but I am shy and need something beginner-friendly.",
@@ -65,6 +74,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Acting class / Brooklyn options",
     description:
       "Class-search board where Move Map branches should be recognizable acting-class formats, not internal strategy labels.",
+    suite: "regression",
     entryDomain: "people_community_belonging",
     userInputs: [
       "I want to find a local acting class in Brooklyn for people in their 30s.",
@@ -96,6 +106,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Career / no cold-application traction",
     description:
       "Career board where repeated LinkedIn applications have not produced interviews.",
+    suite: "regression",
     entryDomain: "work_money_career",
     userInputs: [
       "I have applied to a lot of jobs on LinkedIn and gotten no interviews.",
@@ -123,6 +134,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "First-time entrepreneur",
     description:
       "Business board where the user has an idea but no customer proof yet.",
+    suite: "regression",
     entryDomain: "work_money_career",
     userInputs: [
       "I have an idea for a small software product, but I have no customers yet.",
@@ -151,6 +163,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Creative work / professionalization too early",
     description:
       "Creative board where the user wants professionalization before proof and feedback loops are strong.",
+    suite: "regression",
     entryDomain: "craft_creativity_mastery",
     userInputs: [
       "I want to become paid for my writing eventually, but I have not finished many pieces or gotten much feedback.",
@@ -178,6 +191,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "People/community/dating distinction",
     description:
       "Social board where the user explicitly wants friends/community rather than dating.",
+    suite: "regression",
     entryDomain: "people_community_belonging",
     userInputs: [
       "I want to meet people and make friends, but I am not trying to date.",
@@ -209,6 +223,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Rural community constraint",
     description:
       "Community board where local density is limited and the plan must not assume urban abundance.",
+    suite: "regression",
     entryDomain: "people_community_belonging",
     userInputs: [
       "I live in a rural area and want more community, but there are not many local options nearby.",
@@ -235,6 +250,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Urgent stability / eviction-like pressure",
     description:
       "Urgent board where normal strategy should yield to immediate risk reduction.",
+    suite: "regression",
     entryDomain: "work_money_career",
     userInputs: [
       "I might be evicted next week and I do not know what to do first.",
@@ -258,10 +274,44 @@ export const evalScenarios: EvalScenario[] = [
     },
   },
   {
+    id: "urgent_court_deadline_production_regression",
+    name: "Urgent court deadline / paperwork triage",
+    description:
+      "Production regression where court-deadline boards must stay process-only, concrete, and free of internal Move Map labels.",
+    suite: "regression",
+    entryDomain: "work_money_career",
+    userInputs: [
+      "I have a court paperwork deadline in a few days and I'm overwhelmed. I'm not asking FlowPath for legal advice or to tell me what to argue. I need help figuring out the safest next move: identify exactly what paperwork is due, organize what I already have, figure out who I should call for process information or legal aid, and avoid missing the deadline. I'm worried I'll freeze and lose time.",
+      "It is an Ohio county court situation, but I do not know the exact deadline or court name yet. I have the notice somewhere in my apartment.",
+    ],
+    expected: {
+      primaryDomain: "work_money_career",
+      titleKeywords: ["court", "deadline", "triage"],
+      goalKeywords: ["court", "paperwork", "deadline"],
+      constraintKeywords: ["few days", "notice"],
+      assetKeywords: ["notice", "apartment"],
+      branchKeywordGroups: [
+        ["notice"],
+        ["clerk"],
+        ["legal", "aid"],
+        ["more", "time"],
+        ["forms"],
+      ],
+      recommendedBranchKeywords: ["notice"],
+      downgradedBranchKeywords: ["forms", "rules", "search"],
+      actionKeywords: ["notice", "court", "case number", "deadline", "document title"],
+      urgentStability: true,
+      noUnverifiedLocalClaims: true,
+      avoidInternalJargonLabels: true,
+      requiresWeakBranchCaution: true,
+    },
+  },
+  {
     id: "memory_correction_private_writing",
     name: "Memory correction / private writing",
     description:
       "Memory correction where old professionalization memory should be stale or removed.",
+    suite: "regression",
     entryDomain: "craft_creativity_mastery",
     userInputs: [
       "Forget that I wanted to monetize my writing. I want to keep it private for now.",
@@ -281,6 +331,7 @@ export const evalScenarios: EvalScenario[] = [
     name: "Board update invalidates active path",
     description:
       "Board update where weekday assumptions should no longer drive the Move Map.",
+    suite: "regression",
     entryDomain: "people_community_belonging",
     userInputs: [
       "Actually, I can only do weekends.",
@@ -296,3 +347,16 @@ export const evalScenarios: EvalScenario[] = [
     },
   },
 ];
+
+export const evalScenarios: EvalScenario[] = [
+  ...regressionScenarios,
+  ...antiOverfitScenarios,
+];
+
+export function scenariosForSuite(
+  suite: "regression" | "anti_overfit" | "combined" | undefined,
+) {
+  if (suite === "regression") return regressionScenarios;
+  if (suite === "anti_overfit") return antiOverfitScenarios;
+  return evalScenarios;
+}

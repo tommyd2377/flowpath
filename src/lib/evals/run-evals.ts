@@ -32,8 +32,10 @@ import type {
   StoredNextMovePlan,
   Task,
 } from "../types";
-import { evalScenarios } from "./fixtures";
+import { scenariosForSuite } from "./fixtures";
 import {
+  ANTI_OVERFIT_LIVE_COMPARISON_COMMAND,
+  ANTI_OVERFIT_LIVE_COMPARISON_SEARCH_COMMAND,
   LIVE_COMPARISON_COMMAND,
   baselineAnswerSchema,
   baselineModelFromEnv,
@@ -52,12 +54,15 @@ import type {
   EvalMemoryItem,
   EvalOutput,
   EvalScenario,
+  EvalSuiteSelection,
   EvalTrace,
   LiveComparisonReport,
   LiveComparisonScenarioResult,
 } from "./types";
 
 type EvalEnv = Record<string, string | undefined>;
+
+const EVAL_SUITE_VALUES = ["regression", "anti_overfit", "combined"] as const;
 
 const DEFAULT_LIVE_SMOKE_SCENARIO_IDS = [
   "tennis_local_community",
@@ -73,6 +78,10 @@ const LIVE_EVAL_COMMAND = [
   `FLOWPATH_LIVE_EVAL_SCENARIOS=${DEFAULT_LIVE_SMOKE_SCENARIO_IDS.join(",")} \\`,
   "npm run evals:live",
 ].join("\n");
+
+function liveWebSearchEnabled(env: EvalEnv) {
+  return env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1" || env.OPENAI_WEB_SEARCH_ENABLED === "true";
+}
 
 export function liveEvalReadiness(args: string[], env: EvalEnv) {
   const requestedLive = args.includes("--live") || env.FLOWPATH_LIVE_EVALS === "1";
@@ -90,6 +99,7 @@ export function liveEvalReadiness(args: string[], env: EvalEnv) {
 }
 
 export function resolveEvalMode(args: string[], env: EvalEnv) {
+  if (args.includes("--offline")) return "offline" as const;
   if (liveComparisonRequested(args, env)) {
     const comparisonReadiness = liveComparisonReadiness(args, env);
     return comparisonReadiness.ready
@@ -168,7 +178,7 @@ function liveFailureOutput(
       generationKind: "plan",
       model: null,
       modelRole: null,
-      webSearchAllowed: process.env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+      webSearchAllowed: liveWebSearchEnabled(process.env),
       webSearchCallCount: 0,
       schemaValid: false,
       promptSections: [],
@@ -198,6 +208,27 @@ function parseScenarioIds(value: string | undefined) {
     .filter(Boolean) ?? null;
 }
 
+function parseSuiteValue(value: string | undefined): EvalSuiteSelection | null {
+  if (!value) return null;
+  const normalized = value.trim().replace(/-/g, "_");
+  if ((EVAL_SUITE_VALUES as readonly string[]).includes(normalized)) {
+    return normalized as EvalSuiteSelection;
+  }
+  throw new Error(
+    `Unknown eval suite "${value}". Expected one of: ${EVAL_SUITE_VALUES.join(", ")}.`,
+  );
+}
+
+export function evalSuiteFromEnv(args: string[], env: EvalEnv): EvalSuiteSelection {
+  const suiteArg = args.find((arg) => arg.startsWith("--suite="));
+  return (
+    parseSuiteValue(suiteArg?.slice("--suite=".length)) ??
+    parseSuiteValue(env.FLOWPATH_EVAL_SUITE) ??
+    parseSuiteValue(env.FLOWPATH_LIVE_EVAL_SUITE) ??
+    "combined"
+  );
+}
+
 export function selectLiveEvalScenarios(scenarios: EvalScenario[], env: EvalEnv) {
   const scenarioById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
   const explicitIds = parseScenarioIds(env.FLOWPATH_LIVE_EVAL_SCENARIOS);
@@ -215,9 +246,12 @@ export function selectLiveEvalScenarios(scenarios: EvalScenario[], env: EvalEnv)
     return explicitIds.map((id) => scenarioById.get(id)).filter((item): item is EvalScenario => Boolean(item));
   }
 
-  const defaultScenarios = DEFAULT_LIVE_SMOKE_SCENARIO_IDS.map((id) =>
+  let defaultScenarios = DEFAULT_LIVE_SMOKE_SCENARIO_IDS.map((id) =>
     scenarioById.get(id),
   ).filter((item): item is EvalScenario => Boolean(item));
+  if (!defaultScenarios.length) {
+    defaultScenarios = scenarios;
+  }
   const maxScenarios = Math.min(scenarioCountFromEnv(env), callBudget || defaultScenarios.length);
   return defaultScenarios.slice(0, maxScenarios);
 }
@@ -800,7 +834,7 @@ async function runLiveFlowPathScenario(
   }
 
   const generated = await generateNextMovePlan(liveEvalContextForScenario(scenario, index), {
-    allowWebSearch: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+    allowWebSearch: liveWebSearchEnabled(env),
   });
   const output: EvalOutput = {
     scenarioId: scenario.id,
@@ -826,7 +860,7 @@ async function runLiveFlowPathScenario(
     output,
     model: generated.model,
     modelRole: generated.modelRole,
-    webSearchAllowed: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+    webSearchAllowed: liveWebSearchEnabled(env),
     webSearchCallCount: generated.webSearchCallCount,
     structuredOutput: generated.structuredOutput,
   });
@@ -837,7 +871,7 @@ async function runLiveFlowPathScenario(
       scenario,
       output,
       generatedPlan: generated,
-      webSearchAllowed: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+      webSearchAllowed: liveWebSearchEnabled(env),
     });
     modelCalls += expansion.modelCalls;
   }
@@ -848,12 +882,19 @@ async function runLiveComparisonReport({
   scenarios,
   env,
   generatedAt,
+  suite,
 }: {
   scenarios: EvalScenario[];
   env: EvalEnv;
   generatedAt: string;
+  suite: EvalSuiteSelection;
 }): Promise<LiveComparisonReport> {
-  const selected = selectLiveComparisonScenarios(scenarios, env, 2);
+  const judgeRequestedForSelection = env.FLOWPATH_LIVE_EVAL_JUDGE === "1";
+  const selected = selectLiveComparisonScenarios(
+    scenarios,
+    env,
+    judgeRequestedForSelection ? 3 : 2,
+  );
   const { judgeRequested, judgeEnabled } = shouldRunPairwiseJudge(
     env,
     selected.scenarios.length,
@@ -1005,15 +1046,17 @@ async function runLiveComparisonReport({
   return {
     generatedAt,
     mode: "live_compare",
+    suite,
     gitCommit: currentGitCommit(),
     modelConfig: `flowpath_models=existing routing; baseline=${baselineModelFromEnv(
       env,
-    )}; judge=${judgeEnabled ? judgeModelFromEnv(env) : "disabled"}; web_search=${
-      env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1"
-    }`,
+    )}; judge=${judgeEnabled ? judgeModelFromEnv(env) : "disabled"}; web_search=${liveWebSearchEnabled(env)}`,
     selectedScenarioIds: selected.scenarios.map((scenario) => scenario.id),
     totalModelCalls: modelCalls,
-    webSearchEnabled: env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1",
+    webSearchEnabled: liveWebSearchEnabled(env),
+    searchMode: liveWebSearchEnabled(env)
+      ? "FlowPath search-enabled; baseline no-search"
+      : "No-search comparison",
     judgeEnabled,
     judgeRequested,
     budget: Number.isInteger(budget) ? budget : 0,
@@ -1040,6 +1083,8 @@ async function runLiveComparisonReport({
 
 async function main() {
   const args = process.argv.slice(2);
+  const suite = evalSuiteFromEnv(args, process.env);
+  const suiteScenarios = scenariosForSuite(suite);
   const mode = resolveEvalMode(args, process.env);
   if (mode === "live_compare_unavailable") {
     const readiness = liveComparisonReadiness(args, process.env);
@@ -1047,6 +1092,10 @@ async function main() {
     console.log(`Missing: ${readiness.missing.join(", ") || "unknown"}.`);
     console.log("Run a bounded live comparison with:");
     console.log(LIVE_COMPARISON_COMMAND);
+    console.log("Run a bounded anti-overfit comparison with:");
+    console.log(ANTI_OVERFIT_LIVE_COMPARISON_COMMAND);
+    console.log("Run FlowPath-search-enabled anti-overfit comparison with:");
+    console.log(ANTI_OVERFIT_LIVE_COMPARISON_SEARCH_COMMAND);
     return;
   }
   if (mode === "live_unavailable") {
@@ -1061,9 +1110,10 @@ async function main() {
   const generatedAt = new Date().toISOString();
   if (mode === "live_compare") {
     const report = await runLiveComparisonReport({
-      scenarios: evalScenarios,
+      scenarios: suiteScenarios,
       env: process.env,
       generatedAt,
+      suite,
     });
     console.log(
       `${report.passed ? "PASS" : "FAIL"} FlowPath ${report.flowpathAverageScore.toFixed(
@@ -1096,21 +1146,22 @@ async function main() {
     return;
   }
   const liveResult =
-    mode === "live" ? await runLiveEvalOutputs(evalScenarios, process.env) : null;
+    mode === "live" ? await runLiveEvalOutputs(suiteScenarios, process.env) : null;
   const outputsByScenarioId = liveResult?.outputs ?? mockOutputsByScenarioId;
-  const scenariosToScore = liveResult?.selectedScenarios ?? evalScenarios;
+  const scenariosToScore = liveResult?.selectedScenarios ?? suiteScenarios;
   const report = scoreEvalSuite(scenariosToScore, outputsByScenarioId, {
     generatedAt,
     mode,
+    suite,
     gitCommit: currentGitCommit(),
     modelConfig:
       mode === "live"
-        ? `FLOWPATH_LIVE_EVALS=1; max_calls=${process.env.FLOWPATH_LIVE_EVAL_MAX_CALLS}; scenarios=${scenariosToScore.map((scenario) => scenario.id).join(",")}; web_search=${process.env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1"}`
+        ? `FLOWPATH_LIVE_EVALS=1; max_calls=${process.env.FLOWPATH_LIVE_EVAL_MAX_CALLS}; scenarios=${scenariosToScore.map((scenario) => scenario.id).join(",")}; web_search=${liveWebSearchEnabled(process.env)}`
         : "offline mocked outputs",
     selectedScenarioIds: scenariosToScore.map((scenario) => scenario.id),
     totalModelCalls: liveResult?.modelCalls,
     webSearchEnabled:
-      mode === "live" ? process.env.FLOWPATH_LIVE_EVAL_WEB_SEARCH === "1" : undefined,
+      mode === "live" ? liveWebSearchEnabled(process.env) : undefined,
     traces: liveResult?.traces,
   });
 

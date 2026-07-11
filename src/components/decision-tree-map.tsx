@@ -13,9 +13,11 @@ import {
 import type { ReactNode } from "react";
 
 import {
+  branchSelectionCaution,
   decisionTreeTrace,
   findDecisionOptionInNode,
   getDecisionNode,
+  type DecisionBranchCaution,
 } from "@/lib/decision-tree";
 import type {
   DecisionNode,
@@ -200,6 +202,7 @@ function DecisionNodeView({
         />
         {node.options.map((option) => {
           const selected = option.id === selectedOption?.id;
+          const caution = selected ? branchSelectionCaution(tree, option) : null;
           return (
             <div
               key={option.id}
@@ -245,8 +248,14 @@ function DecisionNodeView({
                     option={option}
                     nodeId={node.id}
                     exploring={exploringNodeId === node.id}
+                    caution={caution}
                     onChoosePath={onChoosePath}
                     onExplore={onExplore}
+                    onReturnToRecommended={
+                      caution?.recommendedOptionId && depth === 0
+                        ? () => onSelect(tree.root_node_id, caution.recommendedOptionId!)
+                        : undefined
+                    }
                   />
                 </div>
               ) : null}
@@ -312,7 +321,7 @@ function BranchPath({
         ) : null}
         {userSelected ? (
           <span className="rounded-full border border-slate-600 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-200">
-            Your path
+            Alternate path
           </span>
         ) : null}
         {selected && !userSelected ? (
@@ -340,18 +349,45 @@ function ExplorePath({
   option,
   nodeId,
   exploring,
+  caution,
   onChoosePath,
   onExplore,
+  onReturnToRecommended,
 }: {
   option: DecisionOption;
   nodeId: string;
   exploring: boolean;
+  caution: DecisionBranchCaution | null;
   onChoosePath: () => void;
   onExplore: (nodeId: string, optionId: string) => void;
+  onReturnToRecommended?: () => void;
 }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-3 text-xs shadow-sm">
       <div className="mb-2 font-medium text-slate-100">Continue from this path</div>
+      {caution ? (
+        <div
+          role="status"
+          className="mb-2 rounded-md border border-amber-800/70 bg-amber-950/35 p-2 text-amber-100"
+        >
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <div>
+              <div className="font-medium text-amber-50">Check before continuing</div>
+              <p className="mt-0.5 leading-5">{caution.message}</p>
+              {onReturnToRecommended ? (
+                <button
+                  type="button"
+                  onClick={onReturnToRecommended}
+                  className="mt-1 font-medium text-amber-50 underline decoration-amber-200/60 underline-offset-2 hover:text-white"
+                >
+                  Return to recommended path
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
       <p className="mb-2 leading-5 text-slate-400">
         Extend this line only when you want to continue down this path.
       </p>

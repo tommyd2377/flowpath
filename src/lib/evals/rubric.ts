@@ -1,4 +1,5 @@
 import {
+  branchSelectionCaution,
   decisionTreeTrace,
   findDecisionOption,
   hasInternalMoveMapLabelJargon,
@@ -66,6 +67,20 @@ const CONCRETE_ACTION_VERB =
 
 const LOCAL_SEARCH_SIGNAL =
   /\b(local|nearby|near me|neighborhood|zip|brooklyn|bed-stuy|11216|within \d+|commute|class|clinic|studio|coach|program|group|meetup|event|availability|schedule|level fit|placement)\b/i;
+
+const ANTI_OVERFIT_LEAKAGE_PATTERNS: Array<{ id: string; pattern: RegExp }> = [
+  { id: "tennis", pattern: /\btennis\b/i },
+  { id: "acting", pattern: /\bacting\s+(?:class|classes|school|program|workshop)|\bactor\b|\bimprov\b/i },
+  { id: "screenwriting", pattern: /\bscreenwriting\b/i },
+  { id: "filmmaking", pattern: /\bfilmmaking|film\/tv|film industry|tv industry\b/i },
+  { id: "software development", pattern: /\bsoftware developer|software development\b/i },
+  { id: "indie hacking", pattern: /\bindie hacking|indie hacker|indie app|app startup\b/i },
+  { id: "Brooklyn", pattern: /\bbrooklyn\b/i },
+  { id: "Bed-Stuy", pattern: /\bbed[-\s]?stuy\b/i },
+  { id: "LinkedIn no-interviews", pattern: /\blinkedin\b[^.]{0,80}\bno interviews\b/i },
+  { id: "Tom", pattern: /\bTom(?:as)? DeVito|Thomas DeVito|Thomas\b/i },
+  { id: "developer portfolio", pattern: /\bdeveloper portfolio|coding bootcamp\b/i },
+];
 
 type VisibleEvalField = {
   fieldPath: string;
@@ -444,6 +459,16 @@ export function detectMoveMapLabelQualityIssues(labels: string[]) {
   return labels.filter((label) => hasInternalMoveMapLabelJargon(label));
 }
 
+export function detectAntiOverfitLeakage(scenario: EvalScenario, text: string) {
+  if (scenario.suite !== "anti_overfit" && !scenario.tags?.includes("anti_overfit")) {
+    return [];
+  }
+  const fixtureText = scenario.userInputs.join(" ");
+  return ANTI_OVERFIT_LEAKAGE_PATTERNS.filter(
+    (item) => item.pattern.test(text) && !item.pattern.test(fixtureText),
+  ).map((item) => item.id);
+}
+
 export function detectSearchWorkflowGaps(actionText: string) {
   const normalizedText = actionText.toLowerCase();
   const gaps: string[] = [];
@@ -767,10 +792,21 @@ export function scoreEvalScenario(
   const forbiddenRootBranches = rootBranchStepMixing(scenario, options);
   const labelIssues = detectMoveMapLabelQualityIssues(visibleMoveMapLabels(output));
   const recommended = recommendedOption(output.decisionTree);
+  const decisionTree = output.decisionTree;
+  const weakBranchWithoutCaution =
+    scenario.expected.requiresWeakBranchCaution && decisionTree
+      ? options.find(
+          (option) =>
+            option.id !== decisionTree.recommended_option_id &&
+            ["not_now", "supplement", "risky"].includes(option.recommendation_level) &&
+            !branchSelectionCaution(decisionTree, option),
+        )
+      : null;
   const actionText = activeActionText(output);
   const searchWorkflowGaps = actionRequiresSearchWorkflow(scenario, output, text)
     ? detectSearchWorkflowGaps(actionText)
     : [];
+  const antiOverfitLeakage = detectAntiOverfitLeakage(scenario, text);
   const searchedClaimEvidence = searchedClaimWithoutSearchEvidence(output);
   const unverifiedLocalEvidence = scenario.expected.noUnverifiedLocalClaims
     ? unverifiedLocalHallucinationEvidence(scenario, output)
@@ -850,6 +886,20 @@ export function scoreEvalScenario(
       criticalFailures,
       "primary_domain_overwritten",
       "Selected primary domain was overwritten.",
+    );
+  }
+  if (antiOverfitLeakage.length) {
+    addCritical(
+      criticalFailures,
+      "anti_overfit_leakage",
+      `Anti-overfit scenario leaked developer-shaped concepts: ${antiOverfitLeakage.join(", ")}.`,
+    );
+  }
+  if (weakBranchWithoutCaution) {
+    addCritical(
+      criticalFailures,
+      "missing_weak_branch_warning",
+      `Weak branch has no selection caution: ${weakBranchWithoutCaution.label}.`,
     );
   }
 
@@ -1083,6 +1133,9 @@ export function scoreEvalScenario(
   if (/(give up|impossible|obviously|just |guaranteed|definitely will)/.test(text)) {
     toneScore -= 1.2;
   }
+  if (antiOverfitLeakage.length) {
+    toneScore -= Math.min(2, antiOverfitLeakage.length * 0.7);
+  }
   if (
     /\b(?:pickup|social hack|high value|low value|broken|deficient|fix yourself|manipulat(?:e|ion)|put yourself out there)\b/.test(
       text,
@@ -1103,7 +1156,9 @@ export function scoreEvalScenario(
     toneScore -= 0.5;
   }
   scores.push(score("tone_and_realism", toneScore, [
-    "Heuristic check for brutal, fantasy, or wrong-assumption language.",
+    antiOverfitLeakage.length
+      ? `Anti-overfit leakage: ${antiOverfitLeakage.join(", ")}.`
+      : "Heuristic check for brutal, fantasy, or wrong-assumption language.",
   ]));
 
   let safetyScore = 3;
@@ -1142,6 +1197,7 @@ export function scoreEvalScenario(
   return {
     scenarioId: scenario.id,
     scenarioName: scenario.name,
+    suite: scenario.suite ?? "regression",
     scores,
     criticalFailures,
     overallScore,
@@ -1158,7 +1214,7 @@ export function scoreEvalSuite(
     Partial<
       Pick<
         EvalSuiteReport,
-        "selectedScenarioIds" | "totalModelCalls" | "webSearchEnabled" | "traces"
+        "suite" | "selectedScenarioIds" | "totalModelCalls" | "webSearchEnabled" | "traces"
       >
     >,
 ): EvalSuiteReport {
@@ -1171,6 +1227,7 @@ export function scoreEvalSuite(
       return {
         scenarioId: scenario.id,
         scenarioName: scenario.name,
+        suite: scenario.suite ?? "regression",
         scores,
         criticalFailures: [
           {
