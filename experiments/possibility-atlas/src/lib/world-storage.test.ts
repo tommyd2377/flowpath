@@ -6,13 +6,18 @@ import {
   WORLD_STORAGE_KEY,
   appendWorldJourney,
   associateWorldAtlas,
+  causalContextForJourney,
+  clearWorldJourney,
   createWorldStorageEnvelope,
+  isStaleCausalRegistrationError,
   loadWorldStorageEnvelope,
   pruneWorldStorage,
   recordCountedRippleAnalysis,
   removeWorldAtlas,
   replaceWorldAtlas,
   saveWorldStorageEnvelope,
+  setWorldJourneyExplorationMode,
+  shouldResumeWorldAtlasIndependently,
   type WorldJourneyTransition,
   type WorldStorageLike,
 } from "./world-storage";
@@ -39,15 +44,42 @@ class MemoryStorage implements WorldStorageLike {
   }
 }
 
+test("only stale causal registration failures can resume independently", () => {
+  assert.equal(isStaleCausalRegistrationError("causal_context_stale"), true);
+  assert.equal(isStaleCausalRegistrationError("world_causal_context_changed"), true);
+  assert.equal(isStaleCausalRegistrationError("atlas_mode_mismatch"), false);
+  assert.equal(isStaleCausalRegistrationError(null), false);
+  assert.equal(
+    shouldResumeWorldAtlasIndependently({
+      previousMode: "causal",
+      nextMode: "independent",
+      registrationFailed: true,
+      failureCode: "causal_context_stale",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldResumeWorldAtlasIndependently({
+      previousMode: "causal",
+      nextMode: "independent",
+      registrationFailed: true,
+      failureCode: "atlas_mode_mismatch",
+    }),
+    false,
+  );
+});
+
 function transition(index: number): WorldJourneyTransition {
   return {
     sourceEventId: uuid(index),
     sourceEventTitle: `Source event ${index}`,
     sourceScenarioNodeId: uuid(100 + index),
     sourceScenarioTitle: `Scenario ${index}`,
+    sourceScenarioSummary: `Scenario ${index} changes the immediate conditions.`,
     targetEventId: uuid(index + 1),
     targetEventTitle: `Target event ${index}`,
     influence: "raises_likelihood",
+    mechanism: `Scenario ${index} changes a shared dependency.`,
   };
 }
 
@@ -78,6 +110,49 @@ test("associations and journeys survive a browser reload", () => {
   const restored = loadWorldStorageEnvelope(storage);
   assert.equal(restored.envelope.atlasByEvent[uuid(1)], uuid(11));
   assert.equal(restored.envelope.journeys[uuid(11)]?.transitions.length, 1);
+  assert.equal(
+    restored.envelope.journeys[uuid(11)]?.transitions[0]?.sourceGraphId,
+    uuid(10),
+  );
+});
+
+test("journey exploration mode is explicit, durable, and clearable", () => {
+  let envelope = createWorldStorageEnvelope(NOW);
+  envelope = appendWorldJourney(envelope, {
+    sourceGraphId: uuid(10),
+    targetGraphId: uuid(11),
+    transition: transition(1),
+    at: NOW,
+  });
+  assert.equal(envelope.journeys[uuid(11)]?.explorationMode, null);
+
+  envelope = setWorldJourneyExplorationMode(
+    envelope,
+    uuid(11),
+    "causal",
+    new Date(Date.parse(NOW) + 1_000).toISOString(),
+  );
+  assert.equal(envelope.journeys[uuid(11)]?.explorationMode, "causal");
+  assert.deepEqual(causalContextForJourney(envelope.journeys[uuid(11)] ?? null, uuid(2)), {
+    sourceGraphId: uuid(10),
+    sourceEventId: uuid(1),
+    sourceEventTitle: "Source event 1",
+    sourceScenarioNodeId: uuid(101),
+    sourceScenarioTitle: "Scenario 1",
+    sourceScenarioSummary: "Scenario 1 changes the immediate conditions.",
+    targetEventId: uuid(2),
+    targetEventTitle: "Target event 1",
+    influence: "raises_likelihood",
+    mechanism: "Scenario 1 changes a shared dependency.",
+  });
+  assert.equal(causalContextForJourney(envelope.journeys[uuid(11)] ?? null, uuid(3)), null);
+
+  envelope = clearWorldJourney(
+    envelope,
+    uuid(11),
+    new Date(Date.parse(NOW) + 2_000).toISOString(),
+  );
+  assert.equal(envelope.journeys[uuid(11)], undefined);
 });
 
 test("restart moves an event association and its journey to the new graph", () => {

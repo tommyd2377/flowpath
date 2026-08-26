@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { StorageEnvelopeSchema, type HeadlineItem } from "./contracts";
+import { MAX_ATLAS_CALLS, StorageEnvelopeSchema, type HeadlineItem } from "./contracts";
 import { createAtlasGraph } from "./atlas-reducer";
 import {
   ATLAS_RUNTIME_META_KEY,
@@ -69,6 +69,41 @@ test("normal persistence validates and restores cached headlines", () => {
   assert.equal(loaded.warning, null);
   assert.equal(loaded.envelope.lastHeadlines.length, 2);
   assert.equal(loaded.envelope.lastHeadlinesAt, NOW);
+});
+
+test("legacy v1 atlases above the new call cap are kept as exhausted", () => {
+  const storage = new MemoryStorage();
+  let envelope = createStorageEnvelope({ installationId: uuid(900), now: NOW });
+  const saturated = createAtlasGraph({ id: uuid(1), headline: headline(1), now: NOW });
+  const available = createAtlasGraph({ id: uuid(2), headline: headline(2), now: NOW });
+  envelope = upsertAtlas(upsertAtlas(envelope, saturated), available);
+  const legacy = JSON.parse(JSON.stringify(envelope)) as {
+    atlases: Record<string, { callsUsed: number }>;
+  };
+  legacy.atlases[saturated.id].callsUsed = 12;
+  storage.setItem(ATLAS_STORAGE_KEY, JSON.stringify(legacy));
+
+  const loaded = loadStorageEnvelope(storage);
+  assert.equal(loaded.envelope.atlases[saturated.id]?.callsUsed, MAX_ATLAS_CALLS);
+  assert.equal(loaded.envelope.atlases[available.id]?.callsUsed, 0);
+  assert.match(loaded.warning ?? "", /10-call limit/i);
+});
+
+test("call counts outside the legacy integer range are not silently clamped", () => {
+  const storage = new MemoryStorage();
+  let envelope = createStorageEnvelope({ installationId: uuid(900), now: NOW });
+  const graph = createAtlasGraph({ id: uuid(1), headline: headline(1), now: NOW });
+  envelope = upsertAtlas(envelope, graph);
+  const malformed = JSON.parse(JSON.stringify(envelope)) as {
+    atlases: Record<string, { callsUsed: number }>;
+  };
+  malformed.atlases[graph.id].callsUsed = 11.5;
+  storage.setItem(ATLAS_STORAGE_KEY, JSON.stringify(malformed));
+
+  const loaded = loadStorageEnvelope(storage, { installationId: uuid(901), now: NOW });
+  assert.deepEqual(loaded.envelope.atlases, {});
+  assert.equal(loaded.envelope.installationId, uuid(901));
+  assert.match(loaded.warning ?? "", /unreadable/i);
 });
 
 test("schema-valid graphs with broken relationships are removed on load", () => {

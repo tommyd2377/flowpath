@@ -155,17 +155,22 @@ export async function POST(request: Request) {
     }
 
     const metadata = await repository.getCatalogMetadata();
-    const existing = await repository.getRippleAnalysis({
+    const existing = await repository.getRippleAnalysisResult({
       graphId: input.graphId,
       scenarioNodeId: input.scenarioNodeId,
       catalogVersion: metadata.catalogVersion,
     });
     if (existing !== null) {
       const targetEvents = await targetEventsForIds(
-        existing.map((edge) => edge.targetEventId),
+        existing.edges.map((edge) => edge.targetEventId),
       );
       return jsonResponse(
-        responseFromStoredRippleEdges({ edges: existing, targetEvents, mode }),
+        responseFromStoredRippleEdges({
+          edges: existing.edges,
+          noCredibleReason: existing.noCredibleReason,
+          targetEvents,
+          mode,
+        }),
         { mode },
       );
     }
@@ -194,6 +199,8 @@ export async function POST(request: Request) {
         {
           sourceEventId: input.worldEventId,
           sourceScenarioNodeId: input.scenarioNodeId,
+          sourceScenarioTitle: context.scenario.title,
+          sourceScenarioSummary: context.scenario.summary,
           targetEvents,
         },
         { mode, callConsumed: false, cacheStatus: "miss" },
@@ -209,6 +216,8 @@ export async function POST(request: Request) {
           {
             sourceEventId: input.worldEventId,
             sourceScenarioNodeId: input.scenarioNodeId,
+            sourceScenarioTitle: context.scenario.title,
+            sourceScenarioSummary: context.scenario.summary,
             targetEvents,
           },
           { mode, callConsumed: false, cacheStatus: "hit" },
@@ -222,6 +231,8 @@ export async function POST(request: Request) {
           {
             sourceEventId: input.worldEventId,
             sourceScenarioNodeId: input.scenarioNodeId,
+            sourceScenarioTitle: context.scenario.title,
+            sourceScenarioSummary: context.scenario.summary,
             targetEvents,
           },
           { mode, callConsumed: false, cacheStatus: "miss" },
@@ -232,6 +243,7 @@ export async function POST(request: Request) {
           key: cacheKey,
           graphId: input.graphId,
           consumesAtlasCall: true,
+          atlasCallLedger: repository,
           operation: async () => {
             const template = await createRippleGenerationTemplateWithOpenAI(
               { input, ...context, targetEvents },
@@ -267,6 +279,8 @@ export async function POST(request: Request) {
           {
             sourceEventId: input.worldEventId,
             sourceScenarioNodeId: input.scenarioNodeId,
+            sourceScenarioTitle: context.scenario.title,
+            sourceScenarioSummary: context.scenario.summary,
             targetEvents,
           },
           {
@@ -286,7 +300,11 @@ export async function POST(request: Request) {
         graphId: input.graphId,
         scenarioNodeId: input.scenarioNodeId,
         sourceEventId: input.worldEventId,
+        sourceScenarioTitle: context.scenario.title,
+        sourceScenarioSummary: context.scenario.summary,
         edges,
+        noCredibleReason:
+          response.kind === "no_credible_links" ? response.reason : null,
         analyzedAt,
         catalogVersion: metadata.catalogVersion,
       });

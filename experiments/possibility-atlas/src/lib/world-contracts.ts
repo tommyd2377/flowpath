@@ -57,6 +57,8 @@ export const RippleEdgeSchema = z
     id: z.string().uuid(),
     sourceEventId: z.string().uuid(),
     sourceScenarioNodeId: z.string().uuid(),
+    sourceScenarioTitle: z.string().min(1).max(100),
+    sourceScenarioSummary: z.string().min(1).max(420),
     targetEventId: z.string().uuid(),
     influence: z.enum([
       "raises_likelihood",
@@ -134,6 +136,7 @@ export const WorldEventsResponseSchema = z
     feedFingerprint: z.string().length(64).nullable(),
     scannedAt: IsoDateSchema.nullable(),
     events: z.array(WorldEventSummarySchema).max(100),
+    featuredCandidates: z.array(WorldEventSummarySchema).max(12),
     pressurePoints: z
       .array(
         z
@@ -169,6 +172,14 @@ export const WorldRefreshRequestSchema = z
   .strict();
 
 export const WorldRefreshResponseSchema = WorldEventsResponseSchema.extend({
+  feed: z
+    .object({
+      fetchedAt: IsoDateSchema,
+      feedUpdatedAt: IsoDateSchema.nullable(),
+      stale: z.boolean(),
+      warning: z.string().max(300).nullable(),
+    })
+    .strict(),
   meta: ResponseMetaSchema.extend({
     cacheStatus: z.enum(["hit", "miss"]),
   }).strict(),

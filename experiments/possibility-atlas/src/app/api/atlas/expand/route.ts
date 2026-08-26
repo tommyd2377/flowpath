@@ -1,9 +1,9 @@
 import { ExpandAtlasRequestSchema, type ExpandAtlasResponse } from "@/lib/contracts";
-import { z } from "zod";
 import {
   createExpansionGenerationTemplateWithOpenAI,
   validateExpansionContext,
 } from "@/lib/server/branch";
+import { validatePersistedCausalContext } from "@/lib/server/causal-context";
 import { createFixtureExpansionResponse } from "@/lib/server/fixtures";
 import {
   EXPANSION_PROMPT_VERSION,
@@ -11,6 +11,7 @@ import {
   generationCacheKey,
   generationFingerprint,
   materializeExpansionTemplate,
+  semanticExpansionSource,
 } from "@/lib/server/generation-templates";
 import {
   commitRegisteredExpansion,
@@ -27,10 +28,9 @@ import {
   getAtlasResponsesAdapter,
   resolveAtlasServerMode,
 } from "@/lib/server/openai-client";
-import {
-  atlasIdempotencyKey,
-  runWithAtlasRequestGuard,
-} from "@/lib/server/request-guard";
+import { runAtlasModelOperation } from "@/lib/server/atlas-model-operation";
+import { getOptionalRawAtlasCallLedger } from "@/lib/server/optional-call-ledger";
+import { atlasIdempotencyKey } from "@/lib/server/request-guard";
 import {
   getRawGenerationTemplate,
   putRawGenerationTemplate,
@@ -50,33 +50,6 @@ function persistenceError(error: unknown) {
   });
 }
 
-function semanticExpansionSource(input: {
-  snapshot: z.infer<typeof ExpandAtlasRequestSchema>["snapshot"];
-  lineage: z.infer<typeof ExpandAtlasRequestSchema>["lineage"];
-  maxBranches: number;
-}) {
-  return {
-    snapshot: {
-      headline: input.snapshot.headline,
-      capturedAt: input.snapshot.capturedAt,
-      verificationStatus: input.snapshot.verificationStatus,
-      summary: input.snapshot.summary,
-      facts: input.snapshot.facts,
-      uncertainties: input.snapshot.uncertainties,
-      sources: input.snapshot.sources,
-    },
-    lineage: input.lineage.map((node) => ({
-      depth: node.depth,
-      title: node.title,
-      summary: node.summary,
-      whyPlausible: node.whyPlausible,
-      keyAssumption: node.keyAssumption,
-      horizon: node.horizon,
-    })),
-    maxBranches: input.maxBranches,
-  };
-}
-
 export async function POST(request: Request) {
   try {
     const input = await parseJsonRequest(request, ExpandAtlasRequestSchema);
@@ -86,6 +59,25 @@ export async function POST(request: Request) {
     const replay = getRegisteredExpansionResponse(input, requestKey);
     if (replay) return jsonResponse(replay, { mode });
     const registered = validateRegisteredExpansion(input);
+    const repository = registered.worldEventId ? getWorldRepository() : null;
+    if (repository) await repository.initialize();
+    if (input.causalContext && !repository) {
+      throw new AtlasApiError({
+        code: "causal_context_stale",
+        message:
+          "A conditional chain can only continue inside a registered world atlas.",
+        status: 409,
+        retryable: false,
+        callConsumed: false,
+      });
+    }
+    const causalContext = input.causalContext
+      ? await validatePersistedCausalContext({
+          context: input.causalContext,
+          targetWorldEventId: registered.worldEventId,
+          repository: repository!,
+        })
+      : undefined;
 
     if (mode === "fixture") {
       const response = createFixtureExpansionResponse(input);
@@ -95,12 +87,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const repository = registered.worldEventId ? getWorldRepository() : null;
-    if (repository) await repository.initialize();
     const source = semanticExpansionSource({
       snapshot: input.snapshot,
       lineage: input.lineage,
       maxBranches: expansion.maxBranches,
+      causalContext,
     });
     const sourceFingerprint = generationFingerprint(source);
     const cacheKey = generationCacheKey({
@@ -131,11 +122,13 @@ export async function POST(request: Request) {
         { mode, callConsumed: false, cacheStatus: "hit" },
       );
     } else {
-      const guarded = await runWithAtlasRequestGuard({
+      const guarded = await runAtlasModelOperation({
         installationId: input.installationId,
         key: cacheKey,
         graphId: input.graphId,
-        consumesAtlasCall: true,
+        resolveCallLedger: repository
+          ? async () => repository
+          : getOptionalRawAtlasCallLedger,
         operation: async () => {
           const template =
             await createExpansionGenerationTemplateWithOpenAI(input, {

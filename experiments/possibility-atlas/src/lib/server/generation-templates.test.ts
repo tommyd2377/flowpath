@@ -5,8 +5,10 @@ import { createFixtureStartResponse } from "./fixtures";
 import {
   expansionResponseToTemplate,
   generationCacheKey,
+  generationFingerprint,
   materializeExpansionTemplate,
   materializeStartTemplate,
+  semanticExpansionSource,
   startResponseToTemplate,
 } from "./generation-templates";
 import { headlineFixture, TEST_UUIDS } from "./openai-test-fixtures";
@@ -138,6 +140,72 @@ test("generation cache keys invalidate on model, prompt, or source changes", () 
     generationCacheKey({
       ...base,
       source: { ...headlineFixture, title: "Updated headline" },
+    }),
+  );
+});
+
+test("conditional cache semantics ignore fresh graph IDs but retain the premise", () => {
+  const start = createFixtureStartResponse(input);
+  assert.equal(start.kind, "atlas");
+  if (start.kind !== "atlas") return;
+  const node = start.nodes[0]!;
+  const lineage = [
+    {
+      id: node.id,
+      parentId: node.parentId,
+      depth: node.depth,
+      title: node.title,
+      summary: node.summary,
+      whyPlausible: node.whyPlausible,
+      keyAssumption: node.keyAssumption,
+      horizon: node.horizon,
+    },
+  ];
+  const causalContext = {
+    sourceGraphId: "30000000-0000-4000-8000-000000000001",
+    sourceEventId: "40000000-0000-4000-8000-000000000001",
+    sourceEventTitle: "Source event",
+    sourceScenarioNodeId: "50000000-0000-4000-8000-000000000001",
+    sourceScenarioTitle: "Conditional scenario",
+    sourceScenarioSummary: "The source scenario remains conditional.",
+    targetEventId: "60000000-0000-4000-8000-000000000001",
+    targetEventTitle: "Target event",
+    influence: "accelerates" as const,
+    mechanism: "A shared constraint transmits the effect.",
+  };
+  const first = semanticExpansionSource({
+    snapshot: start.snapshot,
+    lineage,
+    maxBranches: 5,
+    causalContext,
+  });
+  const rematerialized = semanticExpansionSource({
+    snapshot: start.snapshot,
+    lineage: [
+      {
+        ...lineage[0]!,
+        id: "70000000-0000-4000-8000-000000000001",
+        parentId: "80000000-0000-4000-8000-000000000001",
+      },
+    ],
+    maxBranches: 5,
+    causalContext: {
+      ...causalContext,
+      sourceGraphId: "30000000-0000-4000-8000-000000000002",
+      sourceEventId: "40000000-0000-4000-8000-000000000002",
+      sourceScenarioNodeId: "50000000-0000-4000-8000-000000000002",
+      targetEventId: "60000000-0000-4000-8000-000000000002",
+    },
+  });
+  assert.equal(generationFingerprint(first), generationFingerprint(rematerialized));
+  assert.notEqual(
+    generationFingerprint(first),
+    generationFingerprint({
+      ...rematerialized,
+      conditionalCausalPremise: {
+        ...rematerialized.conditionalCausalPremise,
+        mechanism: "A different mechanism transmits the effect.",
+      },
     }),
   );
 });

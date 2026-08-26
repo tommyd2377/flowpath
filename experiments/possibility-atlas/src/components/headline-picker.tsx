@@ -10,6 +10,7 @@ import {
   type StorageEnvelope,
 } from "../lib/contracts";
 import { createAtlasGraph } from "../lib/atlas-reducer";
+import { openSavedAtlasDirectly } from "../lib/world-navigation";
 import {
   ATLAS_STORAGE_KEY,
   cacheHeadlines,
@@ -18,6 +19,8 @@ import {
   saveStorageEnvelope,
   upsertAtlas,
 } from "../lib/storage";
+import { AtlasTeachingLine, ProductNavigation } from "./product-navigation";
+import { useWorldCatalog } from "./use-world-catalog";
 import { WorldInMotion } from "./world-in-motion";
 
 type FeedState = "loading" | "ready" | "stale" | "error";
@@ -38,6 +41,7 @@ function atlasStatusLabel(status: string) {
 
 export function HeadlinePicker() {
   const router = useRouter();
+  const world = useWorldCatalog();
   const envelopeRef = useRef<StorageEnvelope | null>(null);
   const selectionLockedRef = useRef(false);
   const [envelope, setEnvelope] = useState<StorageEnvelope | null>(null);
@@ -46,10 +50,9 @@ export function HeadlinePicker() {
   const [message, setMessage] = useState<string | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [selectedHeadlineId, setSelectedHeadlineId] = useState<string | null>(null);
+  const [openingSavedAtlasId, setOpeningSavedAtlasId] = useState<string | null>(null);
 
   const persist = useCallback((next: StorageEnvelope) => {
-    envelopeRef.current = next;
-    setEnvelope(next);
     try {
       const saved = saveStorageEnvelope(window.localStorage, next);
       envelopeRef.current = saved.envelope;
@@ -60,8 +63,10 @@ export function HeadlinePicker() {
       if (saved.droppedHeadlineCache) {
         setStorageWarning("The cached headline list was removed to preserve your active atlas.");
       }
+      return saved.envelope;
     } catch {
       setStorageWarning("This browser could not save more atlas data. Existing work remains on this screen.");
+      throw new Error("Browser storage could not save the requested atlas change.");
     }
   }, []);
 
@@ -81,7 +86,13 @@ export function HeadlinePicker() {
       setFeedState(parsed.stale ? "stale" : "ready");
       setMessage(parsed.warning ?? (parsed.stale ? "The source returned a cached headline list." : null));
       const current = envelopeRef.current;
-      if (current) persist(cacheHeadlines(current, parsed.items, parsed.fetchedAt));
+      if (current) {
+        try {
+          persist(cacheHeadlines(current, parsed.items, parsed.fetchedAt));
+        } catch {
+          // The fresh feed remains usable even when its browser cache cannot be updated.
+        }
+      }
     } catch (error) {
       if (cached.length > 0) {
         setHeadlines(cached);
@@ -126,53 +137,98 @@ export function HeadlinePicker() {
 
   const chooseHeadline = (headline: HeadlineItem) => {
     const current = envelopeRef.current;
-    if (!current || selectionLockedRef.current) return;
+    if (!current || selectionLockedRef.current || world.refreshing) return;
     selectionLockedRef.current = true;
     setSelectedHeadlineId(headline.id);
     const now = new Date().toISOString();
     const graph = createAtlasGraph({ id: crypto.randomUUID(), headline, now });
-    persist(upsertAtlas(current, graph));
-    router.push(`/atlas/${graph.id}`);
+    try {
+      persist(upsertAtlas(current, graph));
+      router.push(`/atlas/${graph.id}`);
+    } catch {
+      selectionLockedRef.current = false;
+      setSelectedHeadlineId(null);
+    }
+  };
+
+  const openSavedAtlas = (graphId: string, nodeId: string | null) => {
+    if (selectionLockedRef.current || world.refreshing) return;
+    selectionLockedRef.current = true;
+    setOpeningSavedAtlasId(graphId);
+    setStorageWarning(null);
+    try {
+      const opened = openSavedAtlasDirectly(window.localStorage, { graphId, nodeId });
+      router.push(opened.href);
+    } catch {
+      selectionLockedRef.current = false;
+      setOpeningSavedAtlasId(null);
+      setStorageWarning("This browser could not open that saved atlas. Your existing work is unchanged.");
+    }
   };
 
   const recent = envelope ? recentAtlases(envelope, 4) : [];
 
   return (
     <main className="picker-shell">
-      <header className="brand-row">
-        <div className="brand-mark" aria-hidden="true">PA</div>
-        <div>
-          <p className="eyebrow">Possibility Atlas</p>
-          <h1>See what could happen next.</h1>
+      <header className="home-header">
+        <div className="brand-row home-brand-row">
+          <div className="brand-mark" aria-hidden="true">PA</div>
+          <div>
+            <p className="eyebrow">Possibility Atlas</p>
+            <h1>See what could happen next—and what it could change.</h1>
+          </div>
         </div>
+        <ProductNavigation page="home" />
+        <AtlasTeachingLine />
       </header>
 
       {storageWarning ? <p className="notice warning-notice" role="status">{storageWarning}</p> : null}
 
-      <WorldInMotion />
+      <WorldInMotion world={world} envelope={envelope} />
 
-      {recent.length > 0 ? (
-        <section className="recent-section" aria-labelledby="recent-heading">
-          <div className="section-heading-row">
-            <div>
-              <p className="eyebrow">Saved only in this browser</p>
-              <h2 id="recent-heading">Recent atlases</h2>
-            </div>
+      <section id="saved" className="recent-section saved-section" aria-labelledby="recent-heading">
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow">Saved in this browser</p>
+            <h2 id="recent-heading">Saved atlases</h2>
           </div>
+          {recent.length > 0 ? <span className="saved-atlas-count">{recent.length} recent</span> : null}
+        </div>
+        {recent.length > 0 ? (
           <div className="recent-grid">
             {recent.map((atlas) => (
-              <button key={atlas.id} type="button" className="recent-card" onClick={() => router.push(`/atlas/${atlas.id}${atlas.focusedNodeId ? `?node=${atlas.focusedNodeId}` : ""}`)}>
+              <button
+                key={atlas.id}
+                type="button"
+                className="recent-card"
+                disabled={world.refreshing || openingSavedAtlasId !== null}
+                onClick={() => openSavedAtlas(atlas.id, atlas.focusedNodeId)}
+              >
                 <span>{atlas.headline.title}</span>
-                <small>{atlasStatusLabel(atlas.status)} · {Object.keys(atlas.nodes).length + 1} nodes</small>
+                <small>
+                  {openingSavedAtlasId === atlas.id ? "Opening saved atlas…" : atlasStatusLabel(atlas.status)}
+                  {openingSavedAtlasId !== atlas.id ? ` · ${Object.keys(atlas.nodes).length + 1} nodes` : ""}
+                </small>
               </button>
             ))}
           </div>
-        </section>
-      ) : null}
+        ) : (
+          <div className="saved-empty-state">
+            <strong>No saved atlases yet.</strong>
+            <p>Open a connected event or build a standalone headline atlas. Your recent work will return here.</p>
+          </div>
+        )}
+      </section>
 
-      <section className="headline-panel" aria-labelledby="headline-heading" aria-busy={feedState === "loading"}>
-        <div className="step-strip"><span id="headline-heading">Headline</span></div>
-        <p className="instruction">Choose a headline to explore its possible paths.</p>
+      <section id="headlines" className="headline-panel standalone-headline-panel" aria-labelledby="headline-heading" aria-busy={feedState === "loading"}>
+        <div className="step-strip"><span id="headline-heading">Headlines · Standalone exploration</span></div>
+        <div className="standalone-explainer">
+          <strong>Want to investigate one story on its own?</strong>
+          <p>A standalone atlas starts from a single headline. It freezes and checks that story’s facts, but it is not connected to the world view or its cross-event ripples.</p>
+        </div>
+        {world.refreshing ? (
+          <p className="notice world-notice" role="status">The world scan is finishing first. Standalone atlas launches will unlock when it completes.</p>
+        ) : null}
         {message ? (
           <div className={`notice ${feedState === "error" ? "error-notice" : "stale-notice"}`} role={feedState === "error" ? "alert" : "status"}>
             <span>{message}</span>
@@ -187,9 +243,13 @@ export function HeadlinePicker() {
         ) : headlines.length > 0 ? (
           <div className="headline-grid" aria-busy={selectedHeadlineId !== null}>
             {headlines.map((headline) => (
-              <button className="headline-card" key={headline.id} type="button" disabled={selectedHeadlineId !== null} onClick={() => chooseHeadline(headline)}>
-                <span>{selectedHeadlineId === headline.id ? "Opening atlas…" : headline.title}</span>
+              <button className="headline-card" key={headline.id} type="button" disabled={selectedHeadlineId !== null || world.refreshing} onClick={() => chooseHeadline(headline)}>
+                <span className="headline-card-title">{headline.title}</span>
                 <small>{headline.publisher ?? "Google News source"} · {formatDate(headline.publishedAt)}</small>
+                <span className="headline-card-action">
+                  {selectedHeadlineId === headline.id ? "Opening standalone atlas…" : "Build standalone atlas"}
+                  {selectedHeadlineId !== headline.id ? <span aria-hidden="true">→</span> : null}
+                </span>
               </button>
             ))}
           </div>

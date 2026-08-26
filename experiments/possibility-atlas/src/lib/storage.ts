@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  MAX_ATLAS_CALLS,
   MAX_SAVED_ATLASES,
   StorageEnvelopeSchema,
   type AtlasGraph,
@@ -60,10 +61,60 @@ export function createStorageEnvelope({
 }
 
 export function parseStorageEnvelope(raw: string) {
+  return parseStorageEnvelopeWithMigration(raw).parsed;
+}
+
+function clampLegacyCallCounts(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { value, migrated: false };
+  }
+  const envelope = value as Record<string, unknown>;
+  if (
+    envelope.version !== 1 ||
+    !envelope.atlases ||
+    typeof envelope.atlases !== "object" ||
+    Array.isArray(envelope.atlases)
+  ) {
+    return { value, migrated: false };
+  }
+
+  let migrated = false;
+  const atlases = Object.fromEntries(
+    Object.entries(envelope.atlases as Record<string, unknown>).map(([id, atlas]) => {
+      if (!atlas || typeof atlas !== "object" || Array.isArray(atlas)) {
+        return [id, atlas];
+      }
+      const callsUsed = (atlas as Record<string, unknown>).callsUsed;
+      if (
+        typeof callsUsed !== "number" ||
+        !Number.isInteger(callsUsed) ||
+        callsUsed <= MAX_ATLAS_CALLS ||
+        callsUsed > 16
+      ) {
+        return [id, atlas];
+      }
+      migrated = true;
+      return [id, { ...(atlas as Record<string, unknown>), callsUsed: MAX_ATLAS_CALLS }];
+    }),
+  );
+  return {
+    value: migrated ? { ...envelope, atlases } : value,
+    migrated,
+  };
+}
+
+function parseStorageEnvelopeWithMigration(raw: string) {
   try {
-    return StorageEnvelopeSchema.safeParse(JSON.parse(raw));
+    const normalized = clampLegacyCallCounts(JSON.parse(raw));
+    return {
+      parsed: StorageEnvelopeSchema.safeParse(normalized.value),
+      migrated: normalized.migrated,
+    };
   } catch {
-    return StorageEnvelopeSchema.safeParse(null);
+    return {
+      parsed: StorageEnvelopeSchema.safeParse(null),
+      migrated: false,
+    };
   }
 }
 
@@ -74,7 +125,7 @@ export function loadStorageEnvelope(
   try {
     const raw = storage.getItem(ATLAS_STORAGE_KEY);
     if (!raw) return { envelope: createStorageEnvelope(fallback), warning: null };
-    const parsed = parseStorageEnvelope(raw);
+    const { parsed, migrated } = parseStorageEnvelopeWithMigration(raw);
     if (parsed.success) {
       const validAtlases: Record<string, AtlasGraph> = {};
       let removedInvalidAtlas = false;
@@ -99,7 +150,9 @@ export function loadStorageEnvelope(
         envelope: pruneToMaximum(structurallyValid),
         warning: removedInvalidAtlas
           ? "One or more invalid saved atlases were removed to protect this browser workspace."
-          : null,
+          : migrated
+            ? "Saved atlases were kept; any atlas already above the new limit is now at the 10-call limit."
+            : null,
       };
     }
     return {

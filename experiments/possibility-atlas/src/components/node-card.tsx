@@ -4,9 +4,8 @@ import type { PossibilityNode } from "../lib/contracts";
 const terminalLabels: Partial<Record<Exclude<ExpansionAvailability, { allowed: true }>["reason"], string>> = {
   already_expanded: "View branches",
   generating: "Generating…",
-  leaf: "View leaf",
-  max_depth: "View depth 5",
-  call_budget: "Call limit reached",
+  leaf: "End of path",
+  max_depth: "Level 5 reached",
   node_budget: "Node limit reached",
   graph_unavailable: "Unavailable",
 };
@@ -20,6 +19,9 @@ export function NodeCard({
   interactionDisabled = false,
   hideAction = false,
   actionLabel,
+  errorRetryable = true,
+  onChooseAnother,
+  scenarioFocus = false,
 }: {
   node: PossibilityNode;
   current?: boolean;
@@ -29,20 +31,25 @@ export function NodeCard({
   interactionDisabled?: boolean;
   hideAction?: boolean;
   actionLabel?: string;
+  errorRetryable?: boolean;
+  onChooseAnother?: () => void;
+  scenarioFocus?: boolean;
 }) {
   const resolvedActionLabel =
-    actionLabel ??
-    (node.status === "error"
-      ? "Try again"
-      : availability.allowed
-        ? "Explore this path"
-        : terminalLabels[availability.reason]);
+    node.status === "error"
+      ? errorRetryable
+        ? "Try again"
+        : "Choose another path"
+      : actionLabel ??
+        (availability.allowed
+          ? "Explore this path"
+          : terminalLabels[availability.reason]);
   return (
-    <article className={`node-card${current ? " current-node" : ""}${node.status === "leaf" ? " leaf-node" : ""}`}>
+    <article className={`node-card${current ? " current-node" : ""}${node.status === "leaf" ? " leaf-node" : ""}${scenarioFocus ? " selected-scenario-card scenario-focus-anchor" : ""}`}>
       <div className="node-meta">
-        <span>Depth {node.depth}</span>
+        <span>Level {node.depth}</span>
         <span className={`node-status status-${node.status}`}>
-          {node.status === "leaf" ? "Leaf" : node.status === "generating" ? "Exploring" : node.status === "error" ? "Error" : "Possibility"}
+          {node.status === "leaf" ? "End of path" : node.status === "generating" ? "Exploring" : node.status === "error" ? "Error" : "Possibility"}
         </span>
       </div>
       <h2>{node.title}</h2>
@@ -71,7 +78,13 @@ export function NodeCard({
           type="button"
           className="node-action"
           disabled={interactionDisabled || node.status === "generating" || (!availability.allowed && availability.reason === "graph_unavailable")}
-          onClick={node.status === "error" ? onRetry : onActivate}
+          onClick={
+            node.status === "error"
+              ? errorRetryable
+                ? onRetry
+                : onChooseAnother
+              : onActivate
+          }
         >
           {resolvedActionLabel}
           {node.status !== "generating" ? <span aria-hidden="true">→</span> : null}

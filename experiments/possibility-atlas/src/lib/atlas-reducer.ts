@@ -24,6 +24,7 @@ export type AtlasAction =
       type: "start_failed";
       message: string;
       callConsumed: boolean;
+      retryable?: boolean;
       at: string;
     }
   | { type: "expansion_requested"; parentId: string; at: string }
@@ -38,9 +39,11 @@ export type AtlasAction =
       parentId: string;
       message: string;
       callConsumed: boolean;
+      retryable?: boolean;
       at: string;
     }
   | { type: "focus_changed"; nodeId: string | null }
+  | { type: "calls_reconciled"; callsUsed: number; at: string }
   | { type: "ripple_call_recorded"; at: string }
   | { type: "recover_interrupted"; at: string };
 
@@ -54,7 +57,6 @@ export type ExpansionAvailability =
         | "generating"
         | "leaf"
         | "max_depth"
-        | "call_budget"
         | "node_budget";
     };
 
@@ -175,6 +177,7 @@ export function createAtlasGraph({
     focusedNodeId: null,
     callsUsed: 0,
     errorMessage: null,
+    errorRetryable: null,
     insufficientReason: null,
     insufficientSummary: null,
     insufficientSources: [],
@@ -198,9 +201,6 @@ export function expansionAvailability(
   if (node.status === "generating") return { allowed: false, reason: "generating" };
   if (node.status === "leaf") return { allowed: false, reason: "leaf" };
   if (node.depth >= 5) return { allowed: false, reason: "max_depth" };
-  if (graph.callsUsed >= MAX_ATLAS_CALLS) {
-    return { allowed: false, reason: "call_budget" };
-  }
   const remaining = remainingNodeCapacity(graph);
   if (remaining < 3) return { allowed: false, reason: "node_budget" };
   return { allowed: true, remainingNodeCapacity: remaining };
@@ -249,6 +249,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
         ...current,
         status: "verifying",
         errorMessage: null,
+        errorRetryable: null,
         insufficientReason: null,
         insufficientSummary: null,
         insufficientSources: [],
@@ -267,6 +268,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
           focusedNodeId: null,
           callsUsed,
           errorMessage: null,
+          errorRetryable: null,
           insufficientReason: action.response.reason,
           insufficientSummary: action.response.summary,
           insufficientSources: action.response.sources,
@@ -301,6 +303,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
         focusedNodeId: null,
         callsUsed,
         errorMessage: null,
+        errorRetryable: null,
         insufficientReason: null,
         insufficientSummary: null,
         insufficientSources: [],
@@ -314,6 +317,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
         status: "error",
         callsUsed: callsAfter(current, action.callConsumed),
         errorMessage: action.message.slice(0, 300),
+        errorRetryable: action.retryable ?? true,
         updatedAt: action.at,
       });
 
@@ -331,6 +335,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
             ...parent,
             status: "generating",
             errorMessage: null,
+            errorRetryable: null,
           },
         },
         updatedAt: action.at,
@@ -378,6 +383,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
               ...parent,
               status: "leaf",
               errorMessage: null,
+              errorRetryable: null,
               leafReason: action.response.reason,
             },
           },
@@ -399,6 +405,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
             ...parent,
             status: "ready",
             errorMessage: null,
+            errorRetryable: null,
             leafReason: null,
             childIds: nodes.map((node) => node.id),
           },
@@ -423,6 +430,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
             ...parent,
             status: "error",
             errorMessage: action.message.slice(0, 300),
+            errorRetryable: action.retryable ?? true,
           },
         },
         callsUsed: callsAfter(current, action.callConsumed),
@@ -435,6 +443,22 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
         throw new AtlasReducerError("The requested focus node is unavailable.");
       }
       return parseGraph({ ...current, focusedNodeId: action.nodeId });
+
+    case "calls_reconciled": {
+      if (
+        !Number.isInteger(action.callsUsed) ||
+        action.callsUsed < 0 ||
+        action.callsUsed > MAX_ATLAS_CALLS
+      ) {
+        throw new AtlasReducerError("The authoritative atlas call count is invalid.");
+      }
+      if (action.callsUsed <= current.callsUsed) return current;
+      return parseGraph({
+        ...current,
+        callsUsed: action.callsUsed,
+        updatedAt: action.at,
+      });
+    }
 
     case "ripple_call_recorded":
       return parseGraph({
@@ -455,6 +479,7 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
               ...node,
               status: "error" as const,
               errorMessage: "This exploration was interrupted. Try again.",
+              errorRetryable: true,
             },
           ];
         }),

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { MAX_ATLAS_CALLS } from "../contracts";
 import { AtlasApiError } from "./http";
+import type { WorldRepository } from "./world-repository";
 
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60 * 60 * 1_000;
@@ -26,6 +27,11 @@ type InstallationState = {
 
 const states = new Map<string, InstallationState>();
 
+export type AtlasCallLedger = Pick<
+  WorldRepository,
+  "reserveAtlasCallUsage" | "releaseAtlasCallUsage"
+>;
+
 function stateFor(installationId: string) {
   let state = states.get(installationId);
   if (!state) {
@@ -38,6 +44,29 @@ function stateFor(installationId: string) {
     states.set(installationId, state);
   }
   return state;
+}
+
+export function seedAtlasCallCount(input: {
+  installationId: string;
+  graphId: string;
+  callsUsed: number;
+}) {
+  if (
+    !Number.isInteger(input.callsUsed) ||
+    input.callsUsed < 0 ||
+    input.callsUsed > MAX_ATLAS_CALLS
+  ) {
+    throw new AtlasApiError({
+      code: "internal_error",
+      message: "The saved atlas call count is invalid.",
+      status: 500,
+      retryable: false,
+      callConsumed: false,
+    });
+  }
+  const state = stateFor(input.installationId);
+  const existing = state.atlasCalls.get(input.graphId) ?? 0;
+  state.atlasCalls.set(input.graphId, Math.max(existing, input.callsUsed));
 }
 
 function stableValue(value: unknown): unknown {
@@ -78,6 +107,7 @@ export async function runWithAtlasRequestGuard<T>(options: {
   key: string;
   graphId?: string;
   consumesAtlasCall?: boolean;
+  atlasCallLedger?: AtlasCallLedger;
   operation: () => Promise<T>;
   now?: () => number;
 }): Promise<{ value: T; deduplicated: boolean }> {
@@ -122,66 +152,111 @@ export async function runWithAtlasRequestGuard<T>(options: {
     });
   }
 
-  let reservedAtlasCall = false;
-  if (options.consumesAtlasCall) {
-    if (!options.graphId) {
-      throw new AtlasApiError({
-        code: "internal_error",
-        message: "The request could not be completed.",
-        status: 500,
-        retryable: false,
-        callConsumed: false,
-      });
+  const promise = (async () => {
+    let reservedAtlasCall = false;
+    let reservedPersistentCall = false;
+    if (options.consumesAtlasCall) {
+      if (!options.graphId) {
+        throw new AtlasApiError({
+          code: "internal_error",
+          message: "The request could not be completed.",
+          status: 500,
+          retryable: false,
+          callConsumed: false,
+        });
+      }
+      const callsUsed = state.atlasCalls.get(options.graphId) ?? 0;
+      if (callsUsed >= MAX_ATLAS_CALLS) {
+        throw new AtlasApiError({
+          code: "atlas_call_limit_reached",
+          message: `This atlas has reached its ${MAX_ATLAS_CALLS}-call analysis limit.`,
+          status: 409,
+          retryable: false,
+          callConsumed: false,
+        });
+      }
+      if (options.atlasCallLedger) {
+        const reservation =
+          await options.atlasCallLedger.reserveAtlasCallUsage({
+            installationKey: atlasSafetyIdentifier(options.installationId),
+            graphId: options.graphId,
+            limit: MAX_ATLAS_CALLS,
+          });
+        if (!reservation.ownerMatches) {
+          throw new AtlasApiError({
+            code: "graph_conflict",
+            message:
+              "This graph identifier belongs to another local installation.",
+            status: 409,
+            retryable: false,
+            callConsumed: false,
+          });
+        }
+        if (!reservation.reserved) {
+          state.atlasCalls.set(options.graphId, reservation.callsUsed);
+          throw new AtlasApiError({
+            code: "atlas_call_limit_reached",
+            message: `This atlas has reached its ${MAX_ATLAS_CALLS}-call analysis limit.`,
+            status: 409,
+            retryable: false,
+            callConsumed: false,
+          });
+        }
+        state.atlasCalls.set(options.graphId, reservation.callsUsed);
+        reservedPersistentCall = true;
+      } else {
+        state.atlasCalls.set(options.graphId, callsUsed + 1);
+      }
+      reservedAtlasCall = true;
     }
-    const callsUsed = state.atlasCalls.get(options.graphId) ?? 0;
-    if (callsUsed >= MAX_ATLAS_CALLS) {
-      throw new AtlasApiError({
-        code: "atlas_call_limit_reached",
-        message: "This atlas has reached its 16-call analysis limit.",
-        status: 409,
-        retryable: false,
-        callConsumed: false,
+
+    const releaseReservedAtlasCall = async () => {
+      if (!reservedAtlasCall || !options.graphId) return;
+      let callsUsed = state.atlasCalls.get(options.graphId) ?? 1;
+      if (reservedPersistentCall && options.atlasCallLedger) {
+        const released = await options.atlasCallLedger.releaseAtlasCallUsage({
+          installationKey: atlasSafetyIdentifier(options.installationId),
+          graphId: options.graphId,
+        });
+        if (released.ownerMatches) callsUsed = released.callsUsed + 1;
+        reservedPersistentCall = false;
+      }
+      if (callsUsed <= 1) state.atlasCalls.delete(options.graphId);
+      else state.atlasCalls.set(options.graphId, callsUsed - 1);
+      reservedAtlasCall = false;
+    };
+
+    state.timestamps.push(now);
+    try {
+      const value = await Promise.resolve().then(options.operation);
+      if (
+        reservedAtlasCall &&
+        !(
+          value !== null &&
+          typeof value === "object" &&
+          "meta" in value &&
+          (value as { meta?: { callConsumed?: unknown } }).meta
+            ?.callConsumed === true
+        )
+      ) {
+        await releaseReservedAtlasCall();
+      }
+      state.completed.set(options.key, {
+        value,
+        expiresAt: (options.now?.() ?? Date.now()) + COMPLETED_CACHE_TTL_MS,
       });
+      return value;
+    } catch (error) {
+      if (error instanceof AtlasApiError && !error.callConsumed) {
+        await releaseReservedAtlasCall();
+      }
+      throw error;
     }
-    state.atlasCalls.set(options.graphId, callsUsed + 1);
-    reservedAtlasCall = true;
-  }
-
-  const releaseReservedAtlasCall = () => {
-    if (!reservedAtlasCall || !options.graphId) return;
-    const callsUsed = state.atlasCalls.get(options.graphId) ?? 1;
-    if (callsUsed <= 1) state.atlasCalls.delete(options.graphId);
-    else state.atlasCalls.set(options.graphId, callsUsed - 1);
-    reservedAtlasCall = false;
-  };
-
-  state.timestamps.push(now);
-  const promise = Promise.resolve().then(options.operation);
+  })();
   state.active = { key: options.key, promise };
 
   try {
-    const value = await promise;
-    if (
-      reservedAtlasCall &&
-      !(
-        value !== null &&
-        typeof value === "object" &&
-        "meta" in value &&
-        (value as { meta?: { callConsumed?: unknown } }).meta?.callConsumed === true
-      )
-    ) {
-      releaseReservedAtlasCall();
-    }
-    state.completed.set(options.key, {
-      value,
-      expiresAt: (options.now?.() ?? Date.now()) + COMPLETED_CACHE_TTL_MS,
-    });
-    return { value, deduplicated: false };
-  } catch (error) {
-    if (error instanceof AtlasApiError && !error.callConsumed) {
-      releaseReservedAtlasCall();
-    }
-    throw error;
+    return { value: await promise, deduplicated: false };
   } finally {
     if (state.active?.promise === promise) state.active = null;
   }

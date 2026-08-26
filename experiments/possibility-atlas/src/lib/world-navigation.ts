@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import type { WorldEventSummary } from "./world-contracts";
+import { MAX_ATLAS_CALLS } from "./contracts";
+import type { RippleEdge, WorldEventSummary } from "./world-contracts";
 import { atlasReducer, createAtlasGraph } from "./atlas-reducer";
 import {
   ATLAS_STORAGE_KEY,
@@ -14,6 +15,7 @@ import {
   WORLD_STORAGE_KEY,
   appendWorldJourney,
   associateWorldAtlas,
+  clearWorldJourney,
   focusWorldEvent,
   loadWorldStorageEnvelope,
   pruneWorldStorage,
@@ -33,6 +35,18 @@ const RippleAccountingJournalSchema = z
     version: z.literal(1),
     graphId: z.string().uuid(),
     analysisKey: z.string().min(73).max(110),
+    previousCallsUsed: z.number().int().min(0).max(MAX_ATLAS_CALLS),
+    nextCallsUsed: z.number().int().min(0).max(MAX_ATLAS_CALLS),
+    phase: z.enum(["requesting", "pending", "counting"]).default("counting"),
+    at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+const LegacyRippleAccountingJournalSchema = z
+  .object({
+    version: z.literal(1),
+    graphId: z.string().uuid(),
+    analysisKey: z.string().min(73).max(110),
     previousCallsUsed: z.number().int().min(0).max(15),
     nextCallsUsed: z.number().int().min(1).max(16),
     phase: z.enum(["pending", "counting"]).default("counting"),
@@ -47,10 +61,113 @@ export type OpenWorldEventOptions = {
   graphId?: string;
 };
 
+export type CrossCurrentNavigationInput = {
+  edge: RippleEdge;
+  source: WorldEventSummary;
+  target: WorldEventSummary;
+};
+
 export function atlasHref(graphId: string, nodeId?: string | null) {
   return nodeId
     ? `/atlas/${encodeURIComponent(graphId)}?node=${encodeURIComponent(nodeId)}`
     : `/atlas/${encodeURIComponent(graphId)}`;
+}
+
+export function openSavedAtlasDirectly(
+  storage: StorageLike,
+  {
+    graphId,
+    nodeId,
+    at = new Date().toISOString(),
+  }: { graphId: string; nodeId?: string | null; at?: string },
+) {
+  const atlasLoaded = loadStorageEnvelope(storage);
+  if (!atlasLoaded.envelope.atlases[graphId]) {
+    throw new Error("The saved atlas is unavailable.");
+  }
+  const worldRaw = storage.getItem(WORLD_STORAGE_KEY);
+  const worldLoaded = loadWorldStorageEnvelope(storage, at);
+  const association = worldLoaded.envelope.graphAssociations[graphId];
+  if (!association) return { href: atlasHref(graphId, nodeId), worldEnvelope: worldLoaded.envelope };
+
+  const focused = focusWorldEvent(
+    clearWorldJourney(worldLoaded.envelope, graphId, at),
+    association.eventId,
+    at,
+  );
+  try {
+    const worldEnvelope = saveWorldStorageEnvelope(storage, focused);
+    return { href: atlasHref(graphId, nodeId), worldEnvelope };
+  } catch (error) {
+    try {
+      restoreStorageValue(storage, WORLD_STORAGE_KEY, worldRaw);
+    } catch {
+      throw new Error("Direct atlas navigation failed and its world context could not be restored.");
+    }
+    throw error;
+  }
+}
+
+export function crossCurrentOpenOptions(
+  atlasEnvelope: ReturnType<typeof loadStorageEnvelope>["envelope"],
+  worldEnvelope: ReturnType<typeof loadWorldStorageEnvelope>["envelope"],
+  { edge, source, target }: CrossCurrentNavigationInput,
+): Pick<OpenWorldEventOptions, "sourceGraphId" | "transition"> | null {
+  if (edge.sourceEventId !== source.id || edge.targetEventId !== target.id) return null;
+  const sourceGraphId = Object.keys(atlasEnvelope.atlases).find((graphId) => {
+    const association = worldEnvelope.graphAssociations[graphId];
+    const graph = atlasEnvelope.atlases[graphId];
+    return (
+      association?.eventId === edge.sourceEventId &&
+      Boolean(graph?.nodes[edge.sourceScenarioNodeId])
+    );
+  });
+  if (!sourceGraphId) return null;
+  return {
+    sourceGraphId,
+    transition: {
+      sourceGraphId,
+      sourceEventId: source.id,
+      sourceEventTitle: source.canonicalTitle,
+      sourceScenarioNodeId: edge.sourceScenarioNodeId,
+      sourceScenarioTitle: edge.sourceScenarioTitle,
+      sourceScenarioSummary: edge.sourceScenarioSummary,
+      targetEventId: target.id,
+      targetEventTitle: target.canonicalTitle,
+      influence: edge.influence,
+      mechanism: edge.mechanism,
+    },
+  };
+}
+
+export function crossCurrentIdsWithCausalContext(
+  storage: StorageLike,
+  crossCurrents: readonly CrossCurrentNavigationInput[],
+) {
+  const atlasEnvelope = loadStorageEnvelope(storage).envelope;
+  const worldEnvelope = loadWorldStorageEnvelope(storage).envelope;
+  return new Set(
+    crossCurrents
+      .filter((crossCurrent) =>
+        crossCurrentOpenOptions(atlasEnvelope, worldEnvelope, crossCurrent),
+      )
+      .map(({ edge }) => edge.id),
+  );
+}
+
+export function openCrossCurrentEvent(
+  storage: StorageLike,
+  crossCurrent: CrossCurrentNavigationInput,
+) {
+  const options = crossCurrentOpenOptions(
+    loadStorageEnvelope(storage).envelope,
+    loadWorldStorageEnvelope(storage).envelope,
+    crossCurrent,
+  );
+  return {
+    ...openWorldEvent(storage, crossCurrent.target, options ?? {}),
+    continuedCausally: Boolean(options),
+  };
 }
 
 function restoreStorageValue(
@@ -115,6 +232,9 @@ export function openWorldEvent(
   let reused = Boolean(graphId);
 
   try {
+    if (Boolean(options.transition) !== Boolean(options.sourceGraphId)) {
+      throw new Error("Conditional event navigation needs complete source context.");
+    }
     if (!graphId) {
       graphId = options.graphId ?? crypto.randomUUID();
       const graph = createAtlasGraph({ id: graphId, headline: event.leadHeadline, now });
@@ -128,6 +248,7 @@ export function openWorldEvent(
       graphId,
       at: now,
       eventRevision: event.revision,
+      canonicalTitle: event.canonicalTitle,
       leadHeadlineFingerprint,
     });
     worldEnvelope = focusWorldEvent(worldEnvelope, event.id, now);
@@ -139,6 +260,8 @@ export function openWorldEvent(
         transition: options.transition,
         at: now,
       });
+    } else {
+      worldEnvelope = clearWorldJourney(worldEnvelope, graphId, now);
     }
 
     worldEnvelope = pruneWorldStorage(
@@ -198,6 +321,7 @@ export function restartWorldAtlas(
     nextGraphId,
     at,
     eventRevision: event.revision,
+    canonicalTitle: event.canonicalTitle,
     leadHeadlineFingerprint: worldLeadHeadlineFingerprint(event.leadHeadline),
   });
 
@@ -250,7 +374,19 @@ function readRippleJournal(storage: StorageLike) {
   const raw = storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY);
   if (!raw) return null;
   try {
-    return RippleAccountingJournalSchema.parse(JSON.parse(raw));
+    const value = JSON.parse(raw) as unknown;
+    const parsed = RippleAccountingJournalSchema.safeParse(value);
+    if (parsed.success) return parsed.data;
+    const legacy = LegacyRippleAccountingJournalSchema.safeParse(value);
+    if (
+      legacy.success &&
+      (legacy.data.previousCallsUsed >= MAX_ATLAS_CALLS ||
+        legacy.data.nextCallsUsed > MAX_ATLAS_CALLS)
+    ) {
+      storage.removeItem(RIPPLE_ACCOUNTING_JOURNAL_KEY);
+      return null;
+    }
+    throw new Error("invalid journal");
   } catch {
     throw new Error("Ripple call accounting recovery data is unreadable.");
   }
@@ -287,14 +423,13 @@ export function beginRippleCallAttempt(
     };
   }
 
-  const next = atlasReducer(graph, { type: "ripple_call_recorded", at });
   writeRippleJournal(storage, {
     version: 1,
     graphId,
     analysisKey,
     previousCallsUsed: graph.callsUsed,
-    nextCallsUsed: next.callsUsed,
-    phase: "pending",
+    nextCallsUsed: graph.callsUsed,
+    phase: "requesting",
     at,
   });
   return {
@@ -306,7 +441,7 @@ export function beginRippleCallAttempt(
 }
 
 export function recoverRippleCallAccounting(storage: StorageLike) {
-  let journal = readRippleJournal(storage);
+  const journal = readRippleJournal(storage);
   if (!journal) return null;
   let atlasLoaded = loadStorageEnvelope(storage);
   const worldLoaded = loadWorldStorageEnvelope(storage, journal.at);
@@ -321,17 +456,9 @@ export function recoverRippleCallAccounting(storage: StorageLike) {
     return { graph, atlasEnvelope: atlasLoaded.envelope, worldEnvelope: worldLoaded.envelope };
   }
 
-  if (journal.phase === "pending") {
-    const next = atlasReducer(graph, {
-      type: "ripple_call_recorded",
-      at: journal.at,
-    });
-    journal = writeRippleJournal(storage, {
-      ...journal,
-      phase: "counting",
-      previousCallsUsed: graph.callsUsed,
-      nextCallsUsed: next.callsUsed,
-    });
+  if (journal.phase !== "counting") {
+    storage.removeItem(RIPPLE_ACCOUNTING_JOURNAL_KEY);
+    return { graph, atlasEnvelope: atlasLoaded.envelope, worldEnvelope: worldLoaded.envelope };
   }
 
   if (graph.callsUsed < journal.previousCallsUsed) {
@@ -398,7 +525,7 @@ export function recordRippleCallInBrowser(
   }
 
   const matching = readRippleJournal(storage);
-  if (!matching) {
+  if (!matching || matching.phase !== "counting") {
     const graph = atlasReducer(current, { type: "ripple_call_recorded", at });
     writeRippleJournal(storage, {
       version: 1,

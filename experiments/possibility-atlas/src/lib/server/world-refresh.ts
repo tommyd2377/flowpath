@@ -39,11 +39,22 @@ const refreshesByFingerprint = new Map<
 async function responseFromRepository(
   repository: WorldRepository,
   meta: WorldRefreshResponse["meta"],
+  feed: WorldRefreshResponse["feed"],
 ) {
   return WorldRefreshResponseSchema.parse({
     ...(await repository.getCatalogSnapshot()),
+    feed,
     meta,
   });
+}
+
+function feedStatus(feed: HeadlinesResponse): WorldRefreshResponse["feed"] {
+  return {
+    fetchedAt: feed.fetchedAt,
+    feedUpdatedAt: feed.feedUpdatedAt,
+    stale: feed.stale,
+    warning: feed.warning,
+  };
 }
 
 export async function refreshWorldCatalog(
@@ -59,6 +70,11 @@ export async function refreshWorldCatalog(
         mode: "fixture",
         callConsumed: false,
         cacheStatus: "hit",
+      }, {
+        fetchedAt: fixture.scannedAt,
+        feedUpdatedAt: fixture.scannedAt,
+        stale: false,
+        warning: null,
       });
     }
     await options.repository.commitClassification(fixture);
@@ -66,6 +82,11 @@ export async function refreshWorldCatalog(
       mode: "fixture",
       callConsumed: false,
       cacheStatus: "miss",
+    }, {
+      fetchedAt: fixture.scannedAt,
+      feedUpdatedAt: fixture.scannedAt,
+      stale: false,
+      warning: null,
     });
   }
 
@@ -73,6 +94,18 @@ export async function refreshWorldCatalog(
     throw new Error("Live world refresh dependencies are unavailable.");
   }
   const feed = await options.getHeadlines();
+  const currentFeedStatus = feedStatus(feed);
+  if (feed.stale) {
+    return responseFromRepository(
+      options.repository,
+      {
+        mode: "live",
+        callConsumed: false,
+        cacheStatus: "hit",
+      },
+      currentFeedStatus,
+    );
+  }
   const headlines: HeadlineItem[] = feed.items;
   const fingerprint = worldFeedFingerprint(headlines);
   const metadata = await options.repository.getCatalogMetadata();
@@ -81,7 +114,7 @@ export async function refreshWorldCatalog(
       mode: "live",
       callConsumed: false,
       cacheStatus: "hit",
-    });
+    }, currentFeedStatus);
   }
 
   const active = refreshesByFingerprint.get(fingerprint);
@@ -103,7 +136,7 @@ export async function refreshWorldCatalog(
             mode: "live",
             callConsumed: false,
             cacheStatus: "hit",
-          });
+          }, currentFeedStatus);
         }
         const scannedAt = (options.now?.() ?? new Date()).toISOString();
         const scannedAtMs = Date.parse(scannedAt);
@@ -130,7 +163,7 @@ export async function refreshWorldCatalog(
             mode: "live",
             callConsumed: true,
             cacheStatus: "miss",
-          });
+          }, currentFeedStatus);
         } catch (error) {
           throw new AtlasApiError({
             code: "world_catalog_write_failed",

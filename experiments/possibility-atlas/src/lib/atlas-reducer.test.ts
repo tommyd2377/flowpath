@@ -8,6 +8,7 @@ import type {
   PossibilityNode,
   StartAtlasResponse,
 } from "./contracts";
+import { MAX_ATLAS_CALLS } from "./contracts";
 import {
   AtlasReducerError,
   atlasReducer,
@@ -239,14 +240,32 @@ test("a leaf response closes only the requested path", () => {
   assert.equal(result.nodes[uuid(1)].status, "ready");
 });
 
-test("availability enforces call and node budgets", () => {
+test("availability permits a cache lookup at the call limit", () => {
   const graph = startedGraph();
   assert.equal(expansionAvailability(graph, uuid(1)).allowed, true);
-  const exhausted = { ...graph, callsUsed: 16 };
+  const exhausted = { ...graph, callsUsed: MAX_ATLAS_CALLS };
   assert.deepEqual(expansionAvailability(exhausted, uuid(1)), {
-    allowed: false,
-    reason: "call_budget",
+    allowed: true,
+    remainingNodeCapacity: 60,
   });
+});
+
+test("registration reconciliation raises the browser call count but never lowers it", () => {
+  const graph = startedGraph();
+  const reconciled = atlasReducer(graph, {
+    type: "calls_reconciled",
+    callsUsed: 4,
+    at: new Date(Date.parse(NOW) + 1_000).toISOString(),
+  });
+  assert.equal(reconciled.callsUsed, 4);
+  assert.equal(
+    atlasReducer(reconciled, {
+      type: "calls_reconciled",
+      callsUsed: 2,
+      at: new Date(Date.parse(NOW) + 2_000).toISOString(),
+    }).callsUsed,
+    4,
+  );
 });
 
 test("interrupted generation becomes a retryable inline error", () => {
@@ -258,4 +277,35 @@ test("interrupted generation becomes a retryable inline error", () => {
   const recovered = atlasReducer(graph, { type: "recover_interrupted", at: NOW });
   assert.equal(recovered.nodes[uuid(3)].status, "error");
   assert.match(recovered.nodes[uuid(3)].errorMessage ?? "", /interrupted/i);
+  assert.equal(recovered.nodes[uuid(3)].errorRetryable, true);
+});
+
+test("start and expansion failures preserve whether an explicit retry is safe", () => {
+  const initial = createAtlasGraph({ id: GRAPH_ID, headline, now: NOW });
+  const failedStart = atlasReducer(initial, {
+    type: "start_failed",
+    message: "The request cannot be retried.",
+    callConsumed: false,
+    retryable: false,
+    at: NOW,
+  });
+  assert.equal(failedStart.errorRetryable, false);
+  const retryingStart = atlasReducer(failedStart, { type: "start_requested", at: NOW });
+  assert.equal(retryingStart.errorRetryable, null);
+
+  const generating = atlasReducer(startedGraph(), {
+    type: "expansion_requested",
+    parentId: uuid(1),
+    at: NOW,
+  });
+  const failedExpansion = atlasReducer(generating, {
+    type: "expansion_failed",
+    parentId: uuid(1),
+    message: "This lineage is no longer valid.",
+    callConsumed: true,
+    retryable: false,
+    at: NOW,
+  });
+  assert.equal(failedExpansion.nodes[uuid(1)].errorRetryable, false);
+  assert.equal(failedExpansion.callsUsed, 2);
 });

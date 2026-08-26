@@ -23,12 +23,14 @@ import {
   getWorldAtlasModel,
   resolveAtlasServerMode,
 } from "@/lib/server/openai-client";
-import { runWithAtlasRequestGuard } from "@/lib/server/request-guard";
+import { runAtlasModelOperation } from "@/lib/server/atlas-model-operation";
+import { getOptionalRawAtlasCallLedger } from "@/lib/server/optional-call-ledger";
 import {
   getRawGenerationTemplate,
   putRawGenerationTemplate,
 } from "@/lib/server/raw-generation-cache";
 import { createStartGenerationTemplateWithOpenAI } from "@/lib/server/verify";
+import { persistVerifiedWorldSnapshot } from "@/lib/server/world-verification";
 import { getWorldRepository } from "@/lib/server/world-db";
 
 export const runtime = "nodejs";
@@ -84,15 +86,17 @@ export async function POST(request: Request) {
     const model = worldEvent ? getWorldAtlasModel() : getAtlasModel();
     if (mode === "fixture") {
       const response = createFixtureStartResponse(input);
-      const registered = registerStartedGraph(input, response, { model });
-      if (repository && worldEvent && registered.kind === "atlas") {
-        try {
-          await repository.markEventVerified(worldEvent.id, registered.snapshot);
-        } catch (error) {
-          throw persistenceError(error, false);
-        }
+      if (repository && worldEvent && response.kind === "atlas") {
+        await persistVerifiedWorldSnapshot({
+          repository,
+          event: worldEvent,
+          snapshot: response.snapshot,
+          callConsumed: false,
+        });
       }
-      return jsonResponse(registered, { mode });
+      return jsonResponse(registerStartedGraph(input, response, { model }), {
+        mode,
+      });
     }
 
     const source = worldEvent
@@ -121,11 +125,13 @@ export async function POST(request: Request) {
         capturedAt: cached.createdAt,
       });
     } else {
-      const guarded = await runWithAtlasRequestGuard({
+      const guarded = await runAtlasModelOperation({
         installationId: input.installationId,
         key: cacheKey,
         graphId: input.graphId,
-        consumesAtlasCall: true,
+        resolveCallLedger: repository
+          ? async () => repository
+          : getOptionalRawAtlasCallLedger,
         operation: async () => {
           const template = await createStartGenerationTemplateWithOpenAI(input, {
             adapter: getAtlasResponsesAdapter(),
@@ -168,11 +174,12 @@ export async function POST(request: Request) {
     }
 
     if (repository && worldEvent && response.kind === "atlas") {
-      try {
-        await repository.markEventVerified(worldEvent.id, response.snapshot);
-      } catch (error) {
-        throw persistenceError(error, response.meta.callConsumed);
-      }
+      await persistVerifiedWorldSnapshot({
+        repository,
+        event: worldEvent,
+        snapshot: response.snapshot,
+        callConsumed: response.meta.callConsumed,
+      });
     }
     return jsonResponse(registerStartedGraph(input, response, { model }), {
       mode,

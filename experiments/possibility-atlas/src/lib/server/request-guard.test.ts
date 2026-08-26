@@ -3,9 +3,12 @@ import test from "node:test";
 
 import { AtlasApiError } from "./http";
 import {
+  atlasSafetyIdentifier,
   resetAtlasRequestGuardForTests,
   runWithAtlasRequestGuard,
+  seedAtlasCallCount,
 } from "./request-guard";
+import { createMemoryWorldRepository } from "./world-repository";
 
 test.beforeEach(() => resetAtlasRequestGuardForTests());
 
@@ -97,8 +100,8 @@ test("the twenty-first unique request in an hour is rate limited", async () => {
   );
 });
 
-test("the seventeenth live model request for one atlas is rejected", async () => {
-  for (let index = 0; index < 16; index += 1) {
+test("the eleventh live model request for one atlas is rejected", async () => {
+  for (let index = 0; index < 10; index += 1) {
     await runWithAtlasRequestGuard({
       installationId: "atlas-limit-install",
       graphId: "atlas-a",
@@ -115,7 +118,7 @@ test("the seventeenth live model request for one atlas is rejected", async () =>
         installationId: "atlas-limit-install",
         graphId: "atlas-a",
         consumesAtlasCall: true,
-        key: "atlas-a-16",
+        key: "atlas-a-10",
         operation: async () => ({ meta: { callConsumed: true } }),
         now: () => 2_000,
       }),
@@ -136,6 +139,43 @@ test("the seventeenth live model request for one atlas is rejected", async () =>
     now: () => 2_000,
   });
   assert.equal(otherAtlas.deduplicated, false);
+});
+
+test("restored call counts seed monotonically and preserve the ten-call cap", async () => {
+  seedAtlasCallCount({
+    installationId: "restored-install",
+    graphId: "restored-atlas",
+    callsUsed: 8,
+  });
+  seedAtlasCallCount({
+    installationId: "restored-install",
+    graphId: "restored-atlas",
+    callsUsed: 3,
+  });
+
+  for (let index = 8; index < 10; index += 1) {
+    await runWithAtlasRequestGuard({
+      installationId: "restored-install",
+      graphId: "restored-atlas",
+      consumesAtlasCall: true,
+      key: `restored-${index}`,
+      operation: async () => ({ meta: { callConsumed: true } }),
+    });
+  }
+  await assert.rejects(
+    () =>
+      runWithAtlasRequestGuard({
+        installationId: "restored-install",
+        graphId: "restored-atlas",
+        consumesAtlasCall: true,
+        key: "restored-10",
+        operation: async () => ({ meta: { callConsumed: true } }),
+      }),
+    (error: unknown) =>
+      error instanceof AtlasApiError &&
+      error.code === "atlas_call_limit_reached" &&
+      /10-call/.test(error.message),
+  );
 });
 
 test("requests that fail before a model call do not consume the atlas budget", async () => {
@@ -165,4 +205,83 @@ test("requests that fail before a model call do not consume the atlas budget", a
     operation: async () => ({ meta: { callConsumed: true } }),
   });
   assert.equal(result.deduplicated, false);
+});
+
+test("the persistent ledger survives guard resets and ignores browser rollback", async () => {
+  const repository = createMemoryWorldRepository();
+  const installationId = "persistent-install";
+  const graphId = "persistent-atlas";
+  await repository.seedAtlasCallUsage({
+    installationKey: atlasSafetyIdentifier(installationId),
+    graphId,
+    callsUsed: 9,
+  });
+
+  resetAtlasRequestGuardForTests();
+  seedAtlasCallCount({ installationId, graphId, callsUsed: 1 });
+  await runWithAtlasRequestGuard({
+    installationId,
+    graphId,
+    consumesAtlasCall: true,
+    atlasCallLedger: repository,
+    key: "persistent-tenth",
+    operation: async () => ({ meta: { callConsumed: true } }),
+  });
+
+  resetAtlasRequestGuardForTests();
+  seedAtlasCallCount({ installationId, graphId, callsUsed: 0 });
+  await assert.rejects(
+    () =>
+      runWithAtlasRequestGuard({
+        installationId,
+        graphId,
+        consumesAtlasCall: true,
+        atlasCallLedger: repository,
+        key: "persistent-eleventh",
+        operation: async () => ({ meta: { callConsumed: true } }),
+      }),
+    (error: unknown) =>
+      error instanceof AtlasApiError &&
+      error.code === "atlas_call_limit_reached",
+  );
+});
+
+test("a persistent reservation rolls back only when no model call was consumed", async () => {
+  const repository = createMemoryWorldRepository();
+  const installationId = "rollback-install";
+  const graphId = "rollback-atlas";
+  await repository.seedAtlasCallUsage({
+    installationKey: atlasSafetyIdentifier(installationId),
+    graphId,
+    callsUsed: 9,
+  });
+
+  await assert.rejects(() =>
+    runWithAtlasRequestGuard({
+      installationId,
+      graphId,
+      consumesAtlasCall: true,
+      atlasCallLedger: repository,
+      key: "pre-call-failure",
+      operation: async () => {
+        throw new AtlasApiError({
+          code: "analysis_misconfigured",
+          message: "Not configured.",
+          status: 503,
+          retryable: false,
+          callConsumed: false,
+        });
+      },
+    }),
+  );
+
+  const final = await runWithAtlasRequestGuard({
+    installationId,
+    graphId,
+    consumesAtlasCall: true,
+    atlasCallLedger: repository,
+    key: "real-tenth-call",
+    operation: async () => ({ meta: { callConsumed: true } }),
+  });
+  assert.equal(final.deduplicated, false);
 });

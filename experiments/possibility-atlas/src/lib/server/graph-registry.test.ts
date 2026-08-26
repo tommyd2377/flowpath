@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExpandAtlasResponse } from "../contracts";
+import {
+  AtlasGraphSchema,
+  type AtlasGraph,
+  type ExpandAtlasResponse,
+} from "../contracts";
 import type { ExpandAtlasRequest } from "./branch";
 import { createFixtureStartResponse } from "./fixtures";
 import {
@@ -10,6 +14,7 @@ import {
   getRegisteredStartResponse,
   registerStartedGraph,
   resetRegisteredGraphsForTests,
+  restoreRegisteredGraph,
   validateRegisteredExpansion,
   validateRegisteredRippleContext,
 } from "./graph-registry";
@@ -47,6 +52,28 @@ function registeredInput(): ExpandAtlasRequest {
     ],
     remainingNodeCapacity: 60,
   };
+}
+
+function savedGraph(): AtlasGraph {
+  const startInput = { installationId, graphId, headline: headlineFixture };
+  const start = createFixtureStartResponse(startInput);
+  if (start.kind !== "atlas") throw new Error("Expected atlas fixture.");
+  return AtlasGraphSchema.parse({
+    id: graphId,
+    createdAt: "2026-08-25T16:00:00.000Z",
+    updatedAt: "2026-08-25T16:00:00.000Z",
+    headline: headlineFixture,
+    status: "ready",
+    snapshot: start.snapshot,
+    nodes: Object.fromEntries(start.nodes.map((node) => [node.id, node])),
+    rootChildIds: start.nodes.map((node) => node.id),
+    focusedNodeId: start.nodes[0]!.id,
+    callsUsed: 4,
+    errorMessage: null,
+    insufficientReason: null,
+    insufficientSummary: null,
+    insufficientSources: [],
+  });
 }
 
 test("registered expansion rejects altered frozen evidence and capacity", () => {
@@ -211,4 +238,87 @@ test("raw headline graphs cannot generate global ripple analyses", () => {
     (error: unknown) =>
       error instanceof AtlasApiError && error.code === "world_event_mismatch",
   );
+});
+
+test("a fully validated saved graph resumes expansion without rebuilding it", () => {
+  const graph = savedGraph();
+  assert.deepEqual(
+    restoreRegisteredGraph(
+      { installationId, graph },
+      {
+        mode: "fixture",
+        model: "fixture-model",
+        expansionEligible: true,
+      },
+    ),
+    { graphId, restored: true },
+  );
+  const parent = graph.nodes[graph.rootChildIds[0]!]!;
+  const expansion: ExpandAtlasRequest = {
+    installationId,
+    graphId,
+    parentId: parent.id,
+    snapshot: graph.snapshot!,
+    lineage: [
+      {
+        id: parent.id,
+        parentId: parent.parentId,
+        depth: parent.depth,
+        title: parent.title,
+        summary: parent.summary,
+        whyPlausible: parent.whyPlausible,
+        keyAssumption: parent.keyAssumption,
+        horizon: parent.horizon,
+      },
+    ],
+    remainingNodeCapacity: 60,
+  };
+  assert.equal(validateRegisteredExpansion(expansion).model, "fixture-model");
+  assert.deepEqual(
+    restoreRegisteredGraph(
+      { installationId, graph },
+      {
+        mode: "fixture",
+        model: "fixture-model",
+        expansionEligible: true,
+      },
+    ),
+    { graphId, restored: true },
+  );
+});
+
+test("saved graph restoration rejects broken relationships and altered evidence", () => {
+  const graph = savedGraph();
+  const rootId = graph.rootChildIds[0]!;
+  const root = graph.nodes[rootId]!;
+  const cases: AtlasGraph[] = [
+    { ...graph, rootChildIds: graph.rootChildIds.slice(1) },
+    {
+      ...graph,
+      nodes: {
+        ...graph.nodes,
+        [rootId]: {
+          ...root,
+          childIds: ["30000000-0000-4000-8000-000000000099"],
+        },
+      },
+    },
+    {
+      ...graph,
+      snapshot: { ...graph.snapshot!, summary: "Altered frozen evidence." },
+      headline: { ...graph.headline, title: "A different headline" },
+    },
+  ];
+  for (const candidate of cases) {
+    resetRegisteredGraphsForTests();
+    assert.throws(
+      () =>
+        restoreRegisteredGraph(
+          { installationId, graph: candidate },
+          { mode: "fixture", model: "fixture-model" },
+        ),
+      (error: unknown) =>
+        error instanceof AtlasApiError && error.code === "invalid_saved_graph",
+    );
+  }
 });

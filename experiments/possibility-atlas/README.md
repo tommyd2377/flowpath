@@ -20,16 +20,31 @@ For deterministic UI work without paid API calls, start the app with `POSSIBILIT
 
 World in Motion is an additive, explicitly refreshed catalog above the original
 headline picker. It groups related reporting into persistent candidate events,
-keeps standalone headlines available in the unchanged picker, and stores only
-headline metadata, generated event descriptions, verified snapshots, and
-validated ripple relationships in `data/possibility-atlas.db`.
+keeps all standalone headlines available, and makes the core interaction
+visible as `current event → possible next state → affected event`. Candidate
+clusters are clearly separated from events with saved source snapshots.
 
-The catalog uses only `POSSIBILITY_ATLAS_DATABASE_URL` and defaults to the
+Selecting a connected event opens the same five-level atlas as before. Its
+first level represents primary scenarios; a selected scenario can either be
+explored deeper or compared with the other active events. Conditional ripple
+links remain outside the tree. If an affected event is opened, the user chooses
+whether subsequent levels continue that validated causal premise or analyze the
+target event independently.
+
+The catalog stores only headline metadata, generated event descriptions,
+source snapshots, generation templates, and validated ripple relationships in
+the isolated database. It uses only `POSSIBILITY_ATLAS_DATABASE_URL` and defaults to the
 gitignored local file shown in `.env.example`; it never reads FlowPath's
 database. `npm run db:init` is safe to repeat. Fixture mode builds four labeled
-events without fetching news or making a paid model call. Live `Refresh world
-view` first fetches the fixed U.S. Google News RSS feed; an unchanged feed
+events without fetching news or making a paid model call. Live `Scan for
+changes` first fetches the fixed U.S. Google News RSS feed; an unchanged feed
 fingerprint reuses the existing catalog without invoking the model.
+
+Browser atlases remain in the versioned localStorage envelopes. Completed
+atlases safely re-register their validated graph with the local server after a
+restart, so saved paths can resume without another verification call. Each
+atlas is capped at 10 model calls and 64 total nodes; cache hits consume neither
+budget.
 
 The world classifier uses one tool-free `gpt-5.6-terra` Structured Outputs call
 per changed feed. Invalid, incomplete, or refused classifications are not

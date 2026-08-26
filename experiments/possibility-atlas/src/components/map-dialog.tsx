@@ -10,11 +10,13 @@ export function MapDialog({
   open,
   onClose,
   onSelect,
+  rootTitle,
 }: {
   graph: AtlasGraph;
   open: boolean;
   onClose: () => void;
   onSelect: (nodeId: string | null) => void;
+  rootTitle?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -54,18 +56,19 @@ export function MapDialog({
   if (!open) return null;
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div ref={panelRef} className="map-dialog" role="dialog" aria-modal="true" aria-labelledby="map-dialog-title">
+      <div ref={panelRef} className="map-dialog outline-dialog" role="dialog" aria-modal="true" aria-labelledby="map-dialog-title">
         <header className="dialog-header">
           <div>
             <p className="eyebrow">Overview</p>
-            <h2 id="map-dialog-title">Full possibility map</h2>
+            <h2 id="map-dialog-title">Full possibility outline</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close full map">
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close full outline">
             <span aria-hidden="true">×</span>
           </button>
         </header>
         <AtlasOutline
           graph={graph}
+          rootTitle={rootTitle}
           onSelect={(nodeId) => {
             onSelect(nodeId);
             onClose();

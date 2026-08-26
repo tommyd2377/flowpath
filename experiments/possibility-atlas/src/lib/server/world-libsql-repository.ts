@@ -31,6 +31,7 @@ import {
   type RippleAnalysisKey,
   type WorldClassificationCommit,
   type WorldRepository,
+  type WorldVerificationExpectation,
 } from "./world-repository";
 
 export const WORLD_DATABASE_MIGRATION = `
@@ -77,6 +78,15 @@ CREATE TABLE IF NOT EXISTS world_event_headlines (
 CREATE INDEX IF NOT EXISTS idx_world_event_headlines_event
   ON world_event_headlines(event_id, last_seen_at DESC);
 
+CREATE TABLE IF NOT EXISTS world_event_changes (
+  scan_id TEXT NOT NULL REFERENCES world_scans(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL REFERENCES world_events(id) ON DELETE CASCADE,
+  supporting_headline_added INTEGER NOT NULL DEFAULT 0 CHECK (supporting_headline_added IN (0, 1)),
+  lead_changed INTEGER NOT NULL DEFAULT 0 CHECK (lead_changed IN (0, 1)),
+  role_changed INTEGER NOT NULL DEFAULT 0 CHECK (role_changed IN (0, 1)),
+  PRIMARY KEY (scan_id, event_id)
+);
+
 CREATE TABLE IF NOT EXISTS generation_templates (
   cache_key TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('start', 'expand', 'ripple')),
@@ -87,11 +97,22 @@ CREATE TABLE IF NOT EXISTS generation_templates (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS atlas_call_usage (
+  graph_id TEXT PRIMARY KEY,
+  installation_key TEXT NOT NULL,
+  calls_used INTEGER NOT NULL CHECK (calls_used >= 0),
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ripple_analyses (
   graph_id TEXT NOT NULL,
   scenario_node_id TEXT NOT NULL,
   source_event_id TEXT NOT NULL REFERENCES world_events(id) ON DELETE CASCADE,
   catalog_version INTEGER NOT NULL DEFAULT 0,
+  source_scenario_title TEXT NOT NULL,
+  source_scenario_summary TEXT NOT NULL,
+  result_kind TEXT NOT NULL DEFAULT 'ripples' CHECK (result_kind IN ('ripples', 'no_credible_links')),
+  result_reason TEXT,
   analyzed_at TEXT NOT NULL,
   PRIMARY KEY (graph_id, scenario_node_id)
 );
@@ -213,6 +234,8 @@ function parseEdge(row: Row): RippleEdge {
     id: text(row, "id"),
     sourceEventId: text(row, "source_event_id"),
     sourceScenarioNodeId: text(row, "source_scenario_node_id"),
+    sourceScenarioTitle: text(row, "source_scenario_title"),
+    sourceScenarioSummary: text(row, "source_scenario_summary"),
     targetEventId: text(row, "target_event_id"),
     influence: text(row, "influence"),
     strength: text(row, "strength"),
@@ -242,6 +265,37 @@ export class LibsqlWorldRepository implements WorldRepository {
         "ALTER TABLE ripple_analyses ADD COLUMN catalog_version INTEGER NOT NULL DEFAULT 0",
       );
     }
+    if (!columns.rows.some((row) => row.name === "source_scenario_title")) {
+      await this.client.execute(
+        "ALTER TABLE ripple_analyses ADD COLUMN source_scenario_title TEXT",
+      );
+    }
+    if (!columns.rows.some((row) => row.name === "source_scenario_summary")) {
+      await this.client.execute(
+        "ALTER TABLE ripple_analyses ADD COLUMN source_scenario_summary TEXT",
+      );
+    }
+    if (!columns.rows.some((row) => row.name === "result_kind")) {
+      await this.client.execute(
+        "ALTER TABLE ripple_analyses ADD COLUMN result_kind TEXT NOT NULL DEFAULT 'ripples'",
+      );
+    }
+    if (!columns.rows.some((row) => row.name === "result_reason")) {
+      await this.client.execute(
+        "ALTER TABLE ripple_analyses ADD COLUMN result_reason TEXT",
+      );
+    }
+    await this.client.execute(
+      "DELETE FROM ripple_analyses WHERE source_scenario_title IS NULL OR trim(source_scenario_title) = '' OR source_scenario_summary IS NULL OR trim(source_scenario_summary) = ''",
+    );
+    await this.client.execute(`UPDATE ripple_analyses
+      SET result_kind = 'no_credible_links',
+          result_reason = coalesce(result_reason, 'No credible one-hop relationships were identified.')
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ripple_edges
+        WHERE ripple_edges.graph_id = ripple_analyses.graph_id
+          AND ripple_edges.source_scenario_node_id = ripple_analyses.scenario_node_id
+      )`);
     const fixtureEventPlaceholders = WORLD_FIXTURE_EVENT_IDS.map(() => "?").join(
       ", ",
     );
@@ -377,9 +431,16 @@ export class LibsqlWorldRepository implements WorldRepository {
           eventScore(right) - eventScore(left) ||
           right.lastSeenAt.localeCompare(left.lastSeenAt),
       );
-    const edgeResult = await this.client.execute(
-      "SELECT * FROM ripple_edges ORDER BY analyzed_at DESC, id ASC",
-    );
+    const edgeResult = await this.client.execute({
+      sql: `SELECT e.*, a.source_scenario_title, a.source_scenario_summary
+        FROM ripple_edges e
+        JOIN ripple_analyses a
+          ON a.graph_id = e.graph_id
+          AND a.scenario_node_id = e.source_scenario_node_id
+        WHERE a.catalog_version = ?
+        ORDER BY e.analyzed_at DESC, e.id ASC`,
+      args: [metadata.catalogVersion],
+    });
     const eventsById = new Map(events.map((event) => [event.id, event]));
     const crossCurrents = edgeResult.rows
       .map(parseEdge)
@@ -394,7 +455,9 @@ export class LibsqlWorldRepository implements WorldRepository {
       counts.set(edge.sourceEventId, (counts.get(edge.sourceEventId) ?? 0) + 1);
     }
     const verified = events.filter((event) => event.state === "verified");
-    const pressureSource = verified.length > 0 ? verified : events;
+    const featuredCandidates = events.filter(
+      (event) => event.state === "candidate",
+    );
 
     let recentlyChanged: WorldEventSummary[] = [];
     if (metadata.catalogVersion > 0) {
@@ -404,7 +467,9 @@ export class LibsqlWorldRepository implements WorldRepository {
       const scanId = latestScan.rows[0] ? text(latestScan.rows[0], "id") : null;
       if (scanId) {
         const changed = await this.client.execute({
-          sql: "SELECT DISTINCT event_id FROM world_event_headlines WHERE first_seen_scan_id = ? AND role = 'supporting'",
+          sql: `SELECT event_id FROM world_event_changes
+            WHERE scan_id = ?
+              AND (supporting_headline_added = 1 OR lead_changed = 1 OR role_changed = 1)`,
           args: [scanId],
         });
         const changedIds = new Set(changed.rows.map((row) => text(row, "event_id")));
@@ -416,7 +481,8 @@ export class LibsqlWorldRepository implements WorldRepository {
       ok: true,
       ...metadata,
       events,
-      pressurePoints: pressureSource
+      featuredCandidates: featuredCandidates.slice(0, 12),
+      pressurePoints: verified
         .map((event) => ({
           event,
           outboundRippleCount: counts.get(event.id) ?? 0,
@@ -512,6 +578,13 @@ export class LibsqlWorldRepository implements WorldRepository {
       const newHeadline = group.headlines.some(
         (item) => priorHeadlines.get(item.headline.id)?.eventId !== group.eventId,
       );
+      const supportingHeadlineAdded = group.headlines.some((item) => {
+        const priorHeadline = priorHeadlines.get(item.headline.id);
+        return (
+          item.role === "supporting" &&
+          priorHeadline?.eventId !== group.eventId
+        );
+      });
       const roleChanged = group.headlines.some(
         (item) => {
           const priorHeadline = priorHeadlines.get(item.headline.id);
@@ -573,6 +646,24 @@ export class LibsqlWorldRepository implements WorldRepository {
           commit.scannedAt,
         ],
       });
+      if (prior && (supportingHeadlineAdded || leadChanged || roleChanged)) {
+        statements.push({
+          sql: `INSERT INTO world_event_changes
+            (scan_id, event_id, supporting_headline_added, lead_changed, role_changed)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(scan_id, event_id) DO UPDATE SET
+              supporting_headline_added = MAX(supporting_headline_added, excluded.supporting_headline_added),
+              lead_changed = MAX(lead_changed, excluded.lead_changed),
+              role_changed = MAX(role_changed, excluded.role_changed)`,
+          args: [
+            commit.scanId,
+            group.eventId,
+            supportingHeadlineAdded ? 1 : 0,
+            leadChanged ? 1 : 0,
+            roleChanged ? 1 : 0,
+          ],
+        });
+      }
       for (const item of group.headlines) {
         const existing = priorHeadlines.get(item.headline.id);
         statements.push({
@@ -620,10 +711,20 @@ export class LibsqlWorldRepository implements WorldRepository {
         remaining.find(([, item]) => item.role === "root")?.[1] ??
         remaining[0]?.[1];
       if (replacement) {
+        const leadChanged = replacement.headline.id !== priorEvent.leadHeadline.id;
         statements.push({
           sql: "UPDATE world_events SET state = 'candidate', revision = revision + 1, lead_headline_json = ?, updated_at = ? WHERE id = ?",
           args: [json(replacement.headline), commit.scannedAt, eventId],
         });
+        if (leadChanged) {
+          statements.push({
+            sql: `INSERT INTO world_event_changes
+              (scan_id, event_id, supporting_headline_added, lead_changed, role_changed)
+              VALUES (?, ?, 0, 1, 0)
+              ON CONFLICT(scan_id, event_id) DO UPDATE SET lead_changed = 1`,
+            args: [commit.scanId, eventId],
+          });
+        }
       }
     }
 
@@ -675,15 +776,34 @@ export class LibsqlWorldRepository implements WorldRepository {
     await this.client.batch(statements, "write");
   }
 
-  async markEventVerified(eventId: string, snapshot: EventSnapshot) {
+  async markEventVerified(
+    eventId: string,
+    snapshot: EventSnapshot,
+    expected?: WorldVerificationExpectation,
+  ) {
     await this.ensureInitialized();
     z.string().uuid().parse(eventId);
     const parsed = EventSnapshotSchema.parse(snapshot);
+    const expectedLead = expected
+      ? HeadlineItemSchema.parse(expected.leadHeadline)
+      : null;
     const result = await this.client.execute({
-      sql: "UPDATE world_events SET state = 'verified', verified_snapshot_json = ?, updated_at = ? WHERE id = ?",
-      args: [json(parsed), parsed.capturedAt, eventId],
+      sql: expected
+        ? "UPDATE world_events SET state = 'verified', verified_snapshot_json = ?, updated_at = ? WHERE id = ? AND revision = ? AND lead_headline_json = ?"
+        : "UPDATE world_events SET state = 'verified', verified_snapshot_json = ?, updated_at = ? WHERE id = ?",
+      args: expected
+        ? [
+            json(parsed),
+            parsed.capturedAt,
+            eventId,
+            expected.revision,
+            json(expectedLead),
+          ]
+        : [json(parsed), parsed.capturedAt, eventId],
     });
-    if (result.rowsAffected !== 1) throw new Error("Unknown world event.");
+    if (result.rowsAffected === 1) return true;
+    if (expected) return false;
+    throw new Error("Unknown world event.");
   }
 
   async getGenerationTemplate<T>(key: string, schema: z.ZodType<T>) {
@@ -756,6 +876,89 @@ export class LibsqlWorldRepository implements WorldRepository {
     return stored;
   }
 
+  async seedAtlasCallUsage(input: {
+    installationKey: string;
+    graphId: string;
+    callsUsed: number;
+  }) {
+    await this.ensureInitialized();
+    const updatedAt = new Date().toISOString();
+    await this.client.execute({
+      sql: `INSERT INTO atlas_call_usage
+        (graph_id, installation_key, calls_used, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(graph_id) DO UPDATE SET
+          calls_used = max(atlas_call_usage.calls_used, excluded.calls_used),
+          updated_at = excluded.updated_at
+        WHERE atlas_call_usage.installation_key = excluded.installation_key`,
+      args: [input.graphId, input.installationKey, input.callsUsed, updatedAt],
+    });
+    const stored = await this.client.execute({
+      sql: "SELECT installation_key, calls_used FROM atlas_call_usage WHERE graph_id = ? LIMIT 1",
+      args: [input.graphId],
+    });
+    const row = stored.rows[0];
+    if (!row) throw new Error("Atlas call usage was not saved.");
+    return {
+      callsUsed: number(row, "calls_used"),
+      ownerMatches: text(row, "installation_key") === input.installationKey,
+    };
+  }
+
+  async reserveAtlasCallUsage(input: {
+    installationKey: string;
+    graphId: string;
+    limit: number;
+  }) {
+    await this.ensureInitialized();
+    const updatedAt = new Date().toISOString();
+    const reservation = await this.client.execute({
+      sql: `INSERT INTO atlas_call_usage
+        (graph_id, installation_key, calls_used, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(graph_id) DO UPDATE SET
+          calls_used = atlas_call_usage.calls_used + 1,
+          updated_at = excluded.updated_at
+        WHERE atlas_call_usage.installation_key = excluded.installation_key
+          AND atlas_call_usage.calls_used < ?`,
+      args: [input.graphId, input.installationKey, updatedAt, input.limit],
+    });
+    const stored = await this.client.execute({
+      sql: "SELECT installation_key, calls_used FROM atlas_call_usage WHERE graph_id = ? LIMIT 1",
+      args: [input.graphId],
+    });
+    const row = stored.rows[0];
+    if (!row) throw new Error("Atlas call usage was not reserved.");
+    return {
+      callsUsed: number(row, "calls_used"),
+      ownerMatches: text(row, "installation_key") === input.installationKey,
+      reserved: reservation.rowsAffected === 1,
+    };
+  }
+
+  async releaseAtlasCallUsage(input: {
+    installationKey: string;
+    graphId: string;
+  }) {
+    await this.ensureInitialized();
+    await this.client.execute({
+      sql: `UPDATE atlas_call_usage
+        SET calls_used = max(0, calls_used - 1), updated_at = ?
+        WHERE graph_id = ? AND installation_key = ?`,
+      args: [new Date().toISOString(), input.graphId, input.installationKey],
+    });
+    const stored = await this.client.execute({
+      sql: "SELECT installation_key, calls_used FROM atlas_call_usage WHERE graph_id = ? LIMIT 1",
+      args: [input.graphId],
+    });
+    const row = stored.rows[0];
+    if (!row) return { callsUsed: 0, ownerMatches: true };
+    return {
+      callsUsed: number(row, "calls_used"),
+      ownerMatches: text(row, "installation_key") === input.installationKey,
+    };
+  }
+
   async getRippleAnalysis(key: RippleAnalysisKey) {
     await this.ensureInitialized();
     z.string().uuid().parse(key.graphId);
@@ -772,10 +975,44 @@ export class LibsqlWorldRepository implements WorldRepository {
       return null;
     }
     const result = await this.client.execute({
-      sql: "SELECT * FROM ripple_edges WHERE graph_id = ? AND source_scenario_node_id = ? ORDER BY id ASC",
+      sql: `SELECT e.*, a.source_scenario_title, a.source_scenario_summary
+        FROM ripple_edges e
+        JOIN ripple_analyses a
+          ON a.graph_id = e.graph_id
+          AND a.scenario_node_id = e.source_scenario_node_id
+        WHERE e.graph_id = ? AND e.source_scenario_node_id = ?
+        ORDER BY e.id ASC`,
       args: [key.graphId, key.scenarioNodeId],
     });
     return result.rows.map(parseEdge);
+  }
+
+  async getRippleAnalysisResult(key: RippleAnalysisKey) {
+    await this.ensureInitialized();
+    z.string().uuid().parse(key.graphId);
+    z.string().uuid().parse(key.scenarioNodeId);
+    const completed = await this.client.execute({
+      sql: "SELECT catalog_version, result_kind, result_reason FROM ripple_analyses WHERE graph_id = ? AND scenario_node_id = ? LIMIT 1",
+      args: [key.graphId, key.scenarioNodeId],
+    });
+    const row = completed.rows[0];
+    if (!row) return null;
+    if (
+      key.catalogVersion !== undefined &&
+      number(row, "catalog_version") !== key.catalogVersion
+    ) {
+      return null;
+    }
+    const edges = (await this.getRippleAnalysis(key)) ?? [];
+    const kind = text(row, "result_kind");
+    return {
+      edges,
+      noCredibleReason:
+        kind === "no_credible_links"
+          ? nullableText(row, "result_reason") ??
+            "No credible one-hop relationships were identified."
+          : null,
+    };
   }
 
   async commitRippleAnalysis(rawCommit: RippleAnalysisCommit) {
@@ -784,15 +1021,34 @@ export class LibsqlWorldRepository implements WorldRepository {
       graphId: z.string().uuid().parse(rawCommit.graphId),
       scenarioNodeId: z.string().uuid().parse(rawCommit.scenarioNodeId),
       sourceEventId: z.string().uuid().parse(rawCommit.sourceEventId),
+      sourceScenarioTitle: z.string().min(1).max(100).parse(
+        rawCommit.sourceScenarioTitle,
+      ),
+      sourceScenarioSummary: z.string().min(1).max(420).parse(
+        rawCommit.sourceScenarioSummary,
+      ),
       catalogVersion: z.number().int().min(0).parse(rawCommit.catalogVersion),
       analyzedAt: z.string().datetime({ offset: true }).parse(rawCommit.analyzedAt),
       edges: z.array(RippleEdgeSchema).max(5).parse(rawCommit.edges),
+      noCredibleReason:
+        rawCommit.edges.length === 0
+          ? z
+              .string()
+              .min(1)
+              .max(500)
+              .parse(
+                rawCommit.noCredibleReason ??
+                  "No credible one-hop relationships were identified.",
+              )
+          : null,
     };
     if (
       commit.edges.some(
         (edge) =>
           edge.sourceEventId !== commit.sourceEventId ||
-          edge.sourceScenarioNodeId !== commit.scenarioNodeId,
+          edge.sourceScenarioNodeId !== commit.scenarioNodeId ||
+          edge.sourceScenarioTitle !== commit.sourceScenarioTitle ||
+          edge.sourceScenarioSummary !== commit.sourceScenarioSummary,
       )
     ) {
       throw new Error("Ripple edges do not match their analysis context.");
@@ -813,12 +1069,18 @@ export class LibsqlWorldRepository implements WorldRepository {
           ]
         : []),
       {
-        sql: "INSERT INTO ripple_analyses (graph_id, scenario_node_id, source_event_id, catalog_version, analyzed_at) VALUES (?, ?, ?, ?, ?)",
+        sql: `INSERT INTO ripple_analyses
+          (graph_id, scenario_node_id, source_event_id, catalog_version, source_scenario_title, source_scenario_summary, result_kind, result_reason, analyzed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           commit.graphId,
           commit.scenarioNodeId,
           commit.sourceEventId,
           commit.catalogVersion,
+          commit.sourceScenarioTitle,
+          commit.sourceScenarioSummary,
+          commit.edges.length === 0 ? "no_credible_links" : "ripples",
+          commit.noCredibleReason,
           commit.analyzedAt,
         ],
       },

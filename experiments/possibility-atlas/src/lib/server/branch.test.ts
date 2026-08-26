@@ -84,6 +84,46 @@ test("expansion is no-tool, stateless, bounded, and derives server depth and IDs
   assert.ok(result.nodes.every((node) => node.parentId === TEST_UUIDS[0]));
 });
 
+test("conditional expansion keeps a bounded causal premise inside untrusted data", async () => {
+  const causalContext = {
+    sourceGraphId: "40000000-0000-4000-8000-000000000001",
+    sourceEventId: "50000000-0000-4000-8000-000000000001",
+    sourceEventTitle: "Source event",
+    sourceScenarioNodeId: "60000000-0000-4000-8000-000000000001",
+    sourceScenarioTitle: "Restricted access",
+    sourceScenarioSummary: "Access resumes under negotiated restrictions.",
+    targetEventId: "70000000-0000-4000-8000-000000000001",
+    targetEventTitle: "Target event",
+    influence: "amplifies_impact" as const,
+    mechanism: "The conditional restriction raises shared transport costs.",
+  };
+  const adapter = new MockResponsesAdapter(branchResponse());
+  await expandAtlasWithOpenAI(expansionInput({ causalContext }), {
+    adapter,
+    model: "gpt-5.6-sol",
+    createId: testIdFactory(),
+  });
+
+  assert.match(
+    adapter.calls[0].request.input[0].content,
+    /Continue the supplied conditional causal premise/,
+  );
+  const userInput = JSON.parse(adapter.calls[0].request.input[1].content) as {
+    UNTRUSTED_DATA: { conditionalCausalPremise: Record<string, unknown> };
+  };
+  assert.equal(
+    Object.hasOwn(
+      userInput.UNTRUSTED_DATA.conditionalCausalPremise,
+      "sourceGraphId",
+    ),
+    false,
+  );
+  assert.equal(
+    userInput.UNTRUSTED_DATA.conditionalCausalPremise.mechanism,
+    causalContext.mechanism,
+  );
+});
+
 test("expansion rejects sources outside the frozen snapshot", async () => {
   const invalid = modelBranch(1, {
     sourceUrls: ["https://invented.example/new-fact"],

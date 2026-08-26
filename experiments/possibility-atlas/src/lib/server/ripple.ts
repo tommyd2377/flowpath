@@ -260,6 +260,8 @@ export function materializeRippleTemplate(
   input: {
     sourceEventId: string;
     sourceScenarioNodeId: string;
+    sourceScenarioTitle: string;
+    sourceScenarioSummary: string;
     targetEvents: WorldEventSummary[];
   },
   options: {
@@ -308,6 +310,8 @@ export function materializeRippleTemplate(
       id: ids[index],
       sourceEventId: input.sourceEventId,
       sourceScenarioNodeId: input.sourceScenarioNodeId,
+      sourceScenarioTitle: input.sourceScenarioTitle,
+      sourceScenarioSummary: input.sourceScenarioSummary,
       ...link,
       analyzedAt,
     }),
@@ -323,6 +327,7 @@ export function materializeRippleTemplate(
 
 export function responseFromStoredRippleEdges(input: {
   edges: RippleEdge[];
+  noCredibleReason?: string | null;
   targetEvents: WorldEventSummary[];
   mode: "live" | "fixture";
 }): RippleAnalysisResponse {
@@ -330,7 +335,9 @@ export function responseFromStoredRippleEdges(input: {
     return RippleAnalysisResponseSchema.parse({
       ok: true,
       kind: "no_credible_links",
-      reason: "No credible one-hop relationships were identified.",
+      reason:
+        input.noCredibleReason ??
+        "No credible one-hop relationships were identified.",
       meta: { mode: input.mode, callConsumed: false, cacheStatus: "hit" },
     });
   }
@@ -357,7 +364,7 @@ export function responseFromStoredRippleEdges(input: {
 type SavedRippleRepository = Pick<
   WorldRepository,
   | "getCatalogMetadata"
-  | "getRippleAnalysis"
+  | "getRippleAnalysisResult"
   | "getWorldEvent"
   | "listEligibleTargetEvents"
 >;
@@ -395,15 +402,15 @@ export async function loadSavedRippleAnalysis(input: {
     graphId: input.request.graphId,
     scenarioNodeId: input.request.scenarioNodeId,
   };
-  const edges = await input.repository.getRippleAnalysis({
+  const analysis = await input.repository.getRippleAnalysisResult({
     ...key,
     catalogVersion: metadata.catalogVersion,
   });
-  if (edges === null) {
-    const priorAnalysis = await input.repository.getRippleAnalysis(key);
+  if (analysis === null) {
+    const priorAnalysis = await input.repository.getRippleAnalysisResult(key);
     if (priorAnalysis !== null) {
       throw staleRippleAnalysisError(
-        "The saved world reaction is out of date. Check for world updates to refresh it.",
+        "The saved world reaction is out of date. Recheck ripple links to refresh it.",
       );
     }
     throw new AtlasApiError({
@@ -421,15 +428,18 @@ export async function loadSavedRippleAnalysis(input: {
   const eligibleById = new Map(
     eligibleTargets.map((event) => [event.id, event] as const),
   );
-  const targetEvents = edges.map((edge) => eligibleById.get(edge.targetEventId));
+  const targetEvents = analysis.edges.map((edge) =>
+    eligibleById.get(edge.targetEventId),
+  );
   if (targetEvents.some((event) => !event)) {
     throw staleRippleAnalysisError(
-      "A saved target event is no longer active or eligible. Check for world updates to refresh this analysis.",
+      "A saved target event is no longer active or eligible. Recheck ripple links to refresh this analysis.",
     );
   }
 
   return responseFromStoredRippleEdges({
-    edges,
+    edges: analysis.edges,
+    noCredibleReason: analysis.noCredibleReason,
     targetEvents: targetEvents.filter(
       (event): event is WorldEventSummary => Boolean(event),
     ),

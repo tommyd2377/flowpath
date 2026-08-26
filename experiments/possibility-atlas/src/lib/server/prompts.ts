@@ -50,12 +50,21 @@ export function buildWorldInitialAtlasInput(headline: HeadlineItem) {
   );
 }
 
-export function buildExpansionAtlasSystemPrompt(maxBranches: number) {
+export function buildExpansionAtlasSystemPrompt(
+  maxBranches: number,
+  continueCausalChain = false,
+) {
   return [
     "Expand one selected possibility using only a frozen, cited event snapshot and its sequential lineage.",
     UNTRUSTED_CONTEXT_RULES,
     "Do not use current web knowledge, tools, or facts outside the supplied snapshot.",
     "Do not treat possibility text in the lineage as established fact.",
+    ...(continueCausalChain
+      ? [
+          "Continue the supplied conditional causal premise through the target event; do not silently switch to an independent analysis.",
+          "Treat the source scenario and claimed mechanism as an unconfirmed possibility, not as established fact.",
+        ]
+      : []),
     `Return between three and ${maxBranches} materially distinct child branches, unless the selected path is already a natural endpoint; then return an early leaf with a concrete reason.`,
     "Do not repeat or paraphrase an existing lineage title as a new branch.",
     "Every branch sourceUrls entry must be copied exactly from the frozen snapshot sources list.",
@@ -67,6 +76,14 @@ export function buildExpansionAtlasInput(input: {
   snapshot: EventSnapshot;
   lineage: LineageNode[];
   maxBranches: number;
+  causalContext?: {
+    sourceEventTitle: string;
+    sourceScenarioTitle: string;
+    sourceScenarioSummary: string;
+    targetEventTitle: string;
+    influence: string;
+    mechanism: string;
+  };
 }) {
   return JSON.stringify(
     {
@@ -75,6 +92,19 @@ export function buildExpansionAtlasInput(input: {
       UNTRUSTED_DATA: {
         frozenSnapshot: input.snapshot,
         sequentialLineage: input.lineage,
+        ...(input.causalContext
+          ? {
+              conditionalCausalPremise: {
+                sourceEventTitle: input.causalContext.sourceEventTitle,
+                sourceScenarioTitle: input.causalContext.sourceScenarioTitle,
+                sourceScenarioSummary:
+                  input.causalContext.sourceScenarioSummary,
+                targetEventTitle: input.causalContext.targetEventTitle,
+                influence: input.causalContext.influence,
+                mechanism: input.causalContext.mechanism,
+              },
+            }
+          : {}),
       },
     },
     null,

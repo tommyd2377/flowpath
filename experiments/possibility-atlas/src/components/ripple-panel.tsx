@@ -33,10 +33,12 @@ function failureFrom(payload: unknown, fallback: string) {
   const parsed = ErrorResponseSchema.safeParse(payload);
   return parsed.success
     ? {
+        code: parsed.data.error.code,
         message: parsed.data.error.message,
         callConsumed: parsed.data.error.callConsumed,
+        retryable: parsed.data.error.retryable,
       }
-    : { message: fallback, callConsumed: false };
+    : { code: null, message: fallback, callConsumed: false, retryable: false };
 }
 
 export function RipplePanel({
@@ -52,6 +54,8 @@ export function RipplePanel({
   onResponseApplied,
   onFailureApplied,
   onOpenTarget,
+  onChooseAnother,
+  onGenerationChange,
 }: {
   installationId: string;
   graphId: string;
@@ -68,12 +72,21 @@ export function RipplePanel({
   ) => void;
   onFailureApplied: (callConsumed: boolean, attemptId: string) => void;
   onOpenTarget: (event: WorldEventSummary, edge: RippleEdge) => void;
+  onChooseAnother: () => void;
+  onGenerationChange: (generating: boolean) => void;
 }) {
-  const mountedRef = useRef(true);
+  const loadControllerRef = useRef<AbortController | null>(null);
+  const generationControllerRef = useRef<AbortController | null>(null);
   const [analysis, setAnalysis] = useState<RippleAnalysisResponse | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    message: string;
+    retryable: boolean;
+    code: string | null;
+    retryAction: "load" | "generate";
+  } | null>(null);
+  const [generationReassurance, setGenerationReassurance] = useState<string | null>(null);
 
   const request = useMemo(
     () =>
@@ -87,46 +100,89 @@ export function RipplePanel({
   );
 
   const loadSaved = useCallback(async () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
     setLoadingSaved(true);
     setError(null);
     try {
       const query = new URLSearchParams(request).toString();
-      const response = await fetch(`/api/world/ripples?${query}`, { cache: "no-store" });
+      const response = await fetch(`/api/world/ripples?${query}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const payload = await readPayload(response);
+      if (controller.signal.aborted || loadControllerRef.current !== controller) return;
       if (response.status === 404) {
-        if (mountedRef.current) setAnalysis(null);
+        setAnalysis(null);
         return;
       }
       if (!response.ok) {
-        throw new Error(failureFrom(payload, "Saved ripple analysis is unavailable.").message);
+        const failure = failureFrom(payload, "Saved ripple analysis is unavailable.");
+        throw Object.assign(new Error(failure.message), failure);
       }
       const parsed = RippleAnalysisResponseSchema.parse(payload);
-      if (mountedRef.current) setAnalysis(parsed);
+      setAnalysis(parsed);
     } catch (caught) {
-      if (mountedRef.current) {
-        setError(caught instanceof Error ? caught.message : "Saved ripple analysis is unavailable.");
-      }
+      if (controller.signal.aborted || loadControllerRef.current !== controller) return;
+      const failure = caught as Partial<ReturnType<typeof failureFrom>> & Error;
+      setError({
+        code: failure.code ?? null,
+        message: failure.message || "Saved ripple analysis is unavailable.",
+        retryable: failure.retryable ?? true,
+        retryAction: failure.code === "ripple_analysis_stale" ? "generate" : "load",
+      });
     } finally {
-      if (mountedRef.current) setLoadingSaved(false);
+      if (loadControllerRef.current === controller) {
+        loadControllerRef.current = null;
+        setLoadingSaved(false);
+      }
     }
   }, [request]);
 
   useEffect(() => {
-    mountedRef.current = true;
+    let active = true;
     queueMicrotask(() => {
-      if (!mountedRef.current) return;
+      if (!active) return;
       setAnalysis(null);
+      setGenerating(false);
+      setGenerationReassurance(null);
       void loadSaved();
     });
     return () => {
-      mountedRef.current = false;
+      active = false;
+      loadControllerRef.current?.abort();
+      loadControllerRef.current = null;
+      if (generationControllerRef.current) {
+        generationControllerRef.current.abort();
+        generationControllerRef.current = null;
+        onGenerationChange(false);
+      }
     };
-  }, [loadSaved]);
+  }, [loadSaved, onGenerationChange]);
+
+  useEffect(() => {
+    if (!generating) return;
+    const patientTimer = window.setTimeout(() => {
+      setGenerationReassurance("Still working—careful analysis can take 15–30 seconds.");
+    }, 8_000);
+    const longTimer = window.setTimeout(() => {
+      setGenerationReassurance("Still analyzing the same request. Thanks for waiting.");
+    }, 20_000);
+    return () => {
+      window.clearTimeout(patientTimer);
+      window.clearTimeout(longTimer);
+    };
+  }, [generating]);
 
   const generate = async () => {
     if (generating || generationDisabled) return;
     const attemptId = crypto.randomUUID();
+    const controller = new AbortController();
+    generationControllerRef.current = controller;
     setGenerating(true);
+    setGenerationReassurance(null);
+    onGenerationChange(true);
     setError(null);
     try {
       onAttemptStarted(attemptId);
@@ -134,23 +190,35 @@ export function RipplePanel({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(request),
+        signal: controller.signal,
       });
       const payload = await readPayload(response);
+      if (controller.signal.aborted || generationControllerRef.current !== controller) return;
       if (!response.ok) {
         const failure = failureFrom(payload, "The world reaction could not be analyzed.");
         onFailureApplied(failure.callConsumed, attemptId);
-        throw new Error(failure.message);
+        throw Object.assign(new Error(failure.message), failure);
       }
       const parsed = RippleAnalysisResponseSchema.parse(payload);
+      if (controller.signal.aborted || generationControllerRef.current !== controller) return;
       onResponseApplied(parsed, attemptId);
-      if (!mountedRef.current) return;
       setAnalysis(parsed);
     } catch (caught) {
-      if (mountedRef.current) {
-        setError(caught instanceof Error ? caught.message : "The world reaction could not be analyzed.");
-      }
+      if (controller.signal.aborted || generationControllerRef.current !== controller) return;
+      const failure = caught as Partial<ReturnType<typeof failureFrom>> & Error;
+      setError({
+        code: failure.code ?? null,
+        message: failure.message || "The world reaction could not be analyzed.",
+        retryable: failure.retryable ?? true,
+        retryAction: "generate",
+      });
     } finally {
-      if (mountedRef.current) setGenerating(false);
+      if (generationControllerRef.current === controller) {
+        generationControllerRef.current = null;
+        setGenerating(false);
+        setGenerationReassurance(null);
+        onGenerationChange(false);
+      }
     }
   };
 
@@ -162,6 +230,10 @@ export function RipplePanel({
 
   return (
     <section className="scenario-ripple-section" aria-labelledby="scenario-actions-heading">
+      <div className="scenario-in-focus scenario-focus-anchor" aria-label="Scenario in focus">
+        <span>Scenario in focus</span>
+        <strong>{scenario.title}</strong>
+      </div>
       <div className="scenario-actions-copy">
         <p className="eyebrow">Suppose this happens</p>
         <h2 id="scenario-actions-heading">Where do you want to go next?</h2>
@@ -169,7 +241,7 @@ export function RipplePanel({
           Compare this scenario with other active events, or continue down its own five-level path.
         </p>
       </div>
-      <div className="scenario-action-grid">
+      <div className="scenario-action-grid scenario-action-scroll scroll-affordance-x">
         <button
           type="button"
           className="primary-button ripple-generate-button"
@@ -179,13 +251,13 @@ export function RipplePanel({
           {generating
             ? "Watching the world react…"
             : analysis
-              ? "Check for world updates"
+              ? "Recheck ripple links"
               : "Watch the world react"}
         </button>
         <button
           type="button"
           className="secondary-button"
-          disabled={deeperDisabled}
+          disabled={deeperDisabled || generationDisabled || generating}
           onClick={onExploreDeeper}
         >
           {deeperLabel}
@@ -195,10 +267,26 @@ export function RipplePanel({
       {loadingSaved ? (
         <p className="ripple-loading" aria-live="polite"><span className="spinner" /> Checking for a saved world reaction…</p>
       ) : null}
+      {generating ? (
+        <p className="ripple-loading generation-status" aria-live="polite">
+          <span className="spinner" /> {generationReassurance ?? "Analyzing how this scenario could affect other active events…"}
+        </p>
+      ) : null}
       {error ? (
         <div className="notice error-notice" role="alert">
-          <span>{error}</span>
-          <button type="button" className="text-button" disabled={generationDisabled || generating} onClick={() => void generate()}>Retry</button>
+          <span>{error.message}</span>
+          {error.retryable ? (
+            <button
+              type="button"
+              className="text-button"
+              disabled={generating || (error.retryAction === "generate" && generationDisabled)}
+              onClick={() => void (error.retryAction === "load" ? loadSaved() : generate())}
+            >
+              Retry
+            </button>
+          ) : (
+            <button type="button" className="text-button" disabled={generating} onClick={onChooseAnother}>Choose another scenario</button>
+          )}
         </div>
       ) : null}
 

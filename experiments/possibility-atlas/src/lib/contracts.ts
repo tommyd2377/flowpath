@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MAX_ATLAS_CALLS = 16;
+export const MAX_ATLAS_CALLS = 10;
 export const MAX_ATLAS_NODES = 64;
 export const MAX_HEADLINES = 30;
 export const MAX_SAVED_ATLASES = 20;
@@ -80,6 +80,7 @@ export const PossibilityNodeSchema = z
     childIds: z.array(z.string().uuid()).max(5),
     status: z.enum(["ready", "generating", "leaf", "error"]),
     errorMessage: z.string().max(300).nullable(),
+    errorRetryable: z.boolean().nullable().optional(),
     leafReason: z.string().max(360).nullable(),
   })
   .strict();
@@ -99,6 +100,7 @@ export const AtlasGraphSchema = z
     focusedNodeId: z.string().uuid().nullable(),
     callsUsed: z.number().int().min(0).max(MAX_ATLAS_CALLS),
     errorMessage: z.string().max(300).nullable(),
+    errorRetryable: z.boolean().nullable().optional(),
     insufficientReason: z.string().max(500).nullable(),
     insufficientSummary: z.string().max(900).nullable(),
     insufficientSources: z.array(SourceSchema).max(16),
@@ -154,6 +156,29 @@ export const LineageNodeSchema = PossibilityNodeSchema.pick({
 
 export type LineageNode = z.infer<typeof LineageNodeSchema>;
 
+export const CausalContextSchema = z
+  .object({
+    sourceGraphId: z.string().uuid(),
+    sourceEventId: z.string().uuid(),
+    sourceEventTitle: z.string().min(1).max(180),
+    sourceScenarioNodeId: z.string().uuid(),
+    sourceScenarioTitle: z.string().min(1).max(100),
+    sourceScenarioSummary: z.string().min(1).max(420),
+    targetEventId: z.string().uuid(),
+    targetEventTitle: z.string().min(1).max(180),
+    influence: z.enum([
+      "raises_likelihood",
+      "lowers_likelihood",
+      "accelerates",
+      "delays",
+      "amplifies_impact",
+      "reduces_pressure",
+      "creates_dependency",
+    ]),
+    mechanism: z.string().min(1).max(700),
+  })
+  .strict();
+
 export const ExpandAtlasRequestSchema = z
   .object({
     installationId: z.string().uuid(),
@@ -162,6 +187,36 @@ export const ExpandAtlasRequestSchema = z
     snapshot: EventSnapshotSchema,
     lineage: z.array(LineageNodeSchema).min(1).max(5),
     remainingNodeCapacity: z.number().int().min(3).max(MAX_ATLAS_NODES - 1),
+    causalContext: CausalContextSchema.optional(),
+  })
+  .strict();
+
+export type ExpandAtlasRequest = z.infer<typeof ExpandAtlasRequestSchema>;
+
+export const RegisterAtlasRequestSchema = z
+  .object({
+    installationId: z.string().uuid(),
+    expectedMode: z.enum(["live", "fixture"]),
+    graph: AtlasGraphSchema,
+    worldAssociation: z
+      .object({
+        eventId: z.string().uuid(),
+        eventRevision: z.number().int().min(1),
+      })
+      .strict()
+      .optional(),
+    causalContext: CausalContextSchema.optional(),
+  })
+  .strict();
+
+export type RegisterAtlasRequest = z.infer<typeof RegisterAtlasRequestSchema>;
+
+export const RegisterAtlasResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    graphId: z.string().uuid(),
+    restored: z.literal(true),
+    callsUsed: z.number().int().min(0).max(MAX_ATLAS_CALLS),
   })
   .strict();
 

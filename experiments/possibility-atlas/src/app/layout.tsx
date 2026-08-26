@@ -4,7 +4,8 @@ import { PersonalFooter } from "../components/footer";
 import "./globals.css";
 
 const title = "Possibility Atlas";
-const description = "Explore bounded, cited possibilities emerging from current events.";
+const description =
+  "Freeze the facts, branch the scenarios, and trace how current events could affect one another.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("http://127.0.0.1:3100"),

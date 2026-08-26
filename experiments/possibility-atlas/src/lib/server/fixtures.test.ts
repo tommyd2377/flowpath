@@ -5,6 +5,7 @@ import {
   createFixtureExpansionResponse,
   createFixtureStartResponse,
 } from "./fixtures";
+import { WORLD_FIXTURE_HEADLINES } from "./world-fixtures";
 import {
   headlineFixture,
   lineageNode,
@@ -28,6 +29,33 @@ test("fixture start is deterministic and visibly labeled", () => {
   if (first.kind === "atlas") {
     assert.match(first.snapshot.summary, /fixture-only/i);
   }
+});
+
+test("fixture world starts use event-specific primary scenarios", () => {
+  const energyHeadline = WORLD_FIXTURE_HEADLINES.find(
+    (headline) => headline.id === "fixture-energy-001",
+  );
+  assert.ok(energyHeadline);
+  const world = createFixtureStartResponse({
+    installationId: "10000000-0000-4000-8000-000000000001",
+    graphId: "20000000-0000-4000-8000-000000000001",
+    headline: energyHeadline,
+    worldEventId: "70000000-0000-4000-8000-000000000001",
+  });
+  const raw = createFixtureStartResponse({
+    installationId: "10000000-0000-4000-8000-000000000001",
+    graphId: "20000000-0000-4000-8000-000000000001",
+    headline: energyHeadline,
+  });
+  assert.equal(world.kind, "atlas");
+  assert.equal(raw.kind, "atlas");
+  if (world.kind !== "atlas" || raw.kind !== "atlas") return;
+  assert.ok(
+    world.nodes.some((node) =>
+      /Restricted access becomes the new normal/.test(node.title),
+    ),
+  );
+  assert.ok(raw.nodes.every((node) => !/shipping route/i.test(node.title)));
 });
 
 test("fixture expansion derives depth and remains visibly labeled", () => {

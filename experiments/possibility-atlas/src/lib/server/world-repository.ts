@@ -54,6 +54,11 @@ export type GenerationTemplateRecord<T> = {
   createdAt: string;
 };
 
+export type WorldVerificationExpectation = {
+  revision: number;
+  leadHeadline: HeadlineItem;
+};
+
 export type RippleAnalysisKey = {
   graphId: string;
   scenarioNodeId: string;
@@ -62,9 +67,27 @@ export type RippleAnalysisKey = {
 
 export type RippleAnalysisCommit = RippleAnalysisKey & {
   sourceEventId: string;
+  sourceScenarioTitle: string;
+  sourceScenarioSummary: string;
   edges: RippleEdge[];
   analyzedAt: string;
   catalogVersion: number;
+  noCredibleReason?: string | null;
+};
+
+export type StoredRippleAnalysis = {
+  edges: RippleEdge[];
+  noCredibleReason: string | null;
+};
+
+export type AtlasCallUsageKey = {
+  installationKey: string;
+  graphId: string;
+};
+
+export type AtlasCallUsageResult = {
+  callsUsed: number;
+  ownerMatches: boolean;
 };
 
 export interface WorldRepository {
@@ -80,7 +103,11 @@ export interface WorldRepository {
   listMatchableEvents(): Promise<WorldEventSummary[]>;
   listEligibleTargetEvents(excludeEventId: string): Promise<WorldEventSummary[]>;
   commitClassification(commit: WorldClassificationCommit): Promise<void>;
-  markEventVerified(eventId: string, snapshot: EventSnapshot): Promise<void>;
+  markEventVerified(
+    eventId: string,
+    snapshot: EventSnapshot,
+    expected?: WorldVerificationExpectation,
+  ): Promise<boolean>;
   getGenerationTemplate<T>(
     key: string,
     schema: z.ZodType<T>,
@@ -89,7 +116,19 @@ export interface WorldRepository {
     record: GenerationTemplateRecord<T>,
     schema: z.ZodType<T>,
   ): Promise<{ payload: T; createdAt: string }>;
+  seedAtlasCallUsage(
+    input: AtlasCallUsageKey & { callsUsed: number },
+  ): Promise<AtlasCallUsageResult>;
+  reserveAtlasCallUsage(
+    input: AtlasCallUsageKey & { limit: number },
+  ): Promise<AtlasCallUsageResult & { reserved: boolean }>;
+  releaseAtlasCallUsage(
+    input: AtlasCallUsageKey,
+  ): Promise<AtlasCallUsageResult>;
   getRippleAnalysis(key: RippleAnalysisKey): Promise<RippleEdge[] | null>;
+  getRippleAnalysisResult(
+    key: RippleAnalysisKey,
+  ): Promise<StoredRippleAnalysis | null>;
   commitRippleAnalysis(commit: RippleAnalysisCommit): Promise<RippleEdge[]>;
 }
 
@@ -129,15 +168,26 @@ type MemoryEvent = {
   summary: WorldEventSummary;
   headlines: Map<string, MemoryHeadline>;
   verifiedSnapshot: EventSnapshot | null;
+  changedInScanId: string | null;
 };
 
 export function createMemoryWorldRepository(): WorldRepository {
   const events = new Map<string, MemoryEvent>();
   const scans: WorldClassificationCommit[] = [];
   const templates = new Map<string, GenerationTemplateRecord<unknown>>();
+  const atlasCallUsage = new Map<
+    string,
+    { installationKey: string; callsUsed: number }
+  >();
   const analyses = new Map<
     string,
-    { edges: RippleEdge[]; catalogVersion: number }
+    {
+      edges: RippleEdge[];
+      catalogVersion: number;
+      sourceScenarioTitle: string;
+      sourceScenarioSummary: string;
+      noCredibleReason: string | null;
+    }
   >();
 
   const analysisKey = (key: RippleAnalysisKey) =>
@@ -173,8 +223,14 @@ export function createMemoryWorldRepository(): WorldRepository {
     async getCatalogSnapshot() {
       const metadata = currentMetadata();
       const featured = sortedFeatured();
+      const featuredCandidates = featured.filter(
+        (event) => event.state === "candidate",
+      );
       const featuredById = new Map(featured.map((event) => [event.id, event]));
       const allEdges = [...analyses.values()]
+        .filter(
+          (analysis) => analysis.catalogVersion === metadata.catalogVersion,
+        )
         .flatMap((analysis) => analysis.edges)
         .filter(
           (edge) =>
@@ -186,23 +242,19 @@ export function createMemoryWorldRepository(): WorldRepository {
         counts.set(edge.sourceEventId, (counts.get(edge.sourceEventId) ?? 0) + 1);
       }
       const verified = featured.filter((event) => event.state === "verified");
-      const pressureSource = verified.length > 0 ? verified : featured;
       const latestScan = scans.at(-1);
       const recentlyChanged = latestScan
-        ? featured.filter((event) => {
-            const stored = events.get(event.id);
-            return [...(stored?.headlines.values() ?? [])].some(
-              (item) =>
-                item.role === "supporting" &&
-                item.firstSeenScanId === latestScan.scanId,
-            );
-          })
+        ? featured.filter(
+            (event) =>
+              events.get(event.id)?.changedInScanId === latestScan.scanId,
+          )
         : [];
       return WorldEventsResponseSchema.parse({
         ok: true,
         ...metadata,
         events: featured,
-        pressurePoints: pressureSource
+        featuredCandidates: featuredCandidates.slice(0, 12),
+        pressurePoints: verified
           .map((event) => ({
             event,
             outboundRippleCount: counts.get(event.id) ?? 0,
@@ -294,6 +346,11 @@ export function createMemoryWorldRepository(): WorldRepository {
         const newHeadline = group.headlines.some(
           (item) => !prior?.headlines.has(item.headline.id),
         );
+        const supportingHeadlineAdded = group.headlines.some(
+          (item) =>
+            item.role === "supporting" &&
+            !prior?.headlines.has(item.headline.id),
+        );
         const roleChanged = group.headlines.some(
           (item) =>
             priorRoles.has(item.headline.id) &&
@@ -355,6 +412,10 @@ export function createMemoryWorldRepository(): WorldRepository {
           summary,
           headlines: retainedHeadlines,
           verifiedSnapshot: prior?.verifiedSnapshot ?? null,
+          changedInScanId:
+            prior && (supportingHeadlineAdded || roleChanged || leadChanged)
+              ? commit.scanId
+              : (prior?.changedInScanId ?? null),
         });
       }
 
@@ -364,8 +425,9 @@ export function createMemoryWorldRepository(): WorldRepository {
           continue;
         }
         if (!assigned.has(eventId) && movedAwayEventIds.has(eventId)) {
+          const previousLeadId = stored.summary.leadHeadline.id;
           const retainedLead = stored.headlines.get(
-            stored.summary.leadHeadline.id,
+            previousLeadId,
           );
           const replacementLead =
             retainedLead?.headline ??
@@ -383,6 +445,9 @@ export function createMemoryWorldRepository(): WorldRepository {
             leadHeadline: replacementLead,
             headlineIds: [...stored.headlines.keys()],
           });
+          if (replacementLead.id !== previousLeadId) {
+            stored.changedInScanId = commit.scanId;
+          }
         }
         if (assigned.has(eventId)) continue;
         const age = atMs - Date.parse(stored.summary.lastSeenAt);
@@ -402,14 +467,23 @@ export function createMemoryWorldRepository(): WorldRepository {
       scans.push(structuredClone(commit));
     },
 
-    async markEventVerified(eventId, snapshot) {
+    async markEventVerified(eventId, snapshot, expected) {
       const stored = events.get(eventId);
       if (!stored) throw new Error("Unknown world event.");
+      if (
+        expected &&
+        (stored.summary.revision !== expected.revision ||
+          JSON.stringify(stored.summary.leadHeadline) !==
+            JSON.stringify(HeadlineItemSchema.parse(expected.leadHeadline)))
+      ) {
+        return false;
+      }
       stored.verifiedSnapshot = EventSnapshotSchema.parse(snapshot);
       stored.summary = WorldEventSummarySchema.parse({
         ...stored.summary,
         state: "verified",
       });
+      return true;
     },
 
     async getGenerationTemplate(key, schema) {
@@ -433,6 +507,53 @@ export function createMemoryWorldRepository(): WorldRepository {
       return { payload, createdAt: record.createdAt };
     },
 
+    async seedAtlasCallUsage(input) {
+      const existing = atlasCallUsage.get(input.graphId);
+      if (existing && existing.installationKey !== input.installationKey) {
+        return { callsUsed: existing.callsUsed, ownerMatches: false };
+      }
+      const callsUsed = Math.max(existing?.callsUsed ?? 0, input.callsUsed);
+      atlasCallUsage.set(input.graphId, {
+        installationKey: input.installationKey,
+        callsUsed,
+      });
+      return { callsUsed, ownerMatches: true };
+    },
+
+    async reserveAtlasCallUsage(input) {
+      const existing = atlasCallUsage.get(input.graphId);
+      if (existing && existing.installationKey !== input.installationKey) {
+        return {
+          callsUsed: existing.callsUsed,
+          ownerMatches: false,
+          reserved: false,
+        };
+      }
+      const callsUsed = existing?.callsUsed ?? 0;
+      if (callsUsed >= input.limit) {
+        return { callsUsed, ownerMatches: true, reserved: false };
+      }
+      atlasCallUsage.set(input.graphId, {
+        installationKey: input.installationKey,
+        callsUsed: callsUsed + 1,
+      });
+      return {
+        callsUsed: callsUsed + 1,
+        ownerMatches: true,
+        reserved: true,
+      };
+    },
+
+    async releaseAtlasCallUsage(input) {
+      const existing = atlasCallUsage.get(input.graphId);
+      if (!existing) return { callsUsed: 0, ownerMatches: true };
+      if (existing.installationKey !== input.installationKey) {
+        return { callsUsed: existing.callsUsed, ownerMatches: false };
+      }
+      existing.callsUsed = Math.max(0, existing.callsUsed - 1);
+      return { callsUsed: existing.callsUsed, ownerMatches: true };
+    },
+
     async getRippleAnalysis(key) {
       const value = analyses.get(analysisKey(key));
       if (!value ||
@@ -443,25 +564,66 @@ export function createMemoryWorldRepository(): WorldRepository {
       return z.array(RippleEdgeSchema).parse(value.edges);
     },
 
+    async getRippleAnalysisResult(key) {
+      const value = analyses.get(analysisKey(key));
+      if (
+        !value ||
+        (key.catalogVersion !== undefined &&
+          value.catalogVersion !== key.catalogVersion)
+      ) {
+        return null;
+      }
+      return {
+        edges: z.array(RippleEdgeSchema).parse(value.edges),
+        noCredibleReason: value.noCredibleReason,
+      };
+    },
+
     async commitRippleAnalysis(commit) {
       const key = analysisKey(commit);
-      const prior = analyses.get(key);
-      if (prior?.catalogVersion === commit.catalogVersion) {
-        return z.array(RippleEdgeSchema).parse(prior.edges);
-      }
+      const sourceScenarioTitle = z
+        .string()
+        .min(1)
+        .max(100)
+        .parse(commit.sourceScenarioTitle);
+      const sourceScenarioSummary = z
+        .string()
+        .min(1)
+        .max(420)
+        .parse(commit.sourceScenarioSummary);
       const parsed = z.array(RippleEdgeSchema).max(5).parse(commit.edges);
+      const noCredibleReason =
+        parsed.length === 0
+          ? z
+              .string()
+              .min(1)
+              .max(500)
+              .parse(
+                commit.noCredibleReason ??
+                  "No credible one-hop relationships were identified.",
+              )
+          : null;
       if (
         parsed.some(
           (edge) =>
             edge.sourceEventId !== commit.sourceEventId ||
-            edge.sourceScenarioNodeId !== commit.scenarioNodeId,
+            edge.sourceScenarioNodeId !== commit.scenarioNodeId ||
+            edge.sourceScenarioTitle !== sourceScenarioTitle ||
+            edge.sourceScenarioSummary !== sourceScenarioSummary,
         )
       ) {
         throw new Error("Ripple edges do not match their analysis context.");
       }
+      const prior = analyses.get(key);
+      if (prior?.catalogVersion === commit.catalogVersion) {
+        return z.array(RippleEdgeSchema).parse(prior.edges);
+      }
       analyses.set(key, {
         edges: parsed,
         catalogVersion: commit.catalogVersion,
+        sourceScenarioTitle,
+        sourceScenarioSummary,
+        noCredibleReason,
       });
       return parsed;
     },

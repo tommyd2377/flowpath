@@ -50,6 +50,12 @@ test("fixture refresh builds four events without a paid call and then cache-hits
     callConsumed: false,
     cacheStatus: "miss",
   });
+  assert.deepEqual(first.feed, {
+    fetchedAt: "2026-08-25T16:00:00.000Z",
+    feedUpdatedAt: "2026-08-25T16:00:00.000Z",
+    stale: false,
+    warning: null,
+  });
   assert.equal(second.meta.cacheStatus, "hit");
   assert.equal(second.meta.callConsumed, false);
 });
@@ -72,6 +78,45 @@ test("unchanged live feed short-circuits before the adapter", async () => {
   assert.equal(result.meta.cacheStatus, "hit");
   assert.equal(result.meta.callConsumed, false);
   assert.equal(adapter.calls.length, 0);
+});
+
+test("an unseen stale feed is surfaced without spending a classification call", async () => {
+  const repository = createMemoryWorldRepository();
+  await repository.commitClassification(createFixtureWorldClassification());
+  const adapter = new MockResponsesAdapter({
+    status: "completed",
+    output_parsed: { groups: [], standaloneHeadlineIds: [] },
+    output: [],
+  });
+  const staleFeed: HeadlinesResponse = {
+    ...feed(),
+    items: [
+      {
+        ...WORLD_FIXTURE_HEADLINES[0]!,
+        id: "unseen-stale-headline-001",
+        title: "An unseen stale fallback headline",
+      },
+    ],
+    stale: true,
+    warning: "Showing cached headlines because the feed could not be refreshed.",
+  };
+  const result = await refreshWorldCatalog({
+    installationId,
+    mode: "live",
+    repository,
+    adapter,
+    getHeadlines: async () => staleFeed,
+  });
+
+  assert.equal(adapter.calls.length, 0);
+  assert.equal(result.catalogVersion, 1);
+  assert.equal(result.feed.stale, true);
+  assert.equal(result.feed.warning, staleFeed.warning);
+  assert.deepEqual(result.meta, {
+    mode: "live",
+    callConsumed: false,
+    cacheStatus: "hit",
+  });
 });
 
 test("coalesces a changed feed across installations and marks the follower as a cache hit", async () => {

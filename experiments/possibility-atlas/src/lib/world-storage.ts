@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { HeadlineItem } from "./contracts";
+import type { ExpandAtlasRequest, HeadlineItem } from "./contracts";
 
 export const WORLD_STORAGE_KEY = "possibility-atlas:world:v1";
 export const MAX_WORLD_JOURNEY_TRANSITIONS = 6;
@@ -14,16 +14,19 @@ export const WorldGraphAssociationSchema = z
     eventId: z.string().uuid(),
     associatedAt: IsoDateSchema,
     eventRevision: z.number().int().min(1).optional(),
+    canonicalTitle: z.string().min(1).max(180).optional(),
     leadHeadlineFingerprint: z.string().min(1).max(1_500).optional(),
   })
   .strict();
 
 export const WorldJourneyTransitionSchema = z
   .object({
+    sourceGraphId: z.string().uuid().optional(),
     sourceEventId: z.string().uuid(),
     sourceEventTitle: z.string().min(1).max(240),
     sourceScenarioNodeId: z.string().uuid(),
     sourceScenarioTitle: z.string().min(1).max(100),
+    sourceScenarioSummary: z.string().min(1).max(420).optional(),
     targetEventId: z.string().uuid(),
     targetEventTitle: z.string().min(1).max(240),
     influence: z.enum([
@@ -35,14 +38,21 @@ export const WorldJourneyTransitionSchema = z
       "reduces_pressure",
       "creates_dependency",
     ]),
+    mechanism: z.string().min(1).max(700).optional(),
   })
   .strict();
+
+export const WorldJourneyExplorationModeSchema = z.enum([
+  "causal",
+  "independent",
+]);
 
 export const WorldJourneySchema = z
   .object({
     transitions: z
       .array(WorldJourneyTransitionSchema)
       .max(MAX_WORLD_JOURNEY_TRANSITIONS),
+    explorationMode: WorldJourneyExplorationModeSchema.nullable().optional(),
     updatedAt: IsoDateSchema,
   })
   .strict();
@@ -61,6 +71,9 @@ export const WorldStorageEnvelopeSchema = z
 
 export type WorldGraphAssociation = z.infer<typeof WorldGraphAssociationSchema>;
 export type WorldJourneyTransition = z.infer<typeof WorldJourneyTransitionSchema>;
+export type WorldJourneyExplorationMode = z.infer<
+  typeof WorldJourneyExplorationModeSchema
+>;
 export type WorldJourney = z.infer<typeof WorldJourneySchema>;
 export type WorldStorageEnvelope = z.infer<typeof WorldStorageEnvelopeSchema>;
 
@@ -68,6 +81,24 @@ export type WorldStorageLoadResult = {
   envelope: WorldStorageEnvelope;
   warning: string | null;
 };
+
+export function isStaleCausalRegistrationError(code: string | null | undefined) {
+  return code === "causal_context_stale" || code === "world_causal_context_changed";
+}
+
+export function shouldResumeWorldAtlasIndependently(input: {
+  previousMode: WorldJourneyExplorationMode | null;
+  nextMode: WorldJourneyExplorationMode;
+  registrationFailed: boolean;
+  failureCode: string | null;
+}) {
+  return (
+    input.previousMode === "causal" &&
+    input.nextMode === "independent" &&
+    input.registrationFailed &&
+    isStaleCausalRegistrationError(input.failureCode)
+  );
+}
 
 export function createWorldStorageEnvelope(
   now = new Date().toISOString(),
@@ -139,12 +170,14 @@ export function associateWorldAtlas(
     graphId,
     at,
     eventRevision,
+    canonicalTitle,
     leadHeadlineFingerprint,
   }: {
     eventId: string;
     graphId: string;
     at: string;
     eventRevision?: number;
+    canonicalTitle?: string;
     leadHeadlineFingerprint?: string;
   },
 ) {
@@ -160,6 +193,7 @@ export function associateWorldAtlas(
     eventId,
     associatedAt: at,
     ...(eventRevision === undefined ? {} : { eventRevision }),
+    ...(canonicalTitle === undefined ? {} : { canonicalTitle }),
     ...(leadHeadlineFingerprint === undefined
       ? {}
       : { leadHeadlineFingerprint }),
@@ -182,12 +216,14 @@ export function replaceWorldAtlas(
     nextGraphId,
     at,
     eventRevision,
+    canonicalTitle,
     leadHeadlineFingerprint,
   }: {
     previousGraphId: string;
     nextGraphId: string;
     at: string;
     eventRevision?: number;
+    canonicalTitle?: string;
     leadHeadlineFingerprint?: string;
   },
 ) {
@@ -200,6 +236,7 @@ export function replaceWorldAtlas(
     graphId: nextGraphId,
     at,
     eventRevision: eventRevision ?? association.eventRevision,
+    canonicalTitle: canonicalTitle ?? association.canonicalTitle,
     leadHeadlineFingerprint:
       leadHeadlineFingerprint ?? association.leadHeadlineFingerprint,
   });
@@ -260,18 +297,88 @@ export function appendWorldJourney(
   },
 ) {
   const previous = envelope.journeys[sourceGraphId]?.transitions ?? [];
-  const transitions = [...previous, WorldJourneyTransitionSchema.parse(transition)].slice(
+  const parsedTransition = WorldJourneyTransitionSchema.parse({
+    ...transition,
+    sourceGraphId,
+  });
+  const transitions = [...previous, parsedTransition].slice(
     -MAX_WORLD_JOURNEY_TRANSITIONS,
   );
   return WorldStorageEnvelopeSchema.parse({
     ...envelope,
     journeys: {
       ...envelope.journeys,
-      [targetGraphId]: { transitions, updatedAt: at },
+      [targetGraphId]: { transitions, explorationMode: null, updatedAt: at },
     },
     focusedEventId: transition.targetEventId,
     updatedAt: at,
   });
+}
+
+export function clearWorldJourney(
+  envelope: WorldStorageEnvelope,
+  graphId: string,
+  at: string,
+) {
+  if (!envelope.journeys[graphId]) return envelope;
+  const journeys = { ...envelope.journeys };
+  delete journeys[graphId];
+  return WorldStorageEnvelopeSchema.parse({
+    ...envelope,
+    journeys,
+    updatedAt: at,
+  });
+}
+
+export function setWorldJourneyExplorationMode(
+  envelope: WorldStorageEnvelope,
+  graphId: string,
+  mode: WorldJourneyExplorationMode,
+  at: string,
+) {
+  const journey = envelope.journeys[graphId];
+  if (!journey) return envelope;
+  return WorldStorageEnvelopeSchema.parse({
+    ...envelope,
+    journeys: {
+      ...envelope.journeys,
+      [graphId]: {
+        ...journey,
+        explorationMode: WorldJourneyExplorationModeSchema.parse(mode),
+        updatedAt: at,
+      },
+    },
+    updatedAt: at,
+  });
+}
+
+export function causalContextForJourney(
+  journey: WorldJourney | null,
+  targetEventId: string,
+): NonNullable<ExpandAtlasRequest["causalContext"]> | null {
+  if (journey?.explorationMode !== "causal") return null;
+  const latest = journey.transitions.at(-1);
+  if (
+    !latest ||
+    latest.targetEventId !== targetEventId ||
+    !latest.sourceGraphId ||
+    !latest.sourceScenarioSummary ||
+    !latest.mechanism
+  ) {
+    return null;
+  }
+  return {
+    sourceGraphId: latest.sourceGraphId,
+    sourceEventId: latest.sourceEventId,
+    sourceEventTitle: latest.sourceEventTitle,
+    sourceScenarioNodeId: latest.sourceScenarioNodeId,
+    sourceScenarioTitle: latest.sourceScenarioTitle,
+    sourceScenarioSummary: latest.sourceScenarioSummary,
+    targetEventId: latest.targetEventId,
+    targetEventTitle: latest.targetEventTitle,
+    influence: latest.influence,
+    mechanism: latest.mechanism,
+  };
 }
 
 export function focusWorldEvent(

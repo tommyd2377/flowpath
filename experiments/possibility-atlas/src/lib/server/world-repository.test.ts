@@ -17,6 +17,28 @@ import {
 
 const day = 24 * 60 * 60 * 1_000;
 
+function verifiedSnapshotFor(
+  event: NonNullable<Awaited<ReturnType<WorldRepository["getWorldEvent"]>>>,
+) {
+  return EventSnapshotSchema.parse({
+    id: "93000000-0000-4000-8000-000000000001",
+    headline: event.leadHeadline,
+    capturedAt: "2026-08-25T17:00:00.000Z",
+    verificationStatus: "corroborated",
+    summary: "Verified source event.",
+    facts: [{ text: "Verified fixture fact.", sourceIds: ["s01"] }],
+    uncertainties: [],
+    sources: [
+      {
+        id: "s01",
+        title: "Fixture source",
+        url: "https://source.example/report",
+        domain: "source.example",
+      },
+    ],
+  });
+}
+
 function shiftedCommit(
   base: WorldClassificationCommit,
   options: { fingerprint: string; scannedAt: string; groups?: WorldClassificationCommit["groups"] },
@@ -136,6 +158,172 @@ test("libSQL catalog revises lead changes, merges without orphans, and retains 1
   client.close();
 });
 
+async function assertFeaturedCandidateSeparation(repository: WorldRepository) {
+  const initial = createFixtureWorldClassification();
+  await repository.commitClassification(initial);
+  const before = await repository.getCatalogSnapshot();
+  assert.equal(before.events.length, 4);
+  assert.equal(before.featuredCandidates.length, 4);
+  assert.equal(before.pressurePoints.length, 0);
+
+  const verified = (await repository.getWorldEvent(initial.groups[0]!.eventId))!;
+  await repository.markEventVerified(verified.id, verifiedSnapshotFor(verified));
+  const after = await repository.getCatalogSnapshot();
+  assert.equal(after.events.length, 4);
+  assert.deepEqual(after.pressurePoints.map((item) => item.event.id), [verified.id]);
+  assert.equal(after.featuredCandidates.length, 3);
+  assert.ok(
+    after.featuredCandidates.every((event) => event.state === "candidate"),
+  );
+}
+
+test("memory snapshot keeps featured candidates separate from verified pressure points", async () => {
+  await assertFeaturedCandidateSeparation(createMemoryWorldRepository());
+});
+
+test("libSQL snapshot keeps featured candidates separate from verified pressure points", async () => {
+  const client = createClient({ url: "file::memory:" });
+  await assertFeaturedCandidateSeparation(new LibsqlWorldRepository(client));
+  client.close();
+});
+
+async function assertVerificationCompareAndSet(repository: WorldRepository) {
+  const initial = createFixtureWorldClassification();
+  await repository.commitClassification(initial);
+  const event = (await repository.getWorldEvent(initial.groups[0]!.eventId))!;
+  const firstSnapshot = verifiedSnapshotFor(event);
+  assert.equal(
+    await repository.markEventVerified(event.id, firstSnapshot, {
+      revision: event.revision,
+      leadHeadline: event.leadHeadline,
+    }),
+    true,
+  );
+
+  await repository.commitClassification(
+    shiftedCommit(initial, {
+      fingerprint: "c",
+      scannedAt: new Date(Date.parse(initial.scannedAt) + day).toISOString(),
+      groups: initial.groups.map((group) => ({
+        ...group,
+        existingEventId: group.eventId,
+        summary:
+          group.eventId === event.id
+            ? `${group.summary} A concurrent update arrived.`
+            : group.summary,
+      })),
+    }),
+  );
+  const current = (await repository.getWorldEvent(event.id))!;
+  assert.ok(current.revision > event.revision);
+  assert.equal(current.state, "candidate");
+  const staleSnapshot = EventSnapshotSchema.parse({
+    ...firstSnapshot,
+    id: "93000000-0000-4000-8000-000000000099",
+    summary: "A stale verification result that must not overwrite the event.",
+  });
+
+  assert.equal(
+    await repository.markEventVerified(event.id, staleSnapshot, {
+      revision: event.revision,
+      leadHeadline: event.leadHeadline,
+    }),
+    false,
+  );
+  assert.equal(
+    await repository.markEventVerified(event.id, staleSnapshot, {
+      revision: current.revision,
+      leadHeadline: {
+        ...current.leadHeadline,
+        title: "A different lead headline",
+      },
+    }),
+    false,
+  );
+  const afterRejectedWrites = await repository.getWorldEventDetail(event.id);
+  assert.equal(afterRejectedWrites?.event.state, "candidate");
+  assert.deepEqual(afterRejectedWrites?.verifiedSnapshot, firstSnapshot);
+}
+
+test("memory verification compare-and-set rejects a concurrent catalog refresh", async () => {
+  await assertVerificationCompareAndSet(createMemoryWorldRepository());
+});
+
+test("libSQL verification compare-and-set rejects a concurrent catalog refresh", async () => {
+  const client = createClient({ url: "file::memory:" });
+  await assertVerificationCompareAndSet(new LibsqlWorldRepository(client));
+  client.close();
+});
+
+async function assertLatestScanChangeSignals(repository: WorldRepository) {
+  const initial = createFixtureWorldClassification();
+  await repository.commitClassification(initial);
+  const group = initial.groups[2]!;
+  const supporting = {
+    ...group.headlines[0]!.headline,
+    id: "new-supporting-change-001",
+    title: "A supporting update changes the event picture",
+  };
+  const keepExisting = initial.groups.map((candidate) => ({
+    ...candidate,
+    existingEventId: candidate.eventId,
+  }));
+  await repository.commitClassification(
+    shiftedCommit(initial, {
+      fingerprint: "a",
+      scannedAt: new Date(Date.parse(initial.scannedAt) + day).toISOString(),
+      groups: keepExisting.map((candidate) =>
+        candidate.eventId === group.eventId
+          ? {
+              ...candidate,
+              headlines: [
+                ...candidate.headlines,
+                { headline: supporting, role: "supporting" as const },
+              ],
+            }
+          : candidate,
+      ),
+    }),
+  );
+  assert.deepEqual(
+    (await repository.getCatalogSnapshot()).recentlyChanged.map(
+      (event) => event.id,
+    ),
+    [group.eventId],
+  );
+
+  await repository.commitClassification(
+    shiftedCommit(initial, {
+      fingerprint: "b",
+      scannedAt: new Date(Date.parse(initial.scannedAt) + 2 * day).toISOString(),
+      groups: keepExisting.map((candidate) =>
+        candidate.eventId === group.eventId
+          ? {
+              ...candidate,
+              headlines: [
+                { ...candidate.headlines[0]!, role: "supporting" as const },
+                { headline: supporting, role: "root" as const },
+              ],
+            }
+          : candidate,
+      ),
+    }),
+  );
+  const latest = await repository.getCatalogSnapshot();
+  assert.deepEqual(latest.recentlyChanged.map((event) => event.id), [group.eventId]);
+  assert.equal(latest.recentlyChanged[0]?.leadHeadline.id, supporting.id);
+}
+
+test("memory Recently Changed records added support and lead/role changes", async () => {
+  await assertLatestScanChangeSignals(createMemoryWorldRepository());
+});
+
+test("libSQL Recently Changed records added support and lead/role changes", async () => {
+  const client = createClient({ url: "file::memory:" });
+  await assertLatestScanChangeSignals(new LibsqlWorldRepository(client));
+  client.close();
+});
+
 test("memory repository preserves event identity, adds supporting updates, inactivates and revives", async () => {
   const repository = createMemoryWorldRepository();
   const initial = createFixtureWorldClassification();
@@ -250,6 +438,9 @@ test("global snapshot hides stored edges unless source is verified and both even
     graphId,
     scenarioNodeId,
     sourceEventId: source.id,
+    sourceScenarioTitle: "Restricted access scenario",
+    sourceScenarioSummary:
+      "A negotiated access regime changes the source event conditionally.",
     catalogVersion: 1,
     analyzedAt: "2026-08-25T18:00:00.000Z",
     edges: [
@@ -257,6 +448,9 @@ test("global snapshot hides stored edges unless source is verified and both even
         id: "96000000-0000-4000-8000-000000000001",
         sourceEventId: source.id,
         sourceScenarioNodeId: scenarioNodeId,
+        sourceScenarioTitle: "Restricted access scenario",
+        sourceScenarioSummary:
+          "A negotiated access regime changes the source event conditionally.",
         targetEventId: target.id,
         influence: "raises_likelihood",
         strength: "moderate",
@@ -289,6 +483,67 @@ test("global snapshot hides stored edges unless source is verified and both even
     (await repository.getRippleAnalysis({ graphId, scenarioNodeId }))?.length,
     1,
   );
+});
+
+async function assertGlobalEdgesUseCurrentCatalog(repository: WorldRepository) {
+  const initial = createFixtureWorldClassification();
+  await repository.commitClassification(initial);
+  const source = (await repository.getWorldEvent(initial.groups[0]!.eventId))!;
+  const target = (await repository.getWorldEvent(initial.groups[1]!.eventId))!;
+  await repository.markEventVerified(source.id, verifiedSnapshotFor(source));
+  const graphId = "94100000-0000-4000-8000-000000000001";
+  const scenarioNodeId = "95100000-0000-4000-8000-000000000001";
+  const edge = {
+    id: "96100000-0000-4000-8000-000000000001",
+    sourceEventId: source.id,
+    sourceScenarioNodeId: scenarioNodeId,
+    sourceScenarioTitle: "Negotiated exemptions",
+    sourceScenarioSummary: "The policy remains while exemptions narrow it.",
+    targetEventId: target.id,
+    influence: "amplifies_impact" as const,
+    strength: "moderate" as const,
+    confidence: "medium" as const,
+    mechanism: "Conditional fixture mechanism.",
+    horizon: "Coming weeks",
+    watchFor: ["A fixture signal"],
+    analyzedAt: "2026-08-25T18:00:00.000Z",
+  };
+  await repository.commitRippleAnalysis({
+    graphId,
+    scenarioNodeId,
+    sourceEventId: source.id,
+    sourceScenarioTitle: edge.sourceScenarioTitle,
+    sourceScenarioSummary: edge.sourceScenarioSummary,
+    catalogVersion: 1,
+    analyzedAt: edge.analyzedAt,
+    edges: [edge],
+  });
+  assert.deepEqual((await repository.getCatalogSnapshot()).crossCurrents, [edge]);
+
+  await repository.commitClassification(
+    shiftedCommit(initial, {
+      fingerprint: "4",
+      scannedAt: new Date(Date.parse(initial.scannedAt) + day).toISOString(),
+      groups: initial.groups.map((group) => ({
+        ...group,
+        existingEventId: group.eventId,
+      })),
+    }),
+  );
+  const next = await repository.getCatalogSnapshot();
+  assert.equal(next.catalogVersion, 2);
+  assert.equal((await repository.getWorldEvent(source.id))?.state, "verified");
+  assert.equal(next.crossCurrents.length, 0);
+}
+
+test("memory global edges are limited to the current catalog version", async () => {
+  await assertGlobalEdgesUseCurrentCatalog(createMemoryWorldRepository());
+});
+
+test("libSQL global edges are limited to the current catalog version", async () => {
+  const client = createClient({ url: "file::memory:" });
+  await assertGlobalEdgesUseCurrentCatalog(new LibsqlWorldRepository(client));
+  client.close();
 });
 
 test("generation templates validate writes and reads with insert-if-absent semantics", async () => {
@@ -332,7 +587,12 @@ test("generation templates validate writes and reads with insert-if-absent seman
 test("libSQL migration and classification commit are idempotent", async () => {
   const client = createClient({ url: "file::memory:" });
   const repository = new LibsqlWorldRepository(client);
-  await Promise.all([repository.initialize(), repository.initialize()]);
+  const reloadedRepository = new LibsqlWorldRepository(client);
+  await Promise.all([
+    repository.initialize(),
+    repository.initialize(),
+    reloadedRepository.initialize(),
+  ]);
   const commit = createFixtureWorldClassification();
   await repository.commitClassification(commit);
   await repository.commitClassification(commit);
@@ -372,8 +632,11 @@ test("libSQL migration and classification commit are idempotent", async () => {
       graphId,
       scenarioNodeId,
       sourceEventId: event.id,
+      sourceScenarioTitle: "Fixture scenario",
+      sourceScenarioSummary: "A fixture scenario remains conditional.",
       catalogVersion: snapshot.catalogVersion,
       edges: [],
+      noCredibleReason: "No validated cross-event mechanism survived review.",
       analyzedAt: "2026-08-25T18:00:00.000Z",
     }),
     [],
@@ -381,6 +644,16 @@ test("libSQL migration and classification commit are idempotent", async () => {
   assert.deepEqual(
     await repository.getRippleAnalysis({ graphId, scenarioNodeId }),
     [],
+  );
+  assert.deepEqual(
+    await reloadedRepository.getRippleAnalysisResult({
+      graphId,
+      scenarioNodeId,
+    }),
+    {
+      edges: [],
+      noCredibleReason: "No validated cross-event mechanism survived review.",
+    },
   );
   assert.equal(
     await repository.getRippleAnalysis({
@@ -398,6 +671,8 @@ test("libSQL migration and classification commit are idempotent", async () => {
     id: "99200000-0000-4000-8000-000000000001",
     sourceEventId: event.id,
     sourceScenarioNodeId: replacementScenarioId,
+    sourceScenarioTitle: "Replacement scenario",
+    sourceScenarioSummary: "A replacement scenario remains conditional.",
     targetEventId: target.id,
     influence: "raises_likelihood" as const,
     strength: "moderate" as const,
@@ -411,6 +686,8 @@ test("libSQL migration and classification commit are idempotent", async () => {
     graphId: replacementGraphId,
     scenarioNodeId: replacementScenarioId,
     sourceEventId: event.id,
+    sourceScenarioTitle: "Replacement scenario",
+    sourceScenarioSummary: "A replacement scenario remains conditional.",
     catalogVersion: 1,
     edges: [firstEdge],
     analyzedAt: firstEdge.analyzedAt,
@@ -425,6 +702,8 @@ test("libSQL migration and classification commit are idempotent", async () => {
     graphId: replacementGraphId,
     scenarioNodeId: replacementScenarioId,
     sourceEventId: event.id,
+    sourceScenarioTitle: "Replacement scenario",
+    sourceScenarioSummary: "A replacement scenario remains conditional.",
     catalogVersion: 2,
     edges: [replacementEdge],
     analyzedAt: replacementEdge.analyzedAt,
@@ -461,6 +740,8 @@ test("libSQL migration and classification commit are idempotent", async () => {
       graphId,
       scenarioNodeId,
       sourceEventId: event.id,
+      sourceScenarioTitle: "Fixture scenario",
+      sourceScenarioSummary: "A fixture scenario remains conditional.",
       catalogVersion: snapshot.catalogVersion + 1,
       edges: [],
       analyzedAt: "2026-08-25T18:05:00.000Z",
@@ -517,6 +798,61 @@ test("libSQL migration and classification commit are idempotent", async () => {
       payload: { value: "repaired" },
       createdAt: "2026-08-25T19:00:00.000Z",
     },
+  );
+  await repository.seedAtlasCallUsage({
+    installationKey: "pa_persisted",
+    graphId: "98000000-0000-4000-8000-000000000001",
+    callsUsed: 8,
+  });
+  assert.deepEqual(
+    await reloadedRepository.seedAtlasCallUsage({
+      installationKey: "pa_persisted",
+      graphId: "98000000-0000-4000-8000-000000000001",
+      callsUsed: 2,
+    }),
+    { callsUsed: 8, ownerMatches: true },
+  );
+  client.close();
+});
+
+test("libSQL migration idempotently adds scenario provenance to legacy ripple analyses", async () => {
+  const client = createClient({ url: "file::memory:" });
+  await client.executeMultiple(`
+    CREATE TABLE ripple_analyses (
+      graph_id TEXT NOT NULL,
+      scenario_node_id TEXT NOT NULL,
+      source_event_id TEXT NOT NULL,
+      catalog_version INTEGER NOT NULL DEFAULT 0,
+      analyzed_at TEXT NOT NULL,
+      PRIMARY KEY (graph_id, scenario_node_id)
+    );
+    INSERT INTO ripple_analyses
+      (graph_id, scenario_node_id, source_event_id, catalog_version, analyzed_at)
+    VALUES (
+      '91000000-0000-4000-8000-000000000001',
+      '92000000-0000-4000-8000-000000000001',
+      '93000000-0000-4000-8000-000000000001',
+      1,
+      '2026-08-25T18:00:00.000Z'
+    );
+  `);
+  const first = new LibsqlWorldRepository(client);
+  await first.initialize();
+  const second = new LibsqlWorldRepository(client);
+  await second.initialize();
+  const columns = await client.execute("PRAGMA table_info(ripple_analyses)");
+  const names = columns.rows.map((row) => String(row.name));
+  assert.equal(
+    names.filter((name) => name === "source_scenario_title").length,
+    1,
+  );
+  assert.equal(
+    names.filter((name) => name === "source_scenario_summary").length,
+    1,
+  );
+  assert.equal(
+    (await client.execute("SELECT * FROM ripple_analyses")).rows.length,
+    0,
   );
   client.close();
 });

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import {
   EventSnapshotSchema,
+  ExpandAtlasRequestSchema,
   ExpandAtlasResponseSchema,
   PossibilityNodeSchema,
   SourceSchema,
@@ -117,9 +118,10 @@ export type RippleGenerationTemplate = z.infer<
 >;
 export type RippleTemplateItem = z.infer<typeof RippleTemplateItemSchema>;
 
-type PossibilityTemplate = z.infer<typeof PossibilityTemplateSchema>;
+export type PossibilityTemplate = z.infer<typeof PossibilityTemplateSchema>;
+export type SnapshotTemplate = z.infer<typeof SnapshotTemplateSchema>;
 
-function possibilityTemplateFromNode(
+export function possibilityTemplateFromNode(
   node: z.infer<typeof PossibilityNodeSchema>,
 ): PossibilityTemplate {
   return {
@@ -130,6 +132,66 @@ function possibilityTemplateFromNode(
     watchFor: node.watchFor,
     lessLikelyIf: node.lessLikelyIf,
     horizon: node.horizon,
+  };
+}
+
+export function snapshotTemplateFromSnapshot(
+  snapshot: z.infer<typeof EventSnapshotSchema>,
+): SnapshotTemplate {
+  return {
+    verificationStatus: snapshot.verificationStatus,
+    summary: snapshot.summary,
+    facts: snapshot.facts,
+    uncertainties: snapshot.uncertainties,
+    sources: snapshot.sources,
+  };
+}
+
+function semanticCausalPremise(
+  context: NonNullable<
+    z.infer<typeof ExpandAtlasRequestSchema>["causalContext"]
+  >,
+) {
+  return {
+    sourceEventTitle: context.sourceEventTitle,
+    sourceScenarioTitle: context.sourceScenarioTitle,
+    sourceScenarioSummary: context.sourceScenarioSummary,
+    targetEventTitle: context.targetEventTitle,
+    influence: context.influence,
+    mechanism: context.mechanism,
+  };
+}
+
+export function semanticExpansionSource(input: {
+  snapshot: z.infer<typeof ExpandAtlasRequestSchema>["snapshot"];
+  lineage: z.infer<typeof ExpandAtlasRequestSchema>["lineage"];
+  maxBranches: number;
+  causalContext?: z.infer<
+    typeof ExpandAtlasRequestSchema
+  >["causalContext"];
+}) {
+  return {
+    snapshot: {
+      headline: input.snapshot.headline,
+      capturedAt: input.snapshot.capturedAt,
+      verificationStatus: input.snapshot.verificationStatus,
+      summary: input.snapshot.summary,
+      facts: input.snapshot.facts,
+      uncertainties: input.snapshot.uncertainties,
+      sources: input.snapshot.sources,
+    },
+    lineage: input.lineage.map((node) => ({
+      depth: node.depth,
+      title: node.title,
+      summary: node.summary,
+      whyPlausible: node.whyPlausible,
+      keyAssumption: node.keyAssumption,
+      horizon: node.horizon,
+    })),
+    maxBranches: input.maxBranches,
+    ...(input.causalContext
+      ? { conditionalCausalPremise: semanticCausalPremise(input.causalContext) }
+      : {}),
   };
 }
 
@@ -149,6 +211,16 @@ export function generationFingerprint(value: unknown) {
   return createHash("sha256")
     .update(JSON.stringify(stableValue(value)))
     .digest("hex");
+}
+
+export function semanticSnapshotFingerprint(
+  snapshot: z.infer<typeof EventSnapshotSchema>,
+) {
+  return generationFingerprint({
+    headline: snapshot.headline,
+    capturedAt: snapshot.capturedAt,
+    ...snapshotTemplateFromSnapshot(snapshot),
+  });
 }
 
 export function generationCacheKey(input: {

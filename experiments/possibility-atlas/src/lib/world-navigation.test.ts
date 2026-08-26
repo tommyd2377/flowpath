@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorldEventSummary } from "./world-contracts";
-import { loadStorageEnvelope, type StorageLike } from "./storage";
+import type { RippleEdge, WorldEventSummary } from "./world-contracts";
+import {
+  ATLAS_STORAGE_KEY,
+  loadStorageEnvelope,
+  saveStorageEnvelope,
+  type StorageLike,
+} from "./storage";
 import {
   RIPPLE_ACCOUNTING_JOURNAL_KEY,
   beginRippleCallAttempt,
+  crossCurrentIdsWithCausalContext,
   deleteAtlasFromBrowser,
+  openCrossCurrentEvent,
   openWorldEvent,
+  openSavedAtlasDirectly,
   recoverRippleCallAccounting,
   recordRippleCallInBrowser,
   resolveRippleCallAttempt,
@@ -79,6 +87,10 @@ test("opening an event creates one associated atlas and reuses it later", () => 
   assert.equal(second.reused, true);
   assert.equal(Object.keys(loadStorageEnvelope(storage).envelope.atlases).length, 1);
   assert.equal(loadWorldStorageEnvelope(storage).envelope.atlasByEvent[event.id], uuid(10));
+  assert.equal(
+    loadWorldStorageEnvelope(storage).envelope.graphAssociations[uuid(10)]?.canonicalTitle,
+    event.canonicalTitle,
+  );
 });
 
 test("event revision and complete lead headline fingerprint govern atlas reuse", () => {
@@ -153,19 +165,147 @@ test("opening an affected event persists the conditional journey", () => {
     graphId: uuid(11),
     sourceGraphId: source.graphId,
     transition: {
+      sourceGraphId: source.graphId,
       sourceEventId: event.id,
       sourceEventTitle: event.canonicalTitle,
       sourceScenarioNodeId: uuid(20),
       sourceScenarioTitle: "Primary scenario",
+      sourceScenarioSummary: "A bounded change in the source event.",
       targetEventId: target.id,
       targetEventTitle: target.canonicalTitle,
       influence: "amplifies_impact",
+      mechanism: "The scenario transmits pressure through a shared dependency.",
     },
   });
 
   const journey = loadWorldStorageEnvelope(storage).envelope.journeys[opened.graphId];
   assert.equal(journey?.transitions.length, 1);
   assert.equal(journey?.transitions[0]?.targetEventTitle, "Affected event");
+  assert.equal(journey?.transitions[0]?.sourceGraphId, source.graphId);
+  assert.equal(journey?.explorationMode, null);
+});
+
+test("a saved cross-current continues only from its matching associated source graph", () => {
+  const storage = new MemoryStorage();
+  const source = openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
+  const target = { ...event, id: uuid(2), canonicalTitle: "Affected event" };
+  const edge: RippleEdge = {
+    id: uuid(30),
+    sourceEventId: event.id,
+    sourceScenarioNodeId: uuid(20),
+    sourceScenarioTitle: "Primary scenario",
+    sourceScenarioSummary: "A bounded change in the source event.",
+    targetEventId: target.id,
+    influence: "amplifies_impact",
+    strength: "strong",
+    confidence: "medium",
+    mechanism: "The scenario transmits pressure through a shared dependency.",
+    horizon: "Several months",
+    watchFor: ["Pressure appears in the affected event"],
+    analyzedAt: NOW,
+  };
+  const crossCurrent = { edge, source: event, target };
+
+  assert.deepEqual([...crossCurrentIdsWithCausalContext(storage, [crossCurrent])], []);
+
+  const atlasEnvelope = loadStorageEnvelope(storage).envelope;
+  const sourceGraph = atlasEnvelope.atlases[source.graphId];
+  assert.ok(sourceGraph);
+  sourceGraph.nodes[edge.sourceScenarioNodeId] = {
+    id: edge.sourceScenarioNodeId,
+    parentId: sourceGraph.id,
+    depth: 1,
+    title: edge.sourceScenarioTitle,
+    summary: edge.sourceScenarioSummary,
+    whyPlausible: "It follows from the saved event evidence.",
+    keyAssumption: "The condition persists.",
+    watchFor: ["A confirming signal"],
+    lessLikelyIf: "The condition reverses.",
+    horizon: edge.horizon,
+    childIds: [],
+    status: "ready",
+    errorMessage: null,
+    leafReason: null,
+  };
+  sourceGraph.rootChildIds = [edge.sourceScenarioNodeId];
+  saveStorageEnvelope(storage, atlasEnvelope);
+
+  assert.deepEqual(
+    [...crossCurrentIdsWithCausalContext(storage, [crossCurrent])],
+    [edge.id],
+  );
+  const opened = openCrossCurrentEvent(storage, crossCurrent);
+  const journey = loadWorldStorageEnvelope(storage).envelope.journeys[opened.graphId];
+  assert.equal(opened.continuedCausally, true);
+  assert.equal(journey?.transitions[0]?.sourceGraphId, source.graphId);
+  assert.equal(journey?.transitions[0]?.mechanism, edge.mechanism);
+});
+
+test("opening an event directly clears obsolete conditional-arrival context", () => {
+  const storage = new MemoryStorage();
+  const source = openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
+  const target = { ...event, id: uuid(2), canonicalTitle: "Affected event" };
+  const affected = openWorldEvent(storage, target, {
+    now: NOW,
+    graphId: uuid(11),
+    sourceGraphId: source.graphId,
+    transition: {
+      sourceGraphId: source.graphId,
+      sourceEventId: event.id,
+      sourceEventTitle: event.canonicalTitle,
+      sourceScenarioNodeId: uuid(20),
+      sourceScenarioTitle: "Primary scenario",
+      sourceScenarioSummary: "A bounded change in the source event.",
+      targetEventId: target.id,
+      targetEventTitle: target.canonicalTitle,
+      influence: "amplifies_impact",
+      mechanism: "The scenario transmits pressure through a shared dependency.",
+    },
+  });
+  assert.ok(loadWorldStorageEnvelope(storage).envelope.journeys[affected.graphId]);
+
+  const direct = openWorldEvent(storage, target, {
+    now: new Date(Date.parse(NOW) + 1_000).toISOString(),
+    graphId: uuid(12),
+  });
+  assert.equal(direct.graphId, affected.graphId);
+  assert.equal(
+    loadWorldStorageEnvelope(storage).envelope.journeys[direct.graphId],
+    undefined,
+  );
+});
+
+test("opening a saved atlas directly clears obsolete conditional-arrival context", () => {
+  const storage = new MemoryStorage();
+  const source = openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
+  const target = { ...event, id: uuid(2), canonicalTitle: "Affected event" };
+  const affected = openWorldEvent(storage, target, {
+    now: NOW,
+    graphId: uuid(11),
+    sourceGraphId: source.graphId,
+    transition: {
+      sourceEventId: event.id,
+      sourceEventTitle: event.canonicalTitle,
+      sourceScenarioNodeId: uuid(20),
+      sourceScenarioTitle: "Primary scenario",
+      sourceScenarioSummary: "A bounded change in the source event.",
+      targetEventId: target.id,
+      targetEventTitle: target.canonicalTitle,
+      influence: "amplifies_impact",
+      mechanism: "The scenario transmits pressure through a shared dependency.",
+    },
+  });
+
+  const direct = openSavedAtlasDirectly(storage, {
+    graphId: affected.graphId,
+    nodeId: uuid(20),
+    at: new Date(Date.parse(NOW) + 1_000).toISOString(),
+  });
+  const world = loadWorldStorageEnvelope(storage).envelope;
+  assert.equal(direct.href, `/atlas/${affected.graphId}?node=${uuid(20)}`);
+  assert.equal(world.journeys[affected.graphId], undefined);
+  assert.equal(world.graphAssociations[affected.graphId]?.eventId, target.id);
+  assert.equal(world.focusedEventId, target.id);
 });
 
 test("a failed world association rolls a newly created atlas back", () => {
@@ -278,7 +418,7 @@ test("ripple accounting recovers a failed dedupe write without double counting",
   assert.equal(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY), null);
 });
 
-test("a pending ripple with a lost response is recovered exactly once", () => {
+test("an unfinished ripple request does not become a phantom paid call", () => {
   const storage = new MemoryStorage();
   openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
   const analysisKey = `${uuid(10)}:${uuid(20)}:${uuid(30)}`;
@@ -292,10 +432,10 @@ test("a pending ripple with a lost response is recovered exactly once", () => {
   assert.ok(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY));
 
   const recovered = recoverRippleCallAccounting(storage);
-  assert.equal(recovered?.graph.callsUsed, 1);
+  assert.equal(recovered?.graph.callsUsed, 0);
   assert.equal(
     recovered?.worldEnvelope.countedRippleAnalyses.includes(analysisKey),
-    true,
+    false,
   );
   assert.equal(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY), null);
 
@@ -305,8 +445,14 @@ test("a pending ripple with a lost response is recovered exactly once", () => {
     analysisKey,
     at: NOW,
   });
-  assert.equal(replay.pending, false);
-  assert.equal(replay.graph.callsUsed, 1);
+  assert.equal(replay.pending, true);
+  assert.equal(replay.graph.callsUsed, 0);
+  resolveRippleCallAttempt(storage, {
+    graphId: uuid(10),
+    analysisKey,
+    callConsumed: false,
+    at: NOW,
+  });
 });
 
 test("a known cache hit clears its pending ripple without consuming a call", () => {
@@ -326,4 +472,77 @@ test("a known cache hit clears its pending ripple without consuming a call", () 
   });
   assert.equal(resolved.graph.callsUsed, 0);
   assert.equal(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY), null);
+});
+
+test("a ripple request counts only after the response confirms a model call", () => {
+  const storage = new MemoryStorage();
+  openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
+  const analysisKey = `${uuid(10)}:${uuid(20)}:${uuid(30)}`;
+  beginRippleCallAttempt(storage, {
+    graphId: uuid(10),
+    analysisKey,
+    at: NOW,
+  });
+  assert.equal(loadStorageEnvelope(storage).envelope.atlases[uuid(10)]?.callsUsed, 0);
+
+  const resolved = resolveRippleCallAttempt(storage, {
+    graphId: uuid(10),
+    analysisKey,
+    callConsumed: true,
+    at: NOW,
+  });
+  assert.equal(resolved.graph.callsUsed, 1);
+  assert.equal(resolved.worldEnvelope.countedRippleAnalyses.includes(analysisKey), true);
+});
+
+test("a cache probe is allowed at the call limit", () => {
+  const storage = new MemoryStorage();
+  openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
+  const atlasEnvelope = loadStorageEnvelope(storage).envelope;
+  const graph = atlasEnvelope.atlases[uuid(10)];
+  assert.ok(graph);
+  graph.callsUsed = 10;
+  saveStorageEnvelope(storage, atlasEnvelope);
+  const analysisKey = `${uuid(10)}:${uuid(20)}:${uuid(30)}`;
+
+  const pending = beginRippleCallAttempt(storage, {
+    graphId: uuid(10),
+    analysisKey,
+    at: NOW,
+  });
+  assert.equal(pending.pending, true);
+  const resolved = resolveRippleCallAttempt(storage, {
+    graphId: uuid(10),
+    analysisKey,
+    callConsumed: false,
+    at: NOW,
+  });
+  assert.equal(resolved.graph.callsUsed, 10);
+  assert.equal(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY), null);
+});
+
+test("legacy ripple accounting above the ten-call cap is discarded safely", () => {
+  const storage = new MemoryStorage();
+  const opened = openWorldEvent(storage, event, { now: NOW, graphId: uuid(10) });
+  const legacyEnvelope = JSON.parse(storage.getItem(ATLAS_STORAGE_KEY) ?? "null") as {
+    atlases: Record<string, { callsUsed: number }>;
+  };
+  legacyEnvelope.atlases[opened.graphId].callsUsed = 12;
+  storage.setItem(ATLAS_STORAGE_KEY, JSON.stringify(legacyEnvelope));
+  storage.setItem(
+    RIPPLE_ACCOUNTING_JOURNAL_KEY,
+    JSON.stringify({
+      version: 1,
+      graphId: opened.graphId,
+      analysisKey: `${opened.graphId}:${uuid(20)}:${uuid(30)}`,
+      previousCallsUsed: 12,
+      nextCallsUsed: 13,
+      phase: "counting",
+      at: NOW,
+    }),
+  );
+
+  assert.equal(recoverRippleCallAccounting(storage), null);
+  assert.equal(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY), null);
+  assert.equal(loadStorageEnvelope(storage).envelope.atlases[opened.graphId]?.callsUsed, 10);
 });

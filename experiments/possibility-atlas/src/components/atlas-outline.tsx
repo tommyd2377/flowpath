@@ -22,9 +22,9 @@ function OutlineBranch({
         aria-expanded={node.childIds.length > 0 ? true : undefined}
         onClick={() => onSelect(node.id)}
       >
-        <span className="outline-depth">D{node.depth}</span>
+        <span className="outline-depth">L{node.depth}</span>
         <span>{node.title}</span>
-        {node.status === "leaf" ? <span className="outline-state">Leaf</span> : null}
+        {node.status === "leaf" ? <span className="outline-state">End of path</span> : null}
         {node.status === "generating" ? <span className="outline-state">Loading</span> : null}
         {node.status === "error" ? <span className="outline-state error-text">Error</span> : null}
       </button>
@@ -48,9 +48,11 @@ function OutlineBranch({
 export function AtlasOutline({
   graph,
   onSelect,
+  rootTitle,
 }: {
   graph: AtlasGraph;
   onSelect: (nodeId: string | null) => void;
+  rootTitle?: string;
 }) {
   return (
     <nav className="atlas-outline" aria-label="Full atlas outline">
@@ -62,7 +64,7 @@ export function AtlasOutline({
         onClick={() => onSelect(null)}
       >
         <span className="outline-depth">Root</span>
-        <span>{graph.headline.title}</span>
+        <span>{rootTitle ?? graph.headline.title}</span>
       </button>
       <ol>
         {graph.rootChildIds.map((nodeId) => (

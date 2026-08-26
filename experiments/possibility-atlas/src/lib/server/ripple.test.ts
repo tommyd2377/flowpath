@@ -118,6 +118,8 @@ test("ripple analysis is a single strict, stateless Sol request with no tools", 
     {
       sourceEventId,
       sourceScenarioNodeId: scenario.id,
+      sourceScenarioTitle: scenario.title,
+      sourceScenarioSummary: scenario.summary,
       targetEvents: context().targetEvents,
     },
     {
@@ -204,6 +206,8 @@ test("graph ripple analysis hits within one catalog version and replaces on chan
     id: TEST_UUIDS[5],
     sourceEventId,
     sourceScenarioNodeId: scenario.id,
+    sourceScenarioTitle: scenario.title,
+    sourceScenarioSummary: scenario.summary,
     targetEventId: target(0).id,
     influence: "raises_likelihood" as const,
     strength: "moderate" as const,
@@ -218,6 +222,8 @@ test("graph ripple analysis hits within one catalog version and replaces on chan
   await repository.commitRippleAnalysis({
     ...key,
     sourceEventId,
+    sourceScenarioTitle: scenario.title,
+    sourceScenarioSummary: scenario.summary,
     catalogVersion: 1,
     analyzedAt: baseEdge.analyzedAt,
     edges: [baseEdge],
@@ -241,6 +247,8 @@ test("graph ripple analysis hits within one catalog version and replaces on chan
   await repository.commitRippleAnalysis({
     ...key,
     sourceEventId,
+    sourceScenarioTitle: scenario.title,
+    sourceScenarioSummary: scenario.summary,
     catalogVersion: 2,
     analyzedAt: replacement.analyzedAt,
     edges: [replacement],
@@ -255,7 +263,7 @@ test("graph ripple analysis hits within one catalog version and replaces on chan
 type SavedRippleRepository = Pick<
   WorldRepository,
   | "getCatalogMetadata"
-  | "getRippleAnalysis"
+  | "getRippleAnalysisResult"
   | "getWorldEvent"
   | "listEligibleTargetEvents"
 >;
@@ -264,6 +272,8 @@ const savedEdge = {
   id: TEST_UUIDS[5],
   sourceEventId,
   sourceScenarioNodeId: scenario.id,
+  sourceScenarioTitle: scenario.title,
+  sourceScenarioSummary: scenario.summary,
   targetEventId: target(0).id,
   influence: "raises_likelihood" as const,
   strength: "moderate" as const,
@@ -279,6 +289,7 @@ function savedRippleRepository(options: {
   currentEdges?: typeof savedEdge[] | null;
   priorEdges?: typeof savedEdge[] | null;
   eligibleTargets?: WorldEventSummary[];
+  noCredibleReason?: string | null;
 } = {}): SavedRippleRepository {
   const currentEdges = Object.hasOwn(options, "currentEdges")
     ? (options.currentEdges ?? null)
@@ -294,10 +305,16 @@ function savedRippleRepository(options: {
         scannedAt: "2026-08-25T15:00:00.000Z",
       };
     },
-    async getRippleAnalysis(key) {
-      return key.catalogVersion === undefined
+    async getRippleAnalysisResult(key) {
+      const edges = key.catalogVersion === undefined
         ? priorEdges
         : currentEdges;
+      return edges === null
+        ? null
+        : {
+            edges,
+            noCredibleReason: options.noCredibleReason ?? null,
+          };
     },
     async getWorldEvent(id) {
       if (id !== sourceEventId) return null;
@@ -360,6 +377,25 @@ test("saved ripple replay requires the current catalog and eligible targets", as
       error.code === "ripple_analysis_stale" &&
       error.callConsumed === false,
   );
+});
+
+test("saved no-link replay preserves the validated reason exactly", async () => {
+  const result = await loadSavedRippleAnalysis({
+    repository: savedRippleRepository({
+      currentEdges: [],
+      priorEdges: [],
+      noCredibleReason: "The candidate paths do not share a credible mechanism.",
+    }),
+    request: savedRippleRequest,
+    mode: "live",
+  });
+  assert.equal(result.kind, "no_credible_links");
+  if (result.kind === "no_credible_links") {
+    assert.equal(
+      result.reason,
+      "The candidate paths do not share a credible mechanism.",
+    );
+  }
 });
 
 test("saved ripple replay rejects an unverified source without consuming a call", async () => {

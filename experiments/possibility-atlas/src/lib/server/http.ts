@@ -35,7 +35,9 @@ export class AtlasApiError extends Error {
 export async function parseJsonRequest<T>(
   request: Request,
   schema: z.ZodType<T>,
+  options: { maxBytes?: number } = {},
 ): Promise<T> {
+  const maxBytes = options.maxBytes ?? MAX_REQUEST_BYTES;
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.startsWith("application/json")) {
     throw new AtlasApiError({
@@ -48,7 +50,7 @@ export async function parseJsonRequest<T>(
   }
 
   const declaredLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw requestTooLargeError();
   }
 
@@ -66,7 +68,7 @@ export async function parseJsonRequest<T>(
     });
   }
 
-  if (new TextEncoder().encode(bodyText).byteLength > MAX_REQUEST_BYTES) {
+  if (new TextEncoder().encode(bodyText).byteLength > maxBytes) {
     throw requestTooLargeError();
   }
 

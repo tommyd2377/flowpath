@@ -10,6 +10,7 @@ import {
   type WorldEventsResponse,
 } from "../lib/world-contracts";
 import { loadStorageEnvelope } from "../lib/storage";
+import { worldRefreshCompletionMessage } from "../lib/world-presentation";
 
 async function readPayload(response: Response) {
   try {
@@ -32,6 +33,7 @@ function asCatalog(payload: unknown): WorldEventsResponse {
     feedFingerprint: parsed.feedFingerprint,
     scannedAt: parsed.scannedAt,
     events: parsed.events,
+    featuredCandidates: parsed.featuredCandidates,
     pressurePoints: parsed.pressurePoints,
     crossCurrents: parsed.crossCurrents,
     recentlyChanged: parsed.recentlyChanged,
@@ -40,11 +42,14 @@ function asCatalog(payload: unknown): WorldEventsResponse {
 
 export function useWorldCatalog() {
   const mountedRef = useRef(true);
+  const refreshingRef = useRef(false);
   const [catalog, setCatalog] = useState<WorldEventsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<"info" | "warning">("info");
   const [error, setError] = useState<string | null>(null);
+  const [refreshLongRunning, setRefreshLongRunning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,10 +72,13 @@ export function useWorldCatalog() {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (refreshing) return;
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     setRefreshing(true);
+    setRefreshLongRunning(false);
     setError(null);
     setMessage(null);
+    setMessageTone("info");
     try {
       const installationId = loadStorageEnvelope(window.localStorage).envelope.installationId;
       const request = WorldRefreshRequestSchema.parse({ installationId });
@@ -86,20 +94,29 @@ export function useWorldCatalog() {
       const parsed = WorldRefreshResponseSchema.parse(payload);
       if (!mountedRef.current) return;
       setCatalog(asCatalog(parsed));
-      if (parsed.meta.mode === "fixture") {
-        setMessage("Fixture world view built without a paid API call.");
-      } else if (parsed.meta.cacheStatus === "hit") {
-        setMessage("The current headline set is unchanged. Reused the saved world view without another model call.");
-      } else {
-        setMessage("World view updated from the current headline feed.");
-      }
+      setMessageTone(parsed.feed.stale ? "warning" : "info");
+      setMessage(worldRefreshCompletionMessage(parsed));
     } catch (caught) {
       if (mountedRef.current) {
         setError(caught instanceof Error ? caught.message : "The world view could not be refreshed.");
       }
     } finally {
-      if (mountedRef.current) setRefreshing(false);
+      refreshingRef.current = false;
+      if (mountedRef.current) {
+        setRefreshing(false);
+        setRefreshLongRunning(false);
+      }
     }
+  }, []);
+
+  useEffect(() => {
+    if (!refreshing) return;
+    const longRunningTimer = window.setTimeout(() => {
+      if (mountedRef.current && refreshingRef.current) setRefreshLongRunning(true);
+    }, 8_000);
+    return () => {
+      window.clearTimeout(longRunningTimer);
+    };
   }, [refreshing]);
 
   useEffect(() => {
@@ -112,5 +129,17 @@ export function useWorldCatalog() {
     };
   }, [load]);
 
-  return { catalog, loading, refreshing, message, error, load, refresh };
+  return {
+    catalog,
+    loading,
+    refreshing,
+    refreshLongRunning,
+    message,
+    messageTone,
+    error,
+    load,
+    refresh,
+  };
 }
+
+export type WorldCatalogController = ReturnType<typeof useWorldCatalog>;

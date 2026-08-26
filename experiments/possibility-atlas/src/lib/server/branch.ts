@@ -161,7 +161,10 @@ export async function createExpansionGenerationTemplateWithOpenAI(
     input: [
       {
         role: "system",
-        content: buildExpansionAtlasSystemPrompt(maxBranches),
+        content: buildExpansionAtlasSystemPrompt(
+          maxBranches,
+          Boolean(input.causalContext),
+        ),
       },
       {
         role: "user",
@@ -169,6 +172,7 @@ export async function createExpansionGenerationTemplateWithOpenAI(
           snapshot: input.snapshot,
           lineage: input.lineage,
           maxBranches,
+          causalContext: input.causalContext,
         }),
       },
     ],
