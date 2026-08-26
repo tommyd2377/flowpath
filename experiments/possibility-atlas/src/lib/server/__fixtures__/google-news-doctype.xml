@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!DOCTYPE rss [
+  <!ENTITY expansion "This content must never be expanded">
+]>
+<rss>
+  <channel>
+    <item>
+      <title>&amp;expansion; - Example</title>
+      <link>https://news.google.com/rss/articles/hostile</link>
+      <guid>hostile-story</guid>
+      <source url="https://example.com/">Example</source>
+    </item>
+  </channel>
+</rss>
