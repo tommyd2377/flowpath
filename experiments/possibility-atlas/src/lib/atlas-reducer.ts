@@ -41,6 +41,7 @@ export type AtlasAction =
       at: string;
     }
   | { type: "focus_changed"; nodeId: string | null }
+  | { type: "ripple_call_recorded"; at: string }
   | { type: "recover_interrupted"; at: string };
 
 export type ExpansionAvailability =
@@ -434,6 +435,13 @@ export function atlasReducer(graph: AtlasGraph, action: AtlasAction): AtlasGraph
         throw new AtlasReducerError("The requested focus node is unavailable.");
       }
       return parseGraph({ ...current, focusedNodeId: action.nodeId });
+
+    case "ripple_call_recorded":
+      return parseGraph({
+        ...current,
+        callsUsed: callsAfter(current, true),
+        updatedAt: action.at,
+      });
 
     case "recover_interrupted": {
       let changed = false;

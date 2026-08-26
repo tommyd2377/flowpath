@@ -18,6 +18,7 @@ import {
   saveStorageEnvelope,
   upsertAtlas,
 } from "../lib/storage";
+import { WorldInMotion } from "./world-in-motion";
 
 type FeedState = "loading" | "ready" | "stale" | "error";
 
@@ -147,6 +148,8 @@ export function HeadlinePicker() {
       </header>
 
       {storageWarning ? <p className="notice warning-notice" role="status">{storageWarning}</p> : null}
+
+      <WorldInMotion />
 
       {recent.length > 0 ? (
         <section className="recent-section" aria-labelledby="recent-heading">

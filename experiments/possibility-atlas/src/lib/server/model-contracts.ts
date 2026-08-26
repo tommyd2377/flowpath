@@ -64,3 +64,33 @@ export function createExpansionModelOutputSchema(maxBranches: number) {
 export type ExpansionModelOutput = z.infer<
   ReturnType<typeof createExpansionModelOutputSchema>
 >;
+
+export const RippleModelLinkSchema = z
+  .object({
+    targetEventId: z.string().uuid(),
+    influence: z.enum([
+      "raises_likelihood",
+      "lowers_likelihood",
+      "accelerates",
+      "delays",
+      "amplifies_impact",
+      "reduces_pressure",
+      "creates_dependency",
+    ]),
+    strength: z.enum(["limited", "moderate", "strong"]),
+    confidence: z.enum(["low", "medium", "high"]),
+    mechanism: z.string().min(1).max(700),
+    horizon: z.string().min(1).max(120),
+    watchFor: z.array(z.string().min(1).max(180)).min(1).max(4),
+  })
+  .strict();
+
+export const RippleModelOutputSchema = z
+  .object({
+    kind: z.enum(["ripples", "no_credible_links"]),
+    links: z.array(RippleModelLinkSchema).max(5),
+    noCredibleReason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+
+export type RippleModelOutput = z.infer<typeof RippleModelOutputSchema>;

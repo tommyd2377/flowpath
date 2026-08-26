@@ -11,6 +11,7 @@ import {
   registerStartedGraph,
   resetRegisteredGraphsForTests,
   validateRegisteredExpansion,
+  validateRegisteredRippleContext,
 } from "./graph-registry";
 import { AtlasApiError } from "./http";
 import { headlineFixture } from "./openai-test-fixtures";
@@ -99,7 +100,7 @@ test("completed levels commit atomically and replay safely", () => {
       errorMessage: null,
       leafReason: null,
     })),
-    meta: { mode: "fixture", callConsumed: false },
+    meta: { mode: "fixture", callConsumed: false, cacheStatus: "miss" },
   };
 
   assert.deepEqual(commitRegisteredExpansion(input, "request-key", response), response);
@@ -147,10 +148,67 @@ test("an invalid level adds no partial nodes", () => {
         parentId: graphId,
       },
     ],
-    meta: { mode: "fixture", callConsumed: false },
+    meta: { mode: "fixture", callConsumed: false, cacheStatus: "miss" },
   };
 
   assert.throws(() => commitRegisteredExpansion(input, "invalid", invalid));
   assert.equal(getRegisteredExpansionResponse(input, "invalid"), null);
   assert.doesNotThrow(() => validateRegisteredExpansion(input));
+});
+
+test("world provenance authorizes only its registered depth-one scenarios", () => {
+  const worldEventId = "70000000-0000-4000-8000-000000000001";
+  const startInput = {
+    installationId,
+    graphId,
+    headline: headlineFixture,
+    worldEventId,
+  };
+  const start = createFixtureStartResponse(startInput);
+  registerStartedGraph(startInput, start, { model: "gpt-5.6-sol" });
+  assert.equal(start.kind, "atlas");
+  if (start.kind !== "atlas") return;
+
+  const context = validateRegisteredRippleContext({
+    installationId,
+    graphId,
+    worldEventId,
+    scenarioNodeId: start.nodes[0].id,
+  });
+  assert.equal(context.model, "gpt-5.6-sol");
+  assert.equal(context.worldEventId, worldEventId);
+  assert.deepEqual(context.snapshot, start.snapshot);
+  assert.equal(context.scenario.depth, 1);
+
+  assert.throws(
+    () =>
+      validateRegisteredRippleContext({
+        installationId,
+        graphId,
+        worldEventId: "70000000-0000-4000-8000-000000000099",
+        scenarioNodeId: start.nodes[0].id,
+      }),
+    (error: unknown) =>
+      error instanceof AtlasApiError && error.code === "world_event_mismatch",
+  );
+});
+
+test("raw headline graphs cannot generate global ripple analyses", () => {
+  const startInput = { installationId, graphId, headline: headlineFixture };
+  const start = createFixtureStartResponse(startInput);
+  registerStartedGraph(startInput, start, { model: "gpt-5.6-terra" });
+  assert.equal(start.kind, "atlas");
+  if (start.kind !== "atlas") return;
+
+  assert.throws(
+    () =>
+      validateRegisteredRippleContext({
+        installationId,
+        graphId,
+        worldEventId: "70000000-0000-4000-8000-000000000001",
+        scenarioNodeId: start.nodes[0].id,
+      }),
+    (error: unknown) =>
+      error instanceof AtlasApiError && error.code === "world_event_mismatch",
+  );
 });

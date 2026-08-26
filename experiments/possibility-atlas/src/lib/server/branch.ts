@@ -1,15 +1,15 @@
-import { randomUUID } from "node:crypto";
-
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
 import {
   ExpandAtlasRequestSchema,
-  ExpandAtlasResponseSchema,
-  PossibilityNodeSchema,
   type ExpandAtlasResponse,
-  type PossibilityNode,
 } from "../contracts";
+import {
+  ExpansionGenerationTemplateSchema,
+  materializeExpansionTemplate,
+  type ExpansionGenerationTemplate,
+} from "./generation-templates";
 import { AtlasApiError } from "./http";
 import {
   createExpansionModelOutputSchema,
@@ -125,26 +125,6 @@ function assertUniqueExpansionBranches(
   }
 }
 
-function createServerIds(count: number, factory: () => string) {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < count; index += 1) {
-    const id = factory();
-    if (!z.string().uuid().safeParse(id).success || seen.has(id)) {
-      throw new AtlasApiError({
-        code: "internal_error",
-        message: "The request could not be completed.",
-        status: 500,
-        retryable: false,
-        callConsumed: true,
-      });
-    }
-    ids.push(id);
-    seen.add(id);
-  }
-  return ids;
-}
-
 function assertCompleted<T>(response: AtlasParsedResponse<T>) {
   const evidence = extractResponseEvidence(response.output);
   if (evidence.refusal) {
@@ -167,11 +147,11 @@ function assertCompleted<T>(response: AtlasParsedResponse<T>) {
   }
 }
 
-export async function expandAtlasWithOpenAI(
+export async function createExpansionGenerationTemplateWithOpenAI(
   rawInput: ExpandAtlasRequest,
   options: ExpandAtlasOpenAIOptions,
-): Promise<ExpandAtlasResponse> {
-  const { input, nextDepth, maxBranches } = validateExpansionContext(rawInput);
+): Promise<ExpansionGenerationTemplate> {
+  const { input, maxBranches } = validateExpansionContext(rawInput);
   const modelSchema = createExpansionModelOutputSchema(maxBranches);
   const request: AtlasResponsesRequest = {
     model: options.model,
@@ -246,12 +226,9 @@ export async function expandAtlasWithOpenAI(
           callConsumed: true,
         });
       }
-      return ExpandAtlasResponseSchema.parse({
-        ok: true,
+      return ExpansionGenerationTemplateSchema.parse({
         kind: "leaf",
-        parentId: input.parentId,
         reason: parsed.leafReason,
-        meta: { mode: "live", callConsumed: true },
       });
     }
 
@@ -281,14 +258,9 @@ export async function expandAtlasWithOpenAI(
       input.lineage.map((node) => node.title),
     );
 
-    const createId = options.createId ?? randomUUID;
-    const nodeIds = createServerIds(parsed.branches.length, createId);
-    const nodes = parsed.branches.map((branch, index): PossibilityNode => {
-      const atDepthLimit = nextDepth === 5;
-      return PossibilityNodeSchema.parse({
-        id: nodeIds[index],
-        parentId: input.parentId,
-        depth: nextDepth,
+    return ExpansionGenerationTemplateSchema.parse({
+      kind: "branches",
+      branches: parsed.branches.map((branch) => ({
         title: branch.title,
         summary: branch.summary,
         whyPlausible: branch.whyPlausible,
@@ -296,19 +268,7 @@ export async function expandAtlasWithOpenAI(
         watchFor: branch.watchFor,
         lessLikelyIf: branch.lessLikelyIf,
         horizon: branch.horizon,
-        childIds: [],
-        status: atDepthLimit ? "leaf" : "ready",
-        errorMessage: null,
-        leafReason: atDepthLimit ? "Maximum atlas depth reached." : null,
-      });
-    });
-
-    return ExpandAtlasResponseSchema.parse({
-      ok: true,
-      kind: "branches",
-      parentId: input.parentId,
-      nodes,
-      meta: { mode: "live", callConsumed: true },
+      })),
     });
   } catch (error) {
     if (error instanceof AtlasApiError) throw error;
@@ -321,4 +281,29 @@ export async function expandAtlasWithOpenAI(
       cause: error,
     });
   }
+}
+
+export async function expandAtlasWithOpenAI(
+  rawInput: ExpandAtlasRequest,
+  options: ExpandAtlasOpenAIOptions,
+): Promise<ExpandAtlasResponse> {
+  const context = validateExpansionContext(rawInput);
+  const template = await createExpansionGenerationTemplateWithOpenAI(
+    context.input,
+    options,
+  );
+  return materializeExpansionTemplate(
+    template,
+    {
+      parentId: context.input.parentId,
+      nextDepth: context.nextDepth,
+      maxBranches: context.maxBranches,
+    },
+    {
+      mode: "live",
+      callConsumed: true,
+      cacheStatus: "miss",
+      createId: options.createId,
+    },
+  );
 }

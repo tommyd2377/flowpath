@@ -6,6 +6,7 @@ import type { ResponseCreateParamsNonStreaming } from "openai/resources/response
 import { AtlasApiError } from "./http";
 
 export const DEFAULT_ATLAS_MODEL = "gpt-5.6-terra";
+export const DEFAULT_WORLD_ATLAS_MODEL = "gpt-5.6-sol";
 
 export type AtlasServerMode = "live" | "fixture";
 
@@ -93,6 +94,24 @@ export function getAtlasModel(environment: NodeJS.ProcessEnv = process.env) {
     throw new AtlasApiError({
       code: "analysis_misconfigured",
       message: "The analysis model configuration is invalid.",
+      status: 503,
+      retryable: false,
+      callConsumed: false,
+    });
+  }
+  return model;
+}
+
+export function getWorldAtlasModel(
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const model =
+    environment.POSSIBILITY_ATLAS_WORLD_OPENAI_MODEL?.trim() ||
+    DEFAULT_WORLD_ATLAS_MODEL;
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(model)) {
+    throw new AtlasApiError({
+      code: "analysis_misconfigured",
+      message: "The world-analysis model configuration is invalid.",
       status: 503,
       retryable: false,
       callConsumed: false,

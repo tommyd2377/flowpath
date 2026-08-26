@@ -68,6 +68,28 @@ test("initial generation uses one bounded web search and materializes server IDs
   assert.ok(result.nodes.every((node) => node.parentId === startInput.graphId));
 });
 
+test("world-event verification asks Sol for materially distinct primary scenarios", async () => {
+  const adapter = new MockResponsesAdapter(
+    searchedResponse(initialParsedOutput()),
+  );
+  await startAtlasWithOpenAI(
+    {
+      ...startInput,
+      worldEventId: "70000000-0000-4000-8000-000000000001",
+    },
+    {
+      adapter,
+      model: "gpt-5.6-sol",
+      createId: testIdFactory(),
+    },
+  );
+
+  assert.equal(adapter.calls.length, 1);
+  assert.equal(adapter.calls[0].request.model, "gpt-5.6-sol");
+  assert.match(adapter.calls[0].request.input[0].content, /primary scenarios/i);
+  assert.match(adapter.calls[0].request.input[1].content, /world event/i);
+});
+
 test("unconsulted fact or branch URLs produce insufficient evidence", async () => {
   const parsed = initialParsedOutput();
   parsed.branches[0] = modelBranch(1, {

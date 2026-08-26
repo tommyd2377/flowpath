@@ -1,16 +1,15 @@
-import { randomUUID } from "node:crypto";
-
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
 import {
-  EventSnapshotSchema,
-  PossibilityNodeSchema,
   StartAtlasRequestSchema,
-  StartAtlasResponseSchema,
-  type PossibilityNode,
   type StartAtlasResponse,
 } from "../contracts";
+import {
+  materializeStartTemplate,
+  StartGenerationTemplateSchema,
+  type StartGenerationTemplate,
+} from "./generation-templates";
 import { AtlasApiError } from "./http";
 import {
   InitialModelOutputSchema,
@@ -30,7 +29,12 @@ import {
   validateModelSources,
   type ExtractedEvidence,
 } from "./provenance";
-import { buildInitialAtlasInput, INITIAL_ATLAS_SYSTEM_PROMPT } from "./prompts";
+import {
+  buildInitialAtlasInput,
+  buildWorldInitialAtlasInput,
+  INITIAL_ATLAS_SYSTEM_PROMPT,
+  WORLD_INITIAL_ATLAS_SYSTEM_PROMPT,
+} from "./prompts";
 import { atlasSafetyIdentifier } from "./request-guard";
 
 const INITIAL_MAX_OUTPUT_TOKENS = 4_000;
@@ -45,10 +49,6 @@ export type StartAtlasOpenAIOptions = {
   now?: () => Date;
   createId?: () => string;
 };
-
-function liveMeta() {
-  return { mode: "live" as const, callConsumed: true };
-}
 
 function modelCallError(error: unknown) {
   if (error instanceof AtlasApiError) return error;
@@ -90,14 +90,12 @@ function insufficientResponse(
   parsed: InitialModelOutput,
   evidence: ExtractedEvidence,
   reason: string,
-): StartAtlasResponse {
-  return StartAtlasResponseSchema.parse({
-    ok: true,
+): StartGenerationTemplate {
+  return StartGenerationTemplateSchema.parse({
     kind: "insufficient_evidence",
     summary: parsed.summary,
     reason,
     sources: sourcesFromEvidence(evidence),
-    meta: liveMeta(),
   });
 }
 
@@ -122,39 +120,30 @@ function assertUniqueBranches(branches: ModelPossibility[]) {
   }
 }
 
-function createServerIds(count: number, factory: () => string) {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < count; index += 1) {
-    const id = factory();
-    if (!z.string().uuid().safeParse(id).success || seen.has(id)) {
-      throw new AtlasApiError({
-        code: "internal_error",
-        message: "The request could not be completed.",
-        status: 500,
-        retryable: false,
-        callConsumed: true,
-      });
-    }
-    ids.push(id);
-    seen.add(id);
-  }
-  return ids;
-}
-
-export async function startAtlasWithOpenAI(
+export async function createStartGenerationTemplateWithOpenAI(
   rawInput: StartAtlasRequest,
   options: StartAtlasOpenAIOptions,
-): Promise<StartAtlasResponse> {
+): Promise<StartGenerationTemplate> {
   const input = StartAtlasRequestSchema.parse(rawInput);
+  const isWorldEvent = Boolean(input.worldEventId);
   const request: AtlasResponsesRequest = {
     model: options.model,
     store: false,
     reasoning: { effort: "low" },
     max_output_tokens: INITIAL_MAX_OUTPUT_TOKENS,
     input: [
-      { role: "system", content: INITIAL_ATLAS_SYSTEM_PROMPT },
-      { role: "user", content: buildInitialAtlasInput(input.headline) },
+      {
+        role: "system",
+        content: isWorldEvent
+          ? WORLD_INITIAL_ATLAS_SYSTEM_PROMPT
+          : INITIAL_ATLAS_SYSTEM_PROMPT,
+      },
+      {
+        role: "user",
+        content: isWorldEvent
+          ? buildWorldInitialAtlasInput(input.headline)
+          : buildInitialAtlasInput(input.headline),
+      },
     ],
     tools: [{ type: "web_search", search_context_size: "medium" }],
     tool_choice: "required",
@@ -273,15 +262,16 @@ export async function startAtlasWithOpenAI(
         ? "corroborated"
         : "partial";
 
-    const createId = options.createId ?? randomUUID;
-    const serverIds = createServerIds(parsed.branches.length + 1, createId);
-    const nodeIds = serverIds.slice(0, parsed.branches.length);
-    const snapshotId = serverIds.at(-1);
-    const nodes = parsed.branches.map((branch, index): PossibilityNode =>
-      PossibilityNodeSchema.parse({
-        id: nodeIds[index],
-        parentId: input.graphId,
-        depth: 1,
+    return StartGenerationTemplateSchema.parse({
+      kind: "atlas",
+      snapshot: {
+        verificationStatus,
+        summary: parsed.summary,
+        facts,
+        uncertainties: parsed.uncertainties,
+        sources: validatedSources.sources,
+      },
+      branches: parsed.branches.map((branch) => ({
         title: branch.title,
         summary: branch.summary,
         whyPlausible: branch.whyPlausible,
@@ -289,30 +279,7 @@ export async function startAtlasWithOpenAI(
         watchFor: branch.watchFor,
         lessLikelyIf: branch.lessLikelyIf,
         horizon: branch.horizon,
-        childIds: [],
-        status: "ready",
-        errorMessage: null,
-        leafReason: null,
-      }),
-    );
-
-    const snapshot = EventSnapshotSchema.parse({
-      id: snapshotId,
-      headline: input.headline,
-      capturedAt: (options.now?.() ?? new Date()).toISOString(),
-      verificationStatus,
-      summary: parsed.summary,
-      facts,
-      uncertainties: parsed.uncertainties,
-      sources: validatedSources.sources,
-    });
-
-    return StartAtlasResponseSchema.parse({
-      ok: true,
-      kind: "atlas",
-      snapshot,
-      nodes,
-      meta: liveMeta(),
+      })),
     });
   } catch (error) {
     if (error instanceof AtlasApiError) throw error;
@@ -325,4 +292,21 @@ export async function startAtlasWithOpenAI(
       cause: error,
     });
   }
+}
+
+export async function startAtlasWithOpenAI(
+  rawInput: StartAtlasRequest,
+  options: StartAtlasOpenAIOptions,
+): Promise<StartAtlasResponse> {
+  const template = await createStartGenerationTemplateWithOpenAI(
+    rawInput,
+    options,
+  );
+  return materializeStartTemplate(template, rawInput, {
+    mode: "live",
+    callConsumed: true,
+    cacheStatus: "miss",
+    capturedAt: (options.now?.() ?? new Date()).toISOString(),
+    createId: options.createId,
+  });
 }

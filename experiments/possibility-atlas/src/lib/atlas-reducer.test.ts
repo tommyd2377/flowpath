@@ -76,7 +76,7 @@ function startedGraph() {
     kind: "atlas",
     snapshot,
     nodes: [node(1, GRAPH_ID, 1), node(2, GRAPH_ID, 1), node(3, GRAPH_ID, 1)],
-    meta: { mode: "fixture", callConsumed: true },
+    meta: { mode: "fixture", callConsumed: true, cacheStatus: "miss" },
   };
   return atlasReducer(graph, { type: "start_succeeded", response, at: NOW });
 }
@@ -90,6 +90,17 @@ test("start response atomically installs a verified root level", () => {
   assert.equal(graph.snapshot?.id, snapshot.id);
 });
 
+test("a newly applied ripple model call increments only the atlas call counter", () => {
+  const graph = startedGraph();
+  const result = atlasReducer(graph, {
+    type: "ripple_call_recorded",
+    at: new Date(Date.parse(NOW) + 1_000).toISOString(),
+  });
+  assert.equal(result.callsUsed, 2);
+  assert.deepEqual(result.nodes, graph.nodes);
+  assert.deepEqual(result.rootChildIds, graph.rootChildIds);
+});
+
 test("insufficient evidence preserves its summary and clickable-source data", () => {
   const graph = createAtlasGraph({ id: GRAPH_ID, headline, now: NOW });
   const response: StartAtlasResponse = {
@@ -98,7 +109,7 @@ test("insufficient evidence preserves its summary and clickable-source data", ()
     summary: "The event could not be confirmed consistently.",
     reason: "Only one current report could be tied to the claim.",
     sources: snapshot.sources,
-    meta: { mode: "live", callConsumed: true },
+    meta: { mode: "live", callConsumed: true, cacheStatus: "miss" },
   };
   const result = atlasReducer(graph, {
     type: "start_succeeded",
@@ -106,8 +117,8 @@ test("insufficient evidence preserves its summary and clickable-source data", ()
     at: NOW,
   });
   assert.equal(result.status, "insufficient_evidence");
-  assert.equal(result.insufficientSummary, response.summary);
-  assert.deepEqual(result.insufficientSources, response.sources);
+  assert.equal(result.insufficientSummary, "The event could not be confirmed consistently.");
+  assert.deepEqual(result.insufficientSources, snapshot.sources);
 });
 
 test("an invalid generated level is rejected without mutating the graph", () => {
@@ -118,7 +129,7 @@ test("an invalid generated level is rejected without mutating the graph", () => 
     kind: "branches",
     parentId: uuid(1),
     nodes: [node(4, uuid(2), 2), node(5, uuid(1), 2), node(6, uuid(1), 2)],
-    meta: { mode: "fixture", callConsumed: true },
+    meta: { mode: "fixture", callConsumed: true, cacheStatus: "miss" },
   };
   const generating = atlasReducer(graph, {
     type: "expansion_requested",
@@ -150,7 +161,7 @@ test("expansion commits children and lineage together", () => {
     kind: "branches",
     parentId: uuid(1),
     nodes: [node(4, uuid(1), 2), node(5, uuid(1), 2), node(6, uuid(1), 2)],
-    meta: { mode: "live", callConsumed: true },
+    meta: { mode: "live", callConsumed: true, cacheStatus: "miss" },
   };
   const expanded = atlasReducer(generating, {
     type: "expansion_succeeded",
@@ -186,7 +197,7 @@ test("a late failed replay cannot corrupt an already-expanded parent", () => {
     kind: "branches",
     parentId: uuid(1),
     nodes: [node(4, uuid(1), 2), node(5, uuid(1), 2), node(6, uuid(1), 2)],
-    meta: { mode: "live", callConsumed: true },
+    meta: { mode: "live", callConsumed: true, cacheStatus: "miss" },
   };
   const expanded = atlasReducer(generating, {
     type: "expansion_succeeded",
@@ -215,7 +226,7 @@ test("a leaf response closes only the requested path", () => {
     kind: "leaf",
     parentId: uuid(2),
     reason: "The available evidence no longer supports useful branching.",
-    meta: { mode: "live", callConsumed: true },
+    meta: { mode: "live", callConsumed: true, cacheStatus: "miss" },
   };
   const result = atlasReducer(graph, {
     type: "expansion_succeeded",

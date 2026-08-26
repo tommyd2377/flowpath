@@ -10,6 +10,11 @@ import {
   type PossibilityNode,
   type StartAtlasResponse,
 } from "../contracts";
+import type { WorldEventSummary } from "../world-contracts";
+import {
+  RippleGenerationTemplateSchema,
+  type RippleGenerationTemplate,
+} from "./generation-templates";
 import type { ExpandAtlasRequest } from "./branch";
 import { validateExpansionContext } from "./branch";
 
@@ -72,7 +77,7 @@ export function createFixtureStartResponse(
   const snapshot = EventSnapshotSchema.parse({
     id: deterministicUuid(`${input.graphId}:snapshot`),
     headline: input.headline,
-    capturedAt: "2026-01-01T00:00:00.000Z",
+    capturedAt: "2026-08-25T16:00:00.000Z",
     verificationStatus: "corroborated",
     summary: `Fixture-only snapshot for local UI development: ${input.headline.title}`,
     facts: [
@@ -102,7 +107,7 @@ export function createFixtureStartResponse(
     kind: "atlas",
     snapshot,
     nodes,
-    meta: { mode: "fixture", callConsumed: false },
+    meta: { mode: "fixture", callConsumed: false, cacheStatus: "miss" },
   });
 }
 
@@ -133,6 +138,33 @@ export function createFixtureExpansionResponse(
     kind: "branches",
     parentId: input.parentId,
     nodes,
-    meta: { mode: "fixture", callConsumed: false },
+    meta: { mode: "fixture", callConsumed: false, cacheStatus: "miss" },
+  });
+}
+
+export function createFixtureRippleTemplate(
+  targets: WorldEventSummary[],
+): RippleGenerationTemplate {
+  const selected = targets.slice(0, 2);
+  if (selected.length === 0) {
+    return RippleGenerationTemplateSchema.parse({
+      kind: "no_credible_links",
+      reason: "The fixture catalog has no other eligible event to connect.",
+    });
+  }
+  return RippleGenerationTemplateSchema.parse({
+    kind: "ripples",
+    links: selected.map((target, index) => ({
+      targetEventId: target.id,
+      influence: index === 0 ? "raises_likelihood" : "amplifies_impact",
+      strength: index === 0 ? "strong" : "moderate",
+      confidence: index === 0 ? "medium" : "low",
+      mechanism:
+        index === 0
+          ? "Fixture-only: the selected scenario changes a shared economic pressure affecting the target event."
+          : "Fixture-only: the scenario and target depend on overlapping institutional responses.",
+      horizon: "Coming weeks",
+      watchFor: ["A confirming policy announcement", "A measurable market response"],
+    })),
   });
 }

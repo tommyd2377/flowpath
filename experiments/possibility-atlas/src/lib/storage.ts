@@ -273,4 +273,6 @@ export function setFixtureGraphMode(
 export function clearAtlasStorage(storage: StorageLike) {
   storage.removeItem(ATLAS_STORAGE_KEY);
   storage.removeItem(ATLAS_RUNTIME_META_KEY);
+  storage.removeItem("possibility-atlas:world:v1");
+  storage.removeItem("possibility-atlas:ripple-accounting:v1");
 }

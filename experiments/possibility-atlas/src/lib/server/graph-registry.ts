@@ -8,6 +8,7 @@ import {
   type PossibilityNode,
   type StartAtlasResponse,
 } from "../contracts";
+import type { RippleRequest } from "../world-contracts";
 import type { ExpandAtlasRequest } from "./branch";
 import { AtlasApiError } from "./http";
 
@@ -15,10 +16,15 @@ type StartRegistration = {
   installationId: string;
   graphId: string;
   headline: HeadlineItem;
+  worldEventId?: string;
 };
+
+type GraphProvenance = { model: string };
 
 type RegisteredGraph = {
   installationId: string;
+  worldEventId: string | null;
+  model: string;
   headlineFingerprint: string;
   snapshotFingerprint: string | null;
   startResponse: StartAtlasResponse;
@@ -77,7 +83,8 @@ function assertRegistrationOwner(
 ) {
   if (
     entry.installationId !== input.installationId ||
-    entry.headlineFingerprint !== fingerprint(input.headline)
+    entry.headlineFingerprint !== fingerprint(input.headline) ||
+    entry.worldEventId !== (input.worldEventId ?? null)
   ) {
     throw registrationError(
       "graph_conflict",
@@ -98,6 +105,7 @@ export function getRegisteredStartResponse(
 export function registerStartedGraph(
   input: StartRegistration,
   response: StartAtlasResponse,
+  provenance: GraphProvenance = { model: "gpt-5.6-terra" },
 ) {
   const existing = graphs.get(input.graphId);
   if (existing) {
@@ -141,6 +149,8 @@ export function registerStartedGraph(
 
   graphs.set(input.graphId, {
     installationId: input.installationId,
+    worldEventId: input.worldEventId ?? null,
+    model: provenance.model,
     headlineFingerprint: fingerprint(input.headline),
     snapshotFingerprint:
       response.kind === "atlas" ? fingerprint(response.snapshot) : null,
@@ -251,7 +261,55 @@ export function validateRegisteredExpansion(input: ExpandAtlasRequest) {
       "This possibility is already a terminal leaf.",
     );
   }
-  return { remainingNodeCapacity: expectedCapacity, parent: clone(parent) };
+  return {
+    remainingNodeCapacity: expectedCapacity,
+    parent: clone(parent),
+    model: entry.model,
+    worldEventId: entry.worldEventId,
+  };
+}
+
+export function validateRegisteredRippleContext(input: RippleRequest) {
+  const entry = graphs.get(input.graphId);
+  if (!entry) {
+    throw registrationError(
+      "atlas_session_expired",
+      "This atlas analysis session expired. Restart it before watching the world react.",
+    );
+  }
+  if (entry.installationId !== input.installationId) {
+    throw registrationError(
+      "graph_conflict",
+      "This graph identifier belongs to another local installation.",
+    );
+  }
+  if (!entry.worldEventId || entry.worldEventId !== input.worldEventId) {
+    throw registrationError(
+      "world_event_mismatch",
+      "This atlas is not registered to the supplied world event.",
+      400,
+    );
+  }
+  if (entry.startResponse.kind !== "atlas") {
+    throw registrationError(
+      "event_not_verified",
+      "This world event does not have a verified source snapshot.",
+    );
+  }
+  const scenario = entry.nodes.get(input.scenarioNodeId);
+  if (!scenario || scenario.depth !== 1 || scenario.parentId !== input.graphId) {
+    throw registrationError(
+      "invalid_ripple_scenario",
+      "World reactions can only be analyzed from a registered primary scenario.",
+      400,
+    );
+  }
+  return {
+    worldEventId: entry.worldEventId,
+    model: entry.model,
+    snapshot: clone(entry.startResponse.snapshot),
+    scenario: clone(scenario),
+  };
 }
 
 export function commitRegisteredExpansion(

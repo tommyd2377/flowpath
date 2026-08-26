@@ -18,6 +18,8 @@ export function NodeCard({
   onActivate,
   onRetry,
   interactionDisabled = false,
+  hideAction = false,
+  actionLabel,
 }: {
   node: PossibilityNode;
   current?: boolean;
@@ -25,13 +27,16 @@ export function NodeCard({
   onActivate?: () => void;
   onRetry?: () => void;
   interactionDisabled?: boolean;
+  hideAction?: boolean;
+  actionLabel?: string;
 }) {
-  const actionLabel =
-    node.status === "error"
+  const resolvedActionLabel =
+    actionLabel ??
+    (node.status === "error"
       ? "Try again"
       : availability.allowed
         ? "Explore this path"
-        : terminalLabels[availability.reason];
+        : terminalLabels[availability.reason]);
   return (
     <article className={`node-card${current ? " current-node" : ""}${node.status === "leaf" ? " leaf-node" : ""}`}>
       <div className="node-meta">
@@ -61,14 +66,14 @@ export function NodeCard({
       </details>
       {node.leafReason ? <p className="leaf-reason">{node.leafReason}</p> : null}
       {node.errorMessage ? <p className="inline-error" role="alert">{node.errorMessage}</p> : null}
-      {!current || node.status === "error" || availability.allowed ? (
+      {!hideAction && (!current || node.status === "error" || availability.allowed) ? (
         <button
           type="button"
           className="node-action"
           disabled={interactionDisabled || node.status === "generating" || (!availability.allowed && availability.reason === "graph_unavailable")}
           onClick={node.status === "error" ? onRetry : onActivate}
         >
-          {actionLabel}
+          {resolvedActionLabel}
           {node.status !== "generating" ? <span aria-hidden="true">→</span> : null}
         </button>
       ) : null}

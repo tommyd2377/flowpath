@@ -137,6 +137,7 @@ export const StartAtlasRequestSchema = z
     installationId: z.string().uuid(),
     graphId: z.string().uuid(),
     headline: HeadlineItemSchema,
+    worldEventId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -168,6 +169,7 @@ export const ResponseMetaSchema = z
   .object({
     mode: z.enum(["live", "fixture"]),
     callConsumed: z.boolean(),
+    cacheStatus: z.enum(["hit", "miss"]),
   })
   .strict();
 

@@ -16,6 +16,12 @@ import {
   type StorageEnvelope,
 } from "../lib/contracts";
 import {
+  WorldEventDetailResponseSchema,
+  type RippleAnalysisResponse,
+  type RippleEdge,
+  type WorldEventSummary,
+} from "../lib/world-contracts";
+import {
   atlasReducer,
   createAtlasGraph,
   expansionAvailability,
@@ -32,10 +38,28 @@ import {
   setFixtureGraphMode,
   upsertAtlas,
 } from "../lib/storage";
+import {
+  beginRippleCallAttempt,
+  deleteAtlasFromBrowser,
+  openWorldEvent,
+  recoverRippleCallAccounting,
+  resolveRippleCallAttempt,
+  restartWorldAtlas,
+} from "../lib/world-navigation";
+import {
+  loadWorldStorageEnvelope,
+  pruneWorldStorage,
+  rippleAnalysisKey,
+  saveWorldStorageEnvelope,
+  type WorldJourney,
+  type WorldStorageEnvelope,
+} from "../lib/world-storage";
 import { AtlasOutline } from "./atlas-outline";
 import { FixtureModeBanner } from "./fixture-banner";
 import { MapDialog } from "./map-dialog";
 import { NodeCard } from "./node-card";
+import { RipplePanel } from "./ripple-panel";
+import { WorldContext } from "./world-context";
 
 type ApiFailure = { message: string; callConsumed: boolean; retryable: boolean };
 
@@ -162,6 +186,7 @@ export function AtlasView({ graphId }: { graphId: string }) {
   const searchParams = useSearchParams();
   const requestedNodeId = searchParams.get("node");
   const envelopeRef = useRef<StorageEnvelope | null>(null);
+  const worldEnvelopeRef = useRef<WorldStorageEnvelope | null>(null);
   const graphRef = useRef<AtlasGraph | null>(null);
   const startAttemptedRef = useRef(new Set<string>());
   const [graph, setGraph] = useState<AtlasGraph | null>(null);
@@ -170,6 +195,11 @@ export function AtlasView({ graphId }: { graphId: string }) {
   const [fixtureMode, setFixtureMode] = useState(false);
   const [busyParentId, setBusyParentId] = useState<string | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
+  const [worldEventId, setWorldEventId] = useState<string | null>(null);
+  const [worldEventTitle, setWorldEventTitle] = useState<string | null>(null);
+  const [worldEvent, setWorldEvent] = useState<WorldEventSummary | null>(null);
+  const [worldJourney, setWorldJourney] = useState<WorldJourney | null>(null);
+  const [installationId, setInstallationId] = useState<string | null>(null);
 
   const persistGraph = useCallback((next: AtlasGraph) => {
     graphRef.current = next;
@@ -181,6 +211,14 @@ export function AtlasView({ graphId }: { graphId: string }) {
     try {
       const saved = saveStorageEnvelope(window.localStorage, nextEnvelope);
       envelopeRef.current = saved.envelope;
+      if (worldEnvelopeRef.current) {
+        const prunedWorld = pruneWorldStorage(
+          worldEnvelopeRef.current,
+          Object.keys(saved.envelope.atlases),
+          next.updatedAt,
+        );
+        worldEnvelopeRef.current = saveWorldStorageEnvelope(window.localStorage, prunedWorld);
+      }
       if (saved.prunedAtlasIds.length > 0) {
         setStorageWarning("Older atlases were removed to preserve this active atlas.");
       }
@@ -210,6 +248,8 @@ export function AtlasView({ graphId }: { graphId: string }) {
         installationId: envelope.installationId,
         graphId: startingGraph.id,
         headline: startingGraph.headline,
+        worldEventId:
+          worldEnvelopeRef.current?.graphAssociations[startingGraph.id]?.eventId,
       });
       const response = await fetch("/api/atlas/start", {
         method: "POST",
@@ -247,11 +287,28 @@ export function AtlasView({ graphId }: { graphId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    let recoveryWarning: string | null = null;
+    try {
+      recoverRippleCallAccounting(window.localStorage);
+    } catch {
+      recoveryWarning = "A previous ripple call could not be reconciled with browser storage yet.";
+    }
     const loaded = loadStorageEnvelope(window.localStorage);
     envelopeRef.current = loaded.envelope;
+    const loadedWorld = loadWorldStorageEnvelope(window.localStorage);
+    const prunedWorld = pruneWorldStorage(
+      loadedWorld.envelope,
+      Object.keys(loaded.envelope.atlases),
+      new Date().toISOString(),
+    );
+    worldEnvelopeRef.current = prunedWorld;
+    try {
+      saveWorldStorageEnvelope(window.localStorage, prunedWorld);
+    } catch {
+      recoveryWarning = "World in Motion context could not be restored in this browser.";
+    }
     const stored = loaded.envelope.atlases[graphId] ?? null;
     let recovered: AtlasGraph | null = stored;
-    let recoveryWarning: string | null = null;
     if (stored) {
       try {
         recovered = atlasReducer(stored, { type: "recover_interrupted", at: new Date().toISOString() });
@@ -270,6 +327,10 @@ export function AtlasView({ graphId }: { graphId: string }) {
       if (stored && recovered && recovered !== stored) persistGraph(recovered);
       else setGraph(recovered);
       setFixtureMode(storedFixtureMode);
+      const association = prunedWorld.graphAssociations[graphId];
+      setWorldEventId(association?.eventId ?? null);
+      setWorldJourney(prunedWorld.journeys[graphId] ?? null);
+      setInstallationId(loaded.envelope.installationId);
       setHydrated(true);
     });
 
@@ -287,6 +348,32 @@ export function AtlasView({ graphId }: { graphId: string }) {
       window.removeEventListener("storage", onStorage);
     };
   }, [graphId, persistGraph]);
+
+  useEffect(() => {
+    if (!worldEventId) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setWorldEvent(null);
+    });
+    void (async () => {
+      try {
+        const response = await fetch(`/api/world/events/${encodeURIComponent(worldEventId)}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const parsed = WorldEventDetailResponseSchema.parse(await readPayload(response));
+        if (!cancelled) {
+          setWorldEvent(parsed.event);
+          setWorldEventTitle(parsed.event.canonicalTitle);
+        }
+      } catch {
+        // The frozen atlas remains usable if its catalog context is unavailable.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [worldEventId]);
 
   useEffect(() => {
     if (!hydrated || graph?.status !== "verifying" || startAttemptedRef.current.has(graph.id)) return;
@@ -394,6 +481,10 @@ export function AtlasView({ graphId }: { graphId: string }) {
     const current = graphRef.current;
     if (!current) return;
     navigateToNode(nodeId);
+    const worldAssociated = Boolean(
+      worldEnvelopeRef.current?.graphAssociations[current.id],
+    );
+    if (worldAssociated && current.nodes[nodeId]?.depth === 1) return;
     if (expansionAvailability(current, nodeId).allowed) void expandNode(nodeId);
   }, [expandNode, navigateToNode]);
 
@@ -410,11 +501,32 @@ export function AtlasView({ graphId }: { graphId: string }) {
     const envelope = envelopeRef.current;
     if (!current || !envelope || !window.confirm("Restart this atlas? Its generated paths will be deleted from this browser.")) return;
     const now = new Date().toISOString();
-    const next = createAtlasGraph({ id: crypto.randomUUID(), headline: current.headline, now });
-    let nextEnvelope = removeAtlas(envelope, current.id, now);
-    nextEnvelope = upsertAtlas(nextEnvelope, next);
-    envelopeRef.current = nextEnvelope;
-    saveStorageEnvelope(window.localStorage, nextEnvelope);
+    const nextGraphId = crypto.randomUUID();
+    let next = createAtlasGraph({ id: nextGraphId, headline: current.headline, now });
+    try {
+      if (worldEnvelopeRef.current?.graphAssociations[current.id]) {
+        if (!worldEvent || worldEvent.id !== worldEventId) {
+          setStorageWarning("Restart needs the current World in Motion event. Try again after its context finishes loading.");
+          return;
+        }
+        const restarted = restartWorldAtlas(window.localStorage, {
+          previousGraphId: current.id,
+          nextGraphId,
+          event: worldEvent,
+          at: now,
+        });
+        next = restarted.graph;
+        envelopeRef.current = restarted.atlasEnvelope;
+        worldEnvelopeRef.current = restarted.worldEnvelope;
+      } else {
+        let nextEnvelope = removeAtlas(envelope, current.id, now);
+        nextEnvelope = upsertAtlas(nextEnvelope, next);
+        envelopeRef.current = saveStorageEnvelope(window.localStorage, nextEnvelope).envelope;
+      }
+    } catch {
+      setStorageWarning("Restart could not be saved. The current atlas and its world context were restored.");
+      return;
+    }
     try { setFixtureGraphMode(window.localStorage, current.id, false); } catch { /* no-op */ }
     router.replace(`/atlas/${next.id}`);
   };
@@ -423,8 +535,18 @@ export function AtlasView({ graphId }: { graphId: string }) {
     const current = graphRef.current;
     const envelope = envelopeRef.current;
     if (!current || !envelope || !window.confirm("Delete this atlas from this browser? This cannot be undone.")) return;
-    const next = removeAtlas(envelope, current.id, new Date().toISOString());
-    saveStorageEnvelope(window.localStorage, next);
+    const now = new Date().toISOString();
+    try {
+      const deleted = deleteAtlasFromBrowser(window.localStorage, {
+        graphId: current.id,
+        at: now,
+      });
+      envelopeRef.current = deleted.atlasEnvelope;
+      worldEnvelopeRef.current = deleted.worldEnvelope;
+    } catch {
+      setStorageWarning("Delete could not be saved. The atlas and its world context were restored.");
+      return;
+    }
     try { setFixtureGraphMode(window.localStorage, current.id, false); } catch { /* no-op */ }
     router.replace("/");
   };
@@ -435,6 +557,92 @@ export function AtlasView({ graphId }: { graphId: string }) {
     router.replace("/");
   };
 
+  const beginRippleAttempt = useCallback((analysisKey: string) => {
+    const current = graphRef.current;
+    if (!current) return;
+    const now = new Date().toISOString();
+    const pending = beginRippleCallAttempt(window.localStorage, {
+      graphId: current.id,
+      analysisKey,
+      at: now,
+    });
+    envelopeRef.current = pending.atlasEnvelope;
+    worldEnvelopeRef.current = pending.worldEnvelope;
+  }, []);
+
+  const recordRippleCall = useCallback((
+    analysisKey: string,
+    callConsumed: boolean,
+  ) => {
+    const current = graphRef.current;
+    if (!current) return;
+    const now = new Date().toISOString();
+    try {
+      const recorded = resolveRippleCallAttempt(window.localStorage, {
+        graphId: current.id,
+        analysisKey,
+        callConsumed,
+        at: now,
+      });
+      envelopeRef.current = recorded.atlasEnvelope;
+      worldEnvelopeRef.current = recorded.worldEnvelope;
+      graphRef.current = recorded.graph;
+      setGraph(recorded.graph);
+    } catch {
+      const refreshed = loadStorageEnvelope(window.localStorage);
+      envelopeRef.current = refreshed.envelope;
+      const durable = refreshed.envelope.atlases[current.id];
+      if (durable) {
+        graphRef.current = durable;
+        setGraph(durable);
+      }
+      setStorageWarning("The model call was recorded, but its browser dedupe marker still needs recovery.");
+    }
+  }, []);
+
+  const applyRippleResponse = useCallback((
+    response: RippleAnalysisResponse,
+    scenarioNodeId: string,
+    attemptId: string,
+  ) => {
+    recordMode(response.meta.mode);
+    const current = graphRef.current;
+    if (!current) return;
+    recordRippleCall(
+      `${rippleAnalysisKey(current.id, scenarioNodeId)}:${attemptId}`,
+      response.meta.callConsumed,
+    );
+  }, [recordMode, recordRippleCall]);
+
+  const openRippleTarget = useCallback((
+    event: WorldEventSummary,
+    edge: RippleEdge,
+    scenarioNodeId: string,
+  ) => {
+    const current = graphRef.current;
+    const scenario = current?.nodes[scenarioNodeId];
+    const sourceEventId =
+      current && worldEnvelopeRef.current?.graphAssociations[current.id]?.eventId;
+    if (!current || !scenario || !sourceEventId) return;
+    try {
+      const opened = openWorldEvent(window.localStorage, event, {
+        sourceGraphId: current.id,
+        transition: {
+          sourceEventId,
+          sourceEventTitle: worldEventTitle ?? current.headline.title,
+          sourceScenarioNodeId: scenario.id,
+          sourceScenarioTitle: scenario.title,
+          targetEventId: event.id,
+          targetEventTitle: event.canonicalTitle,
+          influence: edge.influence,
+        },
+      });
+      router.push(opened.href);
+    } catch {
+      setStorageWarning("This browser could not save the conditional event journey.");
+    }
+  }, [router, worldEventTitle]);
+
   const focusedNode = graph?.focusedNodeId ? graph.nodes[graph.focusedNodeId] : null;
   const focusedLineage = useMemo(
     () => (graph && focusedNode ? lineageForNode(graph, focusedNode.id) : []),
@@ -443,6 +651,7 @@ export function AtlasView({ graphId }: { graphId: string }) {
   const childIds = graph ? (focusedNode ? focusedNode.childIds : graph.rootChildIds) : [];
   const siblingIds = graph && focusedNode ? siblingIdsForNode(graph, focusedNode.id) : [];
   const anyGenerating = Boolean(busyParentId || (graph && Object.values(graph.nodes).some((node) => node.status === "generating")));
+  const focusedWorldScenario = worldEventId && focusedNode?.depth === 1 ? focusedNode : null;
 
   if (!hydrated) {
     return <main className="atlas-shell"><div className="route-loading"><div className="spinner" /><p>Opening your saved atlas…</p></div></main>;
@@ -464,7 +673,7 @@ export function AtlasView({ graphId }: { graphId: string }) {
   if (graph.status === "verifying") {
     return (
       <main className="atlas-shell">
-        <header className="atlas-topbar"><Link href="/" className="back-link">← Headlines</Link></header>
+        <header className="atlas-topbar"><Link href={worldEventId ? "/world" : "/"} className="back-link">← {worldEventId ? "World" : "Headlines"}</Link></header>
         {fixtureMode ? <FixtureModeBanner /> : null}
         <section className="verifying-card" aria-live="polite">
           <p className="eyebrow">Freezing cited event snapshot</p>
@@ -480,7 +689,7 @@ export function AtlasView({ graphId }: { graphId: string }) {
     const callBudgetExhausted = graph.callsUsed >= MAX_ATLAS_CALLS;
     return (
       <main className="atlas-shell">
-        <header className="atlas-topbar"><Link href="/" className="back-link">← Headlines</Link></header>
+        <header className="atlas-topbar"><Link href={worldEventId ? "/world" : "/"} className="back-link">← {worldEventId ? "World" : "Headlines"}</Link></header>
         <section className="empty-state route-empty">
           <p className="eyebrow">Atlas interrupted</p>
           <h1>The event snapshot could not be created.</h1>
@@ -502,7 +711,7 @@ export function AtlasView({ graphId }: { graphId: string }) {
   if (graph.status === "insufficient_evidence") {
     return (
       <main className="atlas-shell">
-        <header className="atlas-topbar"><Link href="/" className="back-link">← Headlines</Link></header>
+        <header className="atlas-topbar"><Link href={worldEventId ? "/world" : "/"} className="back-link">← {worldEventId ? "World" : "Headlines"}</Link></header>
         {fixtureMode ? <FixtureModeBanner /> : null}
         <section className="empty-state route-empty">
           <p className="eyebrow">Evidence boundary</p>
@@ -537,7 +746,7 @@ export function AtlasView({ graphId }: { graphId: string }) {
     <main className="atlas-shell">
       {fixtureMode ? <FixtureModeBanner /> : null}
       <header className="atlas-topbar">
-        <Link href="/" className="back-link">← Headlines</Link>
+        <Link href={worldEventId ? "/world" : "/"} className="back-link">← {worldEventId ? "World" : "Headlines"}</Link>
         <div className="atlas-actions">
           <button type="button" className="secondary-button map-button" onClick={() => setMapOpen(true)}>Map</button>
           <details className="atlas-menu">
@@ -552,6 +761,13 @@ export function AtlasView({ graphId }: { graphId: string }) {
       </header>
 
       {storageWarning ? <p className="notice warning-notice" role="status">{storageWarning}</p> : null}
+
+      {worldEventId ? (
+        <WorldContext
+          eventTitle={worldEventTitle ?? graph.headline.title}
+          journey={worldJourney}
+        />
+      ) : null}
 
       <section className="atlas-heading" aria-labelledby="atlas-title">
         <div>
@@ -590,8 +806,45 @@ export function AtlasView({ graphId }: { graphId: string }) {
               onActivate={() => void expandNode(focusedNode.id)}
               onRetry={() => void expandNode(focusedNode.id)}
               interactionDisabled={Boolean(busyParentId && busyParentId !== focusedNode.id)}
+              hideAction={Boolean(focusedWorldScenario)}
             />
           )}
+
+          {focusedWorldScenario && installationId && worldEventId ? (
+            <RipplePanel
+              installationId={installationId}
+              graphId={graph.id}
+              worldEventId={worldEventId}
+              scenario={focusedWorldScenario}
+              generationDisabled={anyGenerating || graph.callsUsed >= MAX_ATLAS_CALLS}
+              deeperDisabled={!expansionAvailability(graph, focusedWorldScenario.id).allowed || anyGenerating}
+              deeperLabel={
+                expansionAvailability(graph, focusedWorldScenario.id).allowed
+                  ? "Explore deeper"
+                  : availabilityText(expansionAvailability(graph, focusedWorldScenario.id))
+              }
+              onExploreDeeper={() => void expandNode(focusedWorldScenario.id)}
+              onAttemptStarted={(attemptId) => {
+                beginRippleAttempt(
+                  `${rippleAnalysisKey(graph.id, focusedWorldScenario.id)}:${attemptId}`,
+                );
+              }}
+              onResponseApplied={(response, attemptId) =>
+                applyRippleResponse(
+                  response,
+                  focusedWorldScenario.id,
+                  attemptId,
+                )
+              }
+              onFailureApplied={(callConsumed, attemptId) => {
+                recordRippleCall(
+                  `${rippleAnalysisKey(graph.id, focusedWorldScenario.id)}:${attemptId}`,
+                  callConsumed,
+                );
+              }}
+              onOpenTarget={(event, edge) => openRippleTarget(event, edge, focusedWorldScenario.id)}
+            />
+          ) : null}
 
           {siblingIds.length > 0 ? (
             <div className="change-path">
@@ -628,13 +881,14 @@ export function AtlasView({ graphId }: { graphId: string }) {
                         onActivate={() => activateNode(child.id)}
                         onRetry={() => activateNode(child.id)}
                         interactionDisabled={anyGenerating}
+                        actionLabel={worldEventId && child.depth === 1 ? "Consider this scenario" : undefined}
                       />
                     </li>
                   );
                 })}
               </ol>
             </section>
-          ) : focusedNode && focusedNode.status !== "generating" ? (
+          ) : focusedNode && focusedNode.status !== "generating" && !focusedWorldScenario ? (
             <div className="path-end" role="status">
               <strong>{availabilityText(expansionAvailability(graph, focusedNode.id))}</strong>
               <p>{focusedNode.status === "leaf" ? "This path ends here based on the available evidence." : "Return to an earlier point to compare another possibility."}</p>

@@ -4,8 +4,10 @@ import test from "node:test";
 import { StorageEnvelopeSchema, type HeadlineItem } from "./contracts";
 import { createAtlasGraph } from "./atlas-reducer";
 import {
+  ATLAS_RUNTIME_META_KEY,
   ATLAS_STORAGE_KEY,
   cacheHeadlines,
+  clearAtlasStorage,
   createStorageEnvelope,
   loadStorageEnvelope,
   pruneToMaximum,
@@ -13,6 +15,8 @@ import {
   upsertAtlas,
   type StorageLike,
 } from "./storage";
+import { RIPPLE_ACCOUNTING_JOURNAL_KEY } from "./world-navigation";
+import { WORLD_STORAGE_KEY } from "./world-storage";
 
 const NOW = "2026-08-25T15:00:00.000Z";
 
@@ -132,4 +136,17 @@ test("quota recovery prunes oldest non-active atlases before giving up", () => {
   assert.equal(Object.keys(saved.envelope.atlases).length, 2);
   assert.ok(saved.envelope.atlases[uuid(4)]);
   assert.equal(saved.prunedAtlasIds.length, 2);
+});
+
+test("clear browser data removes atlas, runtime, and additive world envelopes", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(ATLAS_STORAGE_KEY, "atlas");
+  storage.setItem(ATLAS_RUNTIME_META_KEY, "runtime");
+  storage.setItem(WORLD_STORAGE_KEY, "world");
+  storage.setItem(RIPPLE_ACCOUNTING_JOURNAL_KEY, "journal");
+  clearAtlasStorage(storage);
+  assert.equal(storage.getItem(ATLAS_STORAGE_KEY), null);
+  assert.equal(storage.getItem(ATLAS_RUNTIME_META_KEY), null);
+  assert.equal(storage.getItem(WORLD_STORAGE_KEY), null);
+  assert.equal(storage.getItem(RIPPLE_ACCOUNTING_JOURNAL_KEY), null);
 });
