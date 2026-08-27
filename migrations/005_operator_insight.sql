@@ -1,3 +1,0 @@
-ALTER TABLE plans ADD COLUMN operator_insight_json TEXT NOT NULL DEFAULT '{"naive_path":"No mentor insight was stored for this older plan.","operator_path":"Use the clearest next move from the rest of this plan.","wasted_motion_to_avoid":"Avoid expanding the plan before taking the next concrete step."}';
-
-ALTER TABLE next_move_plans ADD COLUMN operator_insight_json TEXT NOT NULL DEFAULT '{"naive_path":"No mentor insight was stored for this older plan.","operator_path":"Use the clearest next move from the rest of this plan.","wasted_motion_to_avoid":"Avoid expanding the plan before taking the next concrete step."}';

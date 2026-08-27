@@ -1,43 +1,38 @@
 {
-  "name": "flowpath",
+  "name": "possibility-atlas",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1 --port 3100",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
-    "test": "tsx --test \"src/**/*.test.ts\"",
-    "evals": "tsx src/lib/evals/run-evals.ts --offline",
-    "evals:offline": "tsx src/lib/evals/run-evals.ts --offline",
-    "evals:anti-overfit": "FLOWPATH_EVAL_SUITE=anti_overfit tsx src/lib/evals/run-evals.ts --offline",
-    "evals:live": "FLOWPATH_LIVE_EVALS=1 tsx src/lib/evals/run-evals.ts --live",
-    "evals:live:compare": "FLOWPATH_LIVE_EVALS=1 tsx src/lib/evals/run-evals.ts --live-compare",
-    "generation:report": "tsx scripts/flowpath-generation-report.ts",
-    "db:init": "node scripts/init-db.mjs",
-    "db:seed": "node scripts/seed-db.mjs",
-    "db:setup": "npm run db:init && npm run db:seed"
+    "start": "next start --hostname 127.0.0.1 --port 3100",
+    "lint": "eslint .",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "tsx --test src/lib/*.test.ts src/lib/server/*.test.ts",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@clerk/nextjs": "^7.3.4",
-    "@libsql/client": "^0.17.3",
-    "lucide-react": "^1.14.0",
-    "next": "16.2.6",
-    "openai": "^6.37.0",
+    "@fortawesome/fontawesome-svg-core": "7.3.1",
+    "@fortawesome/free-brands-svg-icons": "7.3.1",
+    "@fortawesome/react-fontawesome": "3.5.0",
+    "fast-xml-parser": "5.11.0",
+    "next": "16.3.3",
+    "openai": "6.37.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "stripe": "^22.1.1",
-    "zod": "^4.4.3"
+    "server-only": "0.0.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.6",
-    "tailwindcss": "^4",
-    "tsx": "^4.22.0",
-    "typescript": "^5"
+    "@types/node": "20.19.41",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.38.0",
+    "eslint-config-next": "16.3.3",
+    "tsx": "4.22.0",
+    "typescript": "5.9.3"
   }
 }

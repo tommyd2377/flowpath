@@ -1,39 +1,38 @@
 import type { Metadata } from "next";
-import { ClerkProvider } from "@clerk/nextjs";
-import { Geist, Geist_Mono } from "next/font/google";
-import { AppShell } from "@/components/app-shell";
+
+import { PersonalFooter } from "../components/footer";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const title = "Possibility Atlas";
+const description = "Explore bounded, cited possibilities emerging from current events.";
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://flowpathapp.com";
 
 export const metadata: Metadata = {
-  title: "FlowPath",
-  description: "A guided next-move engine for reading the board and choosing what to do next.",
+  metadataBase: new URL(siteUrl),
+  title,
+  description,
+  alternates: { canonical: "/" },
+  openGraph: {
+    title,
+    description,
+    type: "website",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Possibility Atlas — see what could happen next" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
+    images: ["/og.png"],
+  },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <ClerkProvider>
-      <html
-        lang="en"
-        className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-      >
-        <body className="min-h-full bg-[#02040a] text-slate-100">
-          <AppShell>{children}</AppShell>
-        </body>
-      </html>
-    </ClerkProvider>
+    <html lang="en" data-scroll-behavior="smooth">
+      <body>
+        {children}
+        <PersonalFooter />
+      </body>
+    </html>
   );
 }
