@@ -15,6 +15,9 @@ import { claimHostedSession, serveHostedSession } from '../lib/hosted-session';
 import { createSessionService } from '../lib/session-server';
 import { createSessionTransport } from '../lib/session-transport';
 
+// The existing CI uses Node 20; browsers and Node 24 provide this globally.
+globalThis.WebSocket ??= WebSocket as unknown as typeof globalThis.WebSocket;
+
 const offer = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n';
 const answer = () => new Response(offer, { headers: { location: 'https://api.openai.com/v1/realtime/calls/rtc_mock' } });
 
