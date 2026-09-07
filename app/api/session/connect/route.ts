@@ -4,11 +4,12 @@ import { createRealtimeControl } from '@/lib/realtime-control';
 import { explorationService } from '@/lib/exploration-server';
 import { getGenerationCacheRepository } from '@/lib/atlas/server/generation-cache';
 import { claimHostedSession, HOSTED_CONNECTION_MS, serveHostedSession } from '@/lib/hosted-session';
+import { HOSTED_SESSION_SECONDS } from '@/lib/session-config';
 import { localRequest } from '@/lib/local-request';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   if (process.env.VERCEL !== '1' || !localRequest(request, true)) return new Response(null, { status: 403 });
@@ -21,6 +22,7 @@ export async function GET(request: Request) {
     claim: installationId => claimHostedSession(getGenerationCacheRepository(), installationId),
     service: createSessionService({
       hostedConnection: true,
+      durationMs: HOSTED_SESSION_SECONDS * 1000,
       fixtureMode: process.env.VOICE_FIXTURE_MODE === '1',
       apiKey: () => process.env.VOICE_FIXTURE_MODE === '1' ? undefined : process.env.OPENAI_API_KEY,
       controlFactory: options => createRealtimeControl({ ...options, exploration: explorationService }),

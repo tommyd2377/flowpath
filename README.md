@@ -53,7 +53,7 @@ Curation uses one Responses request with the existing analysis model, up to two 
 
 - One active conversation per local server process. Hosted conversations use a shared database lease to allow one active conversation across Vercel instances.
 - A maximum of three local session starts per minute; hosted starts are spaced at least 20 seconds apart.
-- Ten-minute session limit, enforced in both the browser and the server. The hosted connection closes before its function deadline, leaving time to hang up the provider call.
+- Ten-minute local session limit; hosted calls allow about 4½ minutes within the existing Vercel Hobby function limit. Both are bounded in the browser and server; tap again to resume the saved exploration. The hosted connection closes before its function deadline, leaving time to hang up the provider call.
 - Disconnect after 45 seconds of inactivity; assistant playback, active user speech, and pending research do not count as inactivity.
 - At most 1,024 output tokens per response. This and the timers limit usage; they are **not a guaranteed dollar cap**.
 - Manual stop, errors, navigation away, and timeouts close browser audio resources and request server-side hangup. A failed server hangup blocks new sessions in that process.
@@ -115,6 +115,6 @@ The opening briefing gives one sentence per article, with the highlighted card f
 
 ## Vercel deployment
 
-Use Node 24 and Vercel Fluid compute with WebSocket support. The voice route requests an 800-second function duration, with a ten-minute voice limit and cleanup margin. No subscription or billing changes are made by this repository. `GET /api/health` checks database initialization and reports whether voice is configured without contacting OpenAI. Hosted HTTP voice-start requests are rejected; each call must use its owning WebSocket. The browser stops audio when that connection closes and never automatically starts another paid call.
+Use Node 24 and Vercel Fluid compute with WebSocket support. The existing Hobby plan caps functions at 300 seconds. The voice route uses that duration with a 270-second voice limit, a 285-second connection ceiling, and cleanup margin; local sessions keep their ten-minute limit. No subscription or billing changes are made by this repository. `GET /api/health` checks database initialization and reports whether voice is configured without contacting OpenAI. Hosted HTTP voice-start requests are rejected; each call must use its owning WebSocket. The browser stops audio when that connection closes and never automatically starts another paid call.
 
 Run `npm run check` and the fixture browser tests before deployment. For a staged production check, use `vercel deploy --prod --skip-domain`; verify `/api/health`, the static page and a readiness-only WebSocket request, then `vercel promote <deployment-url>`. Do not request `/api/stories` or start a conversation during automated production verification unless paid API testing was explicitly approved. `.vercelignore` excludes local environment files, databases and generated output.

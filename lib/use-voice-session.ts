@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoicePhase } from '@/components/Waveform';
-import { IDLE_SECONDS, SESSION_SECONDS } from './session-config';
+import { IDLE_SECONDS, SESSION_SECONDS, HOSTED_SESSION_SECONDS } from './session-config';
 import { getInstallationId, loadSelectedHeadline } from './news-storage';
 import { emptyDisplay, ExplorationDisplaySchema, type ExplorationAction, type ExplorationDisplay } from './visual-contracts';
 import { toStoryHeadline } from './story-contracts';
@@ -536,7 +536,7 @@ export function useVoiceSession() {
       session.sendSelection?.();
       session.sessionTimer = setTimeout(() => {
         if (alive()) stop('A little breather. Tap the wave to start a fresh conversation.');
-      }, SESSION_SECONDS * 1000);
+      }, (process.env.NEXT_PUBLIC_VOICE_HOSTED === '1' ? HOSTED_SESSION_SECONDS : SESSION_SECONDS) * 1000);
     } catch (error) {
       if (!alive()) return;
       const name = error instanceof DOMException ? error.name : '';

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { createSessionService } from './session-server';
 import type { GenerationCacheRepository } from './atlas/server/generation-cache';
 
-export const HOSTED_CONNECTION_MS = 660_000;
+export const HOSTED_CONNECTION_MS = 285_000;
 const Frame = z.object({
   id: z.string().uuid(),
   operation: z.enum(['GET', 'POST', 'DELETE', 'STORY', 'ACTION', 'SCREEN', 'EVENTS']),
