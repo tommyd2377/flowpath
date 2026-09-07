@@ -1,0 +1,9 @@
+import "../lib/atlas/server/verify.test";
+import "../lib/atlas/server/branch.test";
+import "../lib/atlas/server/graph-registry.test";
+import "../lib/atlas/server/feed.test";
+import "../lib/atlas/server/rss.test";
+import "../lib/atlas/server/fixtures.test";
+import "../lib/atlas/server/generation-templates.test";
+import "../lib/atlas/server/request-guard.test";
+import "../lib/atlas/server/generation-cache.test";

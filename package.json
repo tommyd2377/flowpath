@@ -1,38 +1,44 @@
 {
-  "name": "possibility-atlas",
+  "name": "the-voice",
   "version": "0.1.0",
   "private": true,
-  "engines": {
-    "node": ">=20.19.0"
-  },
+  "type": "module",
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1 --port 3100",
+    "dev": "next dev --hostname 127.0.0.1 --port 3210",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1 --port 3100",
+    "start": "next start --hostname 127.0.0.1 --port 3210",
     "lint": "eslint .",
-    "typecheck": "next typegen && tsc --noEmit",
-    "test": "tsx --test src/lib/*.test.ts src/lib/server/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
     "check": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@fortawesome/fontawesome-svg-core": "7.3.1",
-    "@fortawesome/free-brands-svg-icons": "7.3.1",
-    "@fortawesome/react-fontawesome": "3.5.0",
+    "@vercel/functions": "3.9.5",
+    "@libsql/client": "0.17.4",
+    "@openuidev/react-lang": "0.2.15",
     "fast-xml-parser": "5.11.0",
-    "next": "16.3.3",
+    "lucide-react": "1.41.0",
+    "motion": "13.2.0",
+    "next": "16.3.4",
     "openai": "6.37.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "server-only": "0.0.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "20.19.41",
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
-    "eslint": "9.38.0",
-    "eslint-config-next": "16.3.3",
-    "tsx": "4.22.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "8.18.1",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.3.4",
+    "tsx": "^4.20.0",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }
