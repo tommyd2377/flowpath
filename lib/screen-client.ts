@@ -7,7 +7,8 @@ function pageGeometry() {
   const top = viewport?.offsetTop ?? 0;
   const bottom = top + (viewport?.height ?? window.innerHeight);
   const dock = document.querySelector('.voice-stage')?.getBoundingClientRect().bottom ?? top;
-  return { top: Math.max(top, dock) + 16, bottom: bottom - 20, width: Math.round(viewport?.width ?? window.innerWidth), height: Math.round(viewport?.height ?? window.innerHeight) };
+  return { top: Math.max(top, dock) + 16, bottom: bottom - 20, visibleTop: Math.max(top, dock), visibleBottom: bottom,
+    width: Math.round(viewport?.width ?? window.innerWidth), height: Math.round(viewport?.height ?? window.innerHeight) };
 }
 function contentElements() {
   const root = document.querySelector('.dashboard-view:not([aria-hidden="true"])');
@@ -27,9 +28,21 @@ export function readScreen(display: ExplorationDisplay | null): ScreenReport['sc
   const visible = (element: HTMLElement, fully = false) => {
     const box = element.getBoundingClientRect();
     return box.right > 0 && box.left < area.width && (fully
-      ? box.top >= area.top - 1 && box.bottom <= area.bottom + 1
-      : Math.min(box.bottom, area.bottom) - Math.max(box.top, area.top) >= Math.min(32, box.height));
+      ? box.top >= area.visibleTop - 1 && box.bottom <= area.visibleBottom + 1
+      : Math.min(box.bottom, area.visibleBottom) - Math.max(box.top, area.visibleTop) >= Math.min(32, box.height));
   };
+  const visibleCards = cards.filter(card => visible(card));
+  const visiblePaths = paths.filter(path => visible(path));
+  const focused = (elements: HTMLElement[]) => elements.find(element => element.contains(document.activeElement))
+    ?? elements.find(element => element.dataset.spotlight === 'true')
+    ?? elements.find(element => element.dataset.expanded === 'true');
+  const primary = sections.filter(item => visible(item.element)).sort((a, b) => {
+    const overlap = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect();
+      return Math.min(box.bottom, area.visibleBottom) - Math.max(box.top, area.visibleTop);
+    };
+    return overlap(b.element) - overlap(a.element);
+  })[0];
   return {
     contextKey: screenContextKey(display), view: display?.view ?? 'stories', width: area.width, height: area.height,
     scrollY: Math.max(0, Math.round(window.scrollY)), atTop: window.scrollY <= 2,
@@ -39,8 +52,11 @@ export function readScreen(display: ExplorationDisplay | null): ScreenReport['sc
     fullyVisibleStoryIds: cards.filter(card => visible(card, true)).map(card => card.dataset.storyId!).slice(0, 20),
     visiblePathIds: paths.filter(path => visible(path)).map(path => path.dataset.pathId!).slice(0, 6),
     fullyVisiblePathIds: paths.filter(path => visible(path, true)).map(path => path.dataset.pathId!).slice(0, 6),
-    focusedStoryId: cards.find(card => card.dataset.spotlight === 'true')?.dataset.storyId ?? null,
-    focusedPathId: paths.find(path => path.dataset.spotlight === 'true')?.dataset.pathId ?? null,
+    focusedStoryId: focused(visibleCards)?.dataset.storyId ?? null,
+    focusedPathId: focused(visiblePaths)?.dataset.pathId ?? null,
+    primarySection: primary?.name ?? null,
+    busy: document.querySelector('.exploration-section')?.getAttribute('aria-busy') === 'true',
+    expandedPathIds: visiblePaths.filter(path => path.dataset.expanded === 'true').map(path => path.dataset.pathId!).slice(0, 6),
     visibleSections: sections.filter(item => visible(item.element)).map(item => item.name),
     availableSections: sections.map(item => item.name),
   };
@@ -56,6 +72,28 @@ export async function handleScreenRequest(request: ScreenRequest, getDisplay: ()
   if (!request.scroll) return report('ok');
   // Cancel a delayed automatic spotlight scroll before honoring manual navigation.
   window.dispatchEvent(new Event('voice-scroll'));
+  // Hover/spotlight collapse changes the document height. Let it settle before
+  // native smooth scrolling, which browsers can cancel during a size change.
+  let lastHeight = document.documentElement.scrollHeight;
+  let stableHeight = 0;
+  let movedManually = false;
+  const cancelPreparation = () => { movedManually = true; };
+  const preparationInputs = ['touchstart', 'wheel', 'pointerdown', 'keydown'] as const;
+  preparationInputs.forEach(event => window.addEventListener(event, cancelPreparation, { passive: true }));
+  try {
+    for (let frame = 0; frame < 14 && stableHeight < 3; frame++) {
+      await new Promise(resolve => window.setTimeout(resolve, 50));
+      if (signal.aborted) return null;
+      if (movedManually) return report('interrupted');
+      if (document.hidden) return report('hidden');
+      if (screenContextKey(getDisplay()) !== request.contextKey) return report('view_changed');
+      const height = document.documentElement.scrollHeight;
+      stableHeight = height === lastHeight ? stableHeight + 1 : 0;
+      lastHeight = height;
+    }
+  } finally {
+    preparationInputs.forEach(event => window.removeEventListener(event, cancelPreparation));
+  }
   const { direction, section } = request.scroll;
   const area = pageGeometry();
   const { sections, cards } = contentElements();
@@ -146,18 +184,30 @@ export function observeScreen(getDisplay: () => ExplorationDisplay | null, publi
   const resize = new ResizeObserver(schedule);
   const main = document.querySelector('main');
   if (main) {
-    mutations.observe(main, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-spotlight', 'data-expanded', 'aria-hidden', 'data-view'] });
+    mutations.observe(main, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-spotlight', 'data-expanded', 'aria-hidden', 'data-view', 'aria-busy', 'open'] });
     resize.observe(main);
+    const dock = main.querySelector('.voice-stage');
+    if (dock) resize.observe(dock);
+    const dashboard = main.querySelector('.dashboard-stage');
+    if (dashboard) resize.observe(dashboard);
   }
   window.addEventListener('scroll', schedule, { passive: true });
   window.addEventListener('resize', schedule);
   window.visualViewport?.addEventListener('resize', schedule);
   document.addEventListener('visibilitychange', schedule);
+  document.addEventListener('focusin', schedule);
+  document.addEventListener('focusout', schedule);
+  document.addEventListener('toggle', schedule, true);
+  window.addEventListener('scrollend', schedule);
+  window.addEventListener('voice-layout', schedule);
   const stop = () => {
     clearTimeout(timer); mutations.disconnect(); resize.disconnect();
     window.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule);
     window.visualViewport?.removeEventListener('resize', schedule);
     document.removeEventListener('visibilitychange', schedule);
+    document.removeEventListener('focusin', schedule); document.removeEventListener('focusout', schedule);
+    document.removeEventListener('toggle', schedule, true); window.removeEventListener('scrollend', schedule);
+    window.removeEventListener('voice-layout', schedule);
     signal.removeEventListener('abort', stop);
   };
   signal.addEventListener('abort', stop, { once: true });

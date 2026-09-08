@@ -69,15 +69,29 @@ export function createRealtimeControl(options: Options): VoiceControl {
       ? [{ storyId: item.id, number: index + 1, title: item.title }] : []);
     const choices = display.exploration?.choices ?? [];
     const nodes = [...choices, ...(display.exploration?.currentNode ? [display.exploration.currentNode] : [])];
-    const visiblePaths = nodes.filter(node => screen.visiblePathIds?.includes(node.id)).map(node => ({ nodeId: node.id, number: choices.findIndex(choice => choice.id === node.id) + 1 || null, title: node.title }));
+    const visiblePaths = nodes.filter(node => screen.visiblePathIds?.includes(node.id)).map(node => ({ nodeId: node.id, number: choices.findIndex(choice => choice.id === node.id) + 1 || null, title: node.title,
+      summary: node.summary, assumption: node.keyAssumption, expanded: screen.expandedPathIds?.includes(node.id) ?? false }));
+    const currentNode = nodes.find(node => node.id === display.pendingPathId) ?? display.exploration?.currentNode;
+    const sectionContext = screen.visibleSections.flatMap<{ section: string; title: string; summary: string }>(section => {
+      if (section === 'StoryOverview') return [{ section, title: display.headline?.title ?? '', summary: display.exploration?.snapshot?.summary ?? display.exploration?.summary ?? '' }];
+      if (section === 'ScenarioDetail' && currentNode) return [{ section, title: currentNode.title, summary: currentNode.summary }];
+      if (section === 'ConversationInsight' && display.insight) return [{ section, title: display.insight.title, summary: display.insight.summary }];
+      if (section === 'ResearchUpdate' && display.research) return [{ section, title: display.research.question, summary: display.research.implications.join(' ') }];
+      return [];
+    });
     return { screen: { ...screen,
       visibleStoryIds: visibleStories.map(item => item.storyId),
       fullyVisibleStoryIds: screen.fullyVisibleStoryIds.filter(id => visibleStories.some(item => item.storyId === id)),
       visiblePathIds: visiblePaths.map(node => node.nodeId),
       fullyVisiblePathIds: (screen.fullyVisiblePathIds ?? []).filter(id => visiblePaths.some(node => node.nodeId === id)),
-      focusedStoryId: screen.focusedStoryId === display.spotlightStoryId ? screen.focusedStoryId ?? null : null,
-      focusedPathId: screen.focusedPathId === display.spotlightPathId ? screen.focusedPathId ?? null : null,
-    }, visibleStories, visiblePaths };
+      focusedStoryId: visibleStories.some(item => item.storyId === screen.focusedStoryId) ? screen.focusedStoryId ?? null : null,
+      focusedPathId: visiblePaths.some(node => node.nodeId === screen.focusedPathId) ? screen.focusedPathId ?? null : null,
+      expandedPathIds: visiblePaths.filter(node => node.expanded).map(node => node.nodeId),
+      primarySection: screen.visibleSections.includes(screen.primarySection!) ? screen.primarySection : null,
+    }, visibleStories, visiblePaths, sectionContext,
+      selectedStory: display.headline ? { id: display.headline.id, title: display.headline.title } : null,
+      currentPossibility: currentNode ? { nodeId: currentNode.id, title: currentNode.title, depth: currentNode.depth, pending: Boolean(display.pendingPathId) } : null,
+    };
   };
   const requestScreen = async (signal: AbortSignal, scroll?: ScrollArgs, allowBriefing = true) => {
     signal.throwIfAborted();
@@ -120,7 +134,10 @@ export function createRealtimeControl(options: Options): VoiceControl {
     // Set a sentinel synchronously so two completed tools cannot create two responses.
     activeResponse = 'opening';
     openingContextVersion = contextVersion;
-    send({ type: 'response.create', response: { metadata: { voice_revision: String(revision) } } });
+    send({ type: 'response.create', response: {
+      instructions: `${VOICE_INSTRUCTIONS}\nFor this response, begin with the substance of the user's question or the selected possibility. Perform any needed tools silently. Do not describe navigation, loading, research steps, or what you are about to explain. If this was only navigation, remain silent.`,
+      metadata: { voice_revision: String(revision) },
+    } });
   };
   // One short response per card. Advance on playback completion, not generation
   // completion; otherwise the highlight outruns the audio already in the buffer.
@@ -220,7 +237,16 @@ export function createRealtimeControl(options: Options): VoiceControl {
       throw error;
     }
   };
-  const enqueue = (operation: (signal: AbortSignal) => Promise<object>, callId?: string, message = 'Exploring the story…', work: { background?: boolean; concurrent?: boolean; silent?: () => boolean } = {}) => {
+  const pathPreview = (nodeId: unknown) => {
+    if (!selectedReady || display.pendingPathId) return;
+    const node = [...(display.exploration?.choices ?? []), ...(display.exploration?.comparison ?? []).map(item => item.node)].find(node => node.id === nodeId);
+    if (!node) return;
+    display = { ...display, view: 'exploration', pendingPathId: node.id, spotlightPathId: node.id };
+    emit({ type: 'display', display, revision });
+    return { kind: 'path_preview', researchPending: true, node, headline: display.headline,
+      attribution: 'Existing hypothetical path and assumptions. Deeper possibilities are still pending; this is not new reporting.' };
+  };
+  const enqueue = (operation: (signal: AbortSignal) => Promise<object>, callId?: string, message = 'Exploring the story…', work: { background?: boolean; concurrent?: boolean; silent?: () => boolean; preview?: () => object | undefined } = {}) => {
     const taskRevision = revision;
     const signal = controller.signal;
     pending += 1;
@@ -229,7 +255,17 @@ export function createRealtimeControl(options: Options): VoiceControl {
     const run = async () => {
       if (closed || signal.aborted || taskRevision !== revision) return;
       let removeAbort = () => {};
+      let previewed = false;
       try {
+        const preview = work.preview?.();
+        if (preview) {
+          previewed = true;
+          contextVersion += 1;
+          if (callId) send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(preview) } });
+          else send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ selected_path_context: preview }) }] } });
+          pendingReply = true;
+          requestReply();
+        }
         const aborted = new Promise<never>((_, reject) => {
           const listener = () => reject(new DOMException('Canceled', 'AbortError'));
           signal.addEventListener('abort', listener, { once: true });
@@ -243,7 +279,7 @@ export function createRealtimeControl(options: Options): VoiceControl {
           emit({ type: 'display', display, revision });
         }
         contextVersion += 1;
-        if (callId) {
+        if (callId && !previewed) {
           send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } });
         } else {
           // Context is data in a user message, never interpolated into system instructions.
@@ -257,13 +293,17 @@ export function createRealtimeControl(options: Options): VoiceControl {
         const message = safeError(error);
         const result = { error: message, retryAutomatically: false };
         contextVersion += 1;
-        if (callId) send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } });
+        if (callId && !previewed) send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } });
         else send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ research_result: result }) }] } });
         emit({ type: 'research', busy: pending > 1, message, revision });
         pendingReply = true;
       } finally {
         removeAbort();
         if (taskRevision === revision) {
+          if (previewed && display.pendingPathId) {
+            display = { ...display, pendingPathId: null };
+            emit({ type: 'display', display, revision });
+          }
           pending = Math.max(0, pending - 1);
           if (work.background) backgroundPending = Math.max(0, backgroundPending - 1);
           if (!pending && status.type === 'research' && status.busy) emit({ type: 'research', busy: false, message: '', revision });
@@ -492,7 +532,16 @@ export function createRealtimeControl(options: Options): VoiceControl {
             }
             display = { ...display, view: 'exploration' };
             return options.exploration.execute(options.installationId, name, args as Record<string, unknown>, signal, story);
-          }, item.call_id, name === 'search_web' ? 'Searching the web…' : name === 'list_stories' || name === 'show_stories' ? 'Getting the news briefing…' : undefined, { silent: () => silent, concurrent: ['get_screen', 'scroll_page', 'list_stories', 'show_stories', 'choose_story', 'show_analysis', 'spotlight_story', 'spotlight_path'].includes(name) || (name === 'get_exploration' && !selectedReady) });
+          }, item.call_id, name === 'search_web' ? 'Searching the web…' : name === 'choose_path' ? 'Exploring this possibility…' : name === 'list_stories' || name === 'show_stories' ? 'Getting the news briefing…' : undefined, {
+            silent: () => silent || (name === 'choose_path' && display.view === 'stories'), background: name === 'choose_path',
+            preview: name === 'choose_path' ? () => {
+              try {
+                const args = JSON.parse(rawArgs);
+                return args && Object.keys(args).length === 1 ? pathPreview(args.nodeId) : undefined;
+              } catch { return undefined; }
+            } : undefined,
+            concurrent: ['get_screen', 'scroll_page', 'list_stories', 'show_stories', 'choose_story', 'show_analysis', 'spotlight_story', 'spotlight_path'].includes(name) || (name === 'get_exploration' && !selectedReady),
+          });
         }
         requestReply();
         break;
@@ -605,7 +654,11 @@ export function createRealtimeControl(options: Options): VoiceControl {
       // sentence to finish instead of clearing already-buffered speech.
       display = { ...display, view: 'exploration' };
       const args = Object.fromEntries(Object.entries(action).filter(([key]) => key !== 'type'));
-      enqueue(signal => options.exploration.execute(options.installationId, action.type, args, signal, story), undefined, undefined, { silent: () => action.type === 'navigate_path' });
+      enqueue(signal => options.exploration.execute(options.installationId, action.type, args, signal, story), undefined,
+        action.type === 'choose_path' ? 'Exploring this possibility…' : undefined, {
+          silent: () => action.type === 'navigate_path' || display.view === 'stories', background: action.type === 'choose_path',
+          preview: action.type === 'choose_path' ? () => pathPreview(action.nodeId) : undefined,
+        });
       return revision;
     },
     subscribe(listener) {

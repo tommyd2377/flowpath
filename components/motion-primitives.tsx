@@ -1,10 +1,66 @@
 'use client';
 
-import { forwardRef, type ReactNode } from 'react';
+import { forwardRef, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { LayoutGroup, MotionConfig, motion, useIsPresent, useReducedMotion } from 'motion/react';
 
 export const layoutTransition = { type: 'spring', stiffness: 240, damping: 30, mass: 0.85 } as const;
 export const revealTransition = { duration: 0.38, ease: [0.22, 1, 0.36, 1] } as const;
+
+/** Scrolling beneath a stationary pointer must not keep expanding new cards. */
+export function useCardHover() {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const scrolling = useRef(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const pause = (event: Event) => {
+      scrolling.current = true;
+      setHovered(null);
+      clearTimeout(timer);
+      timer = setTimeout(() => { scrolling.current = false; }, event.type === 'voice-scroll' ? 1000 : 250);
+    };
+    const events = ['voice-scroll', 'scroll', 'wheel', 'touchstart'] as const;
+    events.forEach(event => window.addEventListener(event, pause, { passive: true }));
+    return () => { clearTimeout(timer); events.forEach(event => window.removeEventListener(event, pause)); };
+  }, []);
+  const hover = (id: string | null) => {
+    if (!id || (!scrolling.current && window.matchMedia('(min-width: 960px) and (hover: hover)').matches)) setHovered(id);
+  };
+  return [hovered, hover] as const;
+}
+
+/** Follow the finished card geometry; a fixed delay can scroll mid-expansion. */
+export function useSpotlightScroll(grid: RefObject<HTMLDivElement | null>, spotlight: string | null | undefined, reduced: boolean | null) {
+  useEffect(() => {
+    const card = Array.from(grid.current?.querySelectorAll<HTMLElement>('[data-story-id], [data-path-id]') ?? [])
+      .filter(element => !element.closest('[aria-hidden="true"], [inert]'))
+      .find(element => (element.dataset.storyId ?? element.dataset.pathId) === spotlight);
+    if (!card) return;
+    let frame = 0;
+    let previous = '';
+    let stable = 0;
+    const started = performance.now();
+    const follow = () => {
+      const bounds = card.getBoundingClientRect();
+      const dockBottom = document.querySelector('.voice-stage')?.getBoundingClientRect().bottom ?? 0;
+      const geometry = [bounds.top, bounds.bottom, dockBottom].map(value => Math.round(value * 10)).join(':');
+      stable = geometry === previous ? stable + 1 : 0;
+      previous = geometry;
+      if (!reduced && ((stable < 3 || performance.now() - started < 100) && performance.now() - started < 1800)) {
+        frame = requestAnimationFrame(follow);
+        return;
+      }
+      if (bounds.top < dockBottom + 16 || bounds.bottom > window.innerHeight - 20) {
+        window.scrollBy({ top: bounds.top - dockBottom - 24, behavior: reduced ? 'instant' : 'smooth' });
+      }
+      window.dispatchEvent(new Event('voice-layout'));
+    };
+    frame = requestAnimationFrame(follow);
+    const cancel = () => cancelAnimationFrame(frame);
+    const events = ['voice-scroll', 'touchstart', 'wheel', 'pointerdown', 'keydown'] as const;
+    events.forEach(event => window.addEventListener(event, cancel, { passive: true }));
+    return () => { cancel(); events.forEach(event => window.removeEventListener(event, cancel)); };
+  }, [grid, spotlight, reduced]);
+}
 
 /** Shared motion rules belong to the components, not to generated model text. */
 export function InterfaceMotion({ children }: { children: ReactNode }) {

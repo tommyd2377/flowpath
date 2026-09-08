@@ -248,24 +248,24 @@ test('conversation follows actual playback, handles interruptions, and cleans up
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'input_audio_buffer.speech_started' });
   await emit(page, { type: 'input_audio_buffer.speech_stopped' });
-  await expect(page.getByRole('status')).toHaveText('A moment of thought.');
+  await expect(page.getByRole('status')).toHaveText('Thinking…');
   await emit(page, { type: 'response.created', response: { id: 'r1' } });
   await emit(page, { type: 'output_audio_buffer.started', response_id: 'r1' });
-  await expect(page.getByRole('status')).toHaveText('The Voice is speaking.');
+  await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   await emit(page, { type: 'response.done', response: { id: 'r1', status: 'completed' } });
-  await expect(page.getByRole('status')).toHaveText('The Voice is speaking.');
+  await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   await emit(page, { type: 'input_audio_buffer.speech_started' });
   await emit(page, { type: 'output_audio_buffer.cleared', response_id: 'r1' });
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'response.created', response: { id: 'r2' } });
   await emit(page, { type: 'output_audio_buffer.started', response_id: 'r2' });
   await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'r1' });
-  await expect(page.getByRole('status')).toHaveText('The Voice is speaking.');
+  await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'r2' });
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation' })).toBeVisible();
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
@@ -305,9 +305,9 @@ test('silence closes the conversation and releases the microphone', async ({ pag
   const briefingReady = page.waitForResponse(response => response.url().endsWith('/api/session/action') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await briefingReady;
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await page.clock.fastForward(45_100);
-  await expect(page.getByRole('status')).toContainText('Taking a pause');
+  await expect(page.locator('main')).toHaveClass(/phase-idle/);
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
@@ -321,15 +321,15 @@ test('assistant playback suspends the silence cutoff until the audio actually fi
   const briefingReady = page.waitForResponse(response => response.url().endsWith('/api/session/action') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await briefingReady;
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'output_audio_buffer.started', response_id: 'long-answer' });
   await emit(page, { type: 'response.done', response: { id: 'long-answer', status: 'completed' } });
   await page.clock.fastForward(60_000);
-  await expect(page.getByRole('status')).toHaveText('The Voice is speaking.');
+  await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'long-answer' });
   await page.clock.fastForward(45_100);
-  await expect(page.getByRole('status')).toContainText('Taking a pause');
+  await expect(page.locator('main')).toHaveClass(/phase-idle/);
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
 
@@ -339,12 +339,12 @@ test('ten-minute absolute session cutoff still applies while the user is speakin
   await mockSessions(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'input_audio_buffer.speech_started' });
   await page.clock.fastForward(180_100);
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await page.clock.fastForward(420_000);
-  await expect(page.getByRole('status')).toContainText('A little breather');
+  await expect(page.locator('main')).toHaveClass(/phase-idle/);
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
 
@@ -379,11 +379,11 @@ test('late response events never start an inactivity cutoff during speech', asyn
   await mockSessions(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'input_audio_buffer.speech_started' });
   await emit(page, { type: 'response.created', response: { id: 'previous' } });
   await page.clock.fastForward(46_000);
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await page.keyboard.press('Escape');
 });
@@ -399,7 +399,7 @@ test('invalid events are ignored and failed cleanup has an accurate message', as
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, null as unknown as object);
   await emit(page, {});
   await page.evaluate(() => document.addEventListener('keydown', event => {
@@ -550,7 +550,7 @@ test('pending research survives silence beyond 45 seconds and inactivity resumes
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await page.clock.fastForward(45_100);
-  await expect(page.getByRole('status')).toContainText('Taking a pause');
+  await expect(page.locator('main')).toHaveClass(/phase-idle/);
   expect((await metrics(page)).stoppedTracks).toBe(1);
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
 });
@@ -579,7 +579,8 @@ test('switching an active story keeps one voice session and rejects outdated res
   expect((await metrics(page)).microphoneCalls).toBe(1);
   await page.keyboard.press('Escape');
   await emitServer(page, { type: 'research', busy: true, message: 'Late result after leaving.', revision: 3 });
-  await expect(page.getByRole('status')).not.toContainText('Late result');
+  await expect(page.locator('#voice-status')).not.toContainText('Late result');
+  await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
 });
 
 test('initial stream snapshot cannot dismiss research before story selection is acknowledged', async ({ page }) => {
@@ -645,7 +646,7 @@ test('recoverable server cleanup errors keep voice open while ordinary service e
   await mockSessions(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'error', error: { code: 'response_cancel_not_active', event_id: 'voice_cleanup_cancel' } });
   await emit(page, { type: 'error', error: { code: 'conversation_already_has_active_response' } });
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
@@ -795,6 +796,7 @@ test('clicking paths and comparisons in a voice session uses the same server-own
   expect(actions[0]).toEqual({ action: { type: 'compare_paths', nodeIds: display.exploration!.choices!.map(node => node.id) }, headlineId: headlines[0].id });
   display.exploration!.comparison = display.exploration!.choices!.map(node => ({ node, lineage: [node] }));
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByRole('heading', { name: 'How the possibilities differ' })).toBeVisible();
   await page.screenshot({ path: 'test-results/the-voice-comparison.png', fullPage: true });
   const chosen = display.exploration!.choices![0];
@@ -803,13 +805,14 @@ test('clicking paths and comparisons in a voice session uses the same server-own
   expect(actions[1]).toEqual({ action: { type: 'choose_path', nodeId: chosen.id }, headlineId: headlines[0].id });
   display.exploration = { ...display.exploration!, comparison: undefined, currentNode: chosen, lineage: [chosen], choices: [] };
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByRole('region', { name: 'Current possibility' })).toBeVisible();
   await expect(page.getByText('Depth 1 / 5', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Back one step', exact: true }).click();
   await expect.poll(() => actions.length).toBe(3);
   expect(actions[2]).toEqual({ action: { type: 'navigate_path', target: 'parent' }, headlineId: headlines[0].id });
   await emitServer(page, { type: 'display', display: explorationDisplay(), revision: 1 });
-  await expect(page.getByText('Depth 0 / 5', { exact: true })).toBeVisible();
+  await expect(page.getByText('Depth 0 / 5', { exact: true })).toHaveCount(0);
   expect((await metrics(page)).microphoneCalls).toBe(1);
   await page.keyboard.press('Escape');
 });
@@ -904,7 +907,8 @@ async function captureMotion(page: Page, name: string, fullPage = false) {
 
 async function assertVisibleDashboard(page: Page) {
   const stage = await page.locator('.voice-stage').boundingBox();
-  const dashboard = await page.locator('.exploration-section').boundingBox();
+  const currentPath = page.locator('.scenario-detail');
+  const dashboard = await (await currentPath.count() ? currentPath : page.locator('.exploration-section')).boundingBox();
   // The full-height canvas intentionally extends beyond its compact button.
   const waveform = await page.locator('.wave-control').boundingBox();
   expect(stage).not.toBeNull();
@@ -933,7 +937,7 @@ test('motion continuity: spoken selection and slow research never replace or pau
   const wave = page.getByRole('button', { name: 'Start conversation' });
   await wave.focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emit(page, { type: 'response.created', response: { id: 'story-introduction' } });
   await emit(page, { type: 'output_audio_buffer.started', response_id: 'story-introduction' });
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
@@ -1033,6 +1037,7 @@ test('motion desktop: story expansion, comparison and backtracking preserve layo
   display.insight = { title: 'The wider implications', summary: 'Public policy choices could shape institutions and daily life.',
     points: ['The pace of implementation matters.'], assumptions: ['The proposal remains under discussion.'], signals: ['An announced schedule.'] };
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByRole('heading', { name: 'The wider implications' })).toBeVisible();
   expect(await evidenceNode!.evaluate(node => node === document.querySelector('.evidence-panel'))).toBe(true);
   await expect(evidence).not.toHaveAttribute('open', '');
@@ -1041,6 +1046,7 @@ test('motion desktop: story expansion, comparison and backtracking preserve layo
   await page.getByRole('button', { name: 'Compare paths', exact: true }).click();
   display.exploration!.comparison = display.exploration!.choices!.slice(0, 2).map(node => ({ node, lineage: [node] }));
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByRole('heading', { name: 'How the possibilities differ' })).toBeVisible();
   await page.evaluate(() => window.scrollTo(0, 0));
   await settledLayout(page);
@@ -1063,6 +1069,7 @@ test('motion desktop: story expansion, comparison and backtracking preserve layo
   display.insight = null;
   display.exploration = { ...display.exploration!, comparison: undefined, currentNode: chosen, lineage: [chosen], choices: [] };
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByRole('region', { name: 'Current possibility' })).toBeVisible();
   await settledLayout(page);
   await assertVisibleDashboard(page);
@@ -1076,14 +1083,17 @@ test('motion desktop: story expansion, comparison and backtracking preserve layo
   const next = { ...chosen, id: randomUUID(), parentId: chosen.id, depth: 2 as const, title: 'Implementation enters a second phase' };
   display.exploration = { ...display.exploration!, currentNode: next, lineage: [chosen, next], choices: [] };
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByText('Depth 2 / 5', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Back one step', exact: true }).click();
   display.exploration = { ...display.exploration!, currentNode: chosen, lineage: [chosen], choices: [] };
   await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByText('Depth 1 / 5', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Original story', exact: true }).click();
   await emitServer(page, { type: 'display', display: explorationDisplay(), revision: 1 });
-  await expect(page.getByText('Depth 0 / 5', { exact: true })).toBeVisible();
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
+  await expect(page.getByText('Depth 0 / 5', { exact: true })).toHaveCount(0);
   const allStories = page.getByRole('button', { name: 'All stories', exact: true });
   await allStories.focus();
   await page.keyboard.press('Enter');
@@ -1221,9 +1231,9 @@ test('desktop voice opening glides upward without resizing the canvas and spotli
   expect((await metrics(page)).microphoneCalls).toBe(0);
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await expect.poll(() => actions).toEqual(['start_briefing']);
-  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+  await expect(page.locator('.wordmark')).toHaveCount(0);
   await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
-  await expect(page.locator('.ai-note')).toHaveCSS('opacity', '0');
+  await expect(page.locator('.ai-note')).toHaveCount(0);
   await expect.poll(async () => (await page.locator('.wave-control').boundingBox())!.y).toBeLessThan(8);
   const docked = (await page.locator('.wave-control').boundingBox())!;
   expect(docked.width).toBeCloseTo(opening.width, 0);
@@ -1318,9 +1328,9 @@ for (const viewport of [
     await page.screenshot({ path: testInfo.outputPath('mobile-opening.png') });
     await page.getByRole('button', { name: 'Start conversation' }).tap();
     await expect.poll(() => actions).toEqual(['start_briefing']);
-    await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+    await expect(page.locator('.wordmark')).toHaveCount(0);
     await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
-    await expect(page.locator('.ai-note')).toHaveCSS('opacity', '0');
+    await expect(page.locator('.ai-note')).toHaveCount(0);
     await expect.poll(async () => (await page.locator('.wave-control').boundingBox())!.y).toBeLessThan(8);
     const docked = (await page.locator('.wave-control').boundingBox())!;
     expect(docked.height).toBeCloseTo(opening.height * 0.6, 0);
@@ -1391,14 +1401,14 @@ test('mobile reduced motion follows a headline instantly and keeps voice through
   await page.goto('/');
   const canvas = await page.locator('canvas').elementHandle();
   await page.getByRole('button', { name: 'Start conversation' }).tap();
-  await expect(page.getByRole('status')).toHaveText('I’m listening.');
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await emitServer(page, { type: 'display', display: { ...emptyDisplay(), stories, spotlightStoryId: stories[2].id }, revision: 0 });
   const spotlight = page.locator('[data-spotlight="true"]');
   await expect(spotlight).toHaveCount(1);
   await expect.poll(async () => { const box = (await spotlight.boundingBox())!; return box.y + box.height; }).toBeLessThan(824);
   expect(await spotlight.evaluate(element => getComputedStyle(element).transform)).toMatch(/none|matrix\(1, 0, 0, 1, 0, 0\)/);
   await page.setViewportSize({ width: 844, height: 390 });
-  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+  await expect(page.locator('.wordmark')).toHaveCount(0);
   await spotlight.tap();
   await emitServer(page, { type: 'display', display: explorationDisplay(2), revision: 1 });
   await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
@@ -1597,7 +1607,7 @@ for (const viewport of [{ width: 464, height: 931 }, { width: 1440, height: 1000
     expect(await originalCanvas!.evaluate(node => node === document.querySelector('canvas'))).toBe(true);
     // Ended-call copy no longer enlarges the dock; the button remains identical.
     await page.getByRole('button', { name: 'End conversation' }).click();
-    await expect(page.locator('main')).toHaveAttribute('data-notice', 'false');
+    await expect(page.locator('main')).toHaveAttribute('data-working', 'false');
     await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
     const ended = (await page.locator('.wave-control').boundingBox())!;
     expect(ended.width).toBeCloseTo(wave.width, 0);
@@ -1611,3 +1621,72 @@ for (const viewport of [{ width: 464, height: 931 }, { width: 1440, height: 1000
     await page.screenshot({ path: testInfo.outputPath('compact-ended-dock.png') });
   });
 }
+
+for (const width of [390, 1440]) {
+  test(`loading status and pending path ${width} animate without replacing the waveform`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    let releaseStory!: () => void;
+    let releasePath!: () => void;
+    const storyGate = new Promise<void>(resolve => { releaseStory = resolve; });
+    const pathGate = new Promise<void>(resolve => { releasePath = resolve; });
+    const root = explorationDisplay();
+    const selected = root.exploration!.choices![1];
+    await page.route('**/api/exploration', async route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { display: emptyDisplay() } });
+      const action = route.request().postDataJSON().action;
+      if (action.type === 'select_story') {
+        await storyGate;
+        return route.fulfill({ json: { display: root } });
+      }
+      await pathGate;
+      return route.fulfill({ json: { display: { ...root, exploration: { ...root.exploration!, currentNode: selected, lineage: [selected], choices: [] } } } });
+    });
+    await page.goto('/');
+    await expect(page.locator('.headline-card')).toHaveCount(3);
+    const canvas = await page.locator('canvas').elementHandle();
+    await clickStory(page, 0);
+    await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '1');
+    await expect(page.locator('#voice-status')).toContainText('Looking into this story');
+    await expect(page.locator('.exploration-loading')).toBeVisible();
+    await page.waitForTimeout(1300);
+    const busyDock = (await page.locator('.voice-stage').boundingBox())!;
+    releaseStory();
+    await expect(page.locator('.possibility-card')).toHaveCount(3);
+    await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
+    await expect(page.locator('.path-trail')).toHaveCount(0);
+    await expect.poll(async () => (await page.locator('.voice-stage').boundingBox())!.height).toBeLessThan(busyDock.height - 15);
+    await page.locator('.possibility-card').nth(1).click();
+    await expect(page.locator('.scenario-detail h3')).toHaveText(selected.title);
+    await expect(page.locator('#voice-status')).toHaveText('Exploring this possibility…');
+    await expect(page.locator('.exploration-loading')).toBeVisible();
+    await expect(page.locator('.possibility-card')).toHaveCount(0);
+    await expect.poll(async () => (await page.locator('.scenario-detail').boundingBox())!.y - (await page.locator('.voice-stage').boundingBox())!.height).toBeGreaterThanOrEqual(15);
+    await settledLayout(page);
+    await page.screenshot({ path: testInfo.outputPath('pending-path.png') });
+    releasePath();
+    await expect(page.locator('.exploration-loading')).toHaveCount(0);
+    await expect(page.locator('.path-trail')).toBeVisible();
+    await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
+    expect(await canvas!.evaluate(node => node === document.querySelector('canvas'))).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('completed-path.png') });
+  });
+}
+
+test('web search status expands the dock temporarily during a voice conversation', async ({ page }) => {
+  await fakeAudio(page);
+  await mockSessions(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
+  await page.waitForTimeout(1300);
+  const initial = (await page.locator('.voice-stage').boundingBox())!.height;
+  await emitServer(page, { type: 'research', busy: true, message: 'Searching the web…', revision: 0 });
+  await expect(page.locator('#voice-status')).toHaveText('Searching the web…');
+  await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '1');
+  await expect.poll(async () => (await page.locator('.voice-stage').boundingBox())!.height).toBeGreaterThan(initial + 15);
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
+  await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
+  await expect.poll(async () => (await page.locator('.voice-stage').boundingBox())!.height).toBeLessThan(initial + 1);
+  await page.getByRole('button', { name: 'End conversation' }).click();
+});

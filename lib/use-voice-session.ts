@@ -215,6 +215,7 @@ export function useVoiceSession() {
       setResearchBusy(status.busy);
       setMessage(status.message);
       restingPhase();
+      if (!status.busy && status.message) setPhase('error');
     };
 
     const acknowledgeStory = (selectedId: string, storyRevision: unknown, fromServer = false) => {
@@ -555,6 +556,12 @@ export function useVoiceSession() {
 
   const act = useCallback(async (action: ExplorationAction) => {
     const session = current.current;
+    const actionMessage = action.type === 'choose_path' ? 'Exploring this possibility…'
+      : action.type === 'navigate_path' ? 'Returning to this path…'
+        : action.type === 'compare_paths' ? 'Comparing possibilities…' : 'Looking into this story…';
+    if (action.type === 'choose_path' && displayRef.current?.exploration && (!session || (session.sdpReady && session.channelReady))) {
+      showDisplay({ ...displayRef.current, pendingPathId: action.nodeId, spotlightPathId: action.nodeId });
+    }
     if (session && action.type === 'select_story') {
       if (session.desiredHeadlineId !== action.storyId || session.selectedHeadlineId !== action.storyId) {
         await start(action.storyId);
@@ -570,6 +577,12 @@ export function useVoiceSession() {
     }
     if (session) {
       if (!session.sdpReady || !session.channelReady) return;
+      if (action.type === 'choose_path' || action.type === 'navigate_path' || action.type === 'compare_paths') {
+        session.researchBusy = true;
+        setResearchBusy(true);
+        setMessage(actionMessage);
+        setPhase(session.speaking ? 'speaking' : 'thinking');
+      }
       try {
         const response = await session.transport.fetch('/api/session/action', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Session': session.id },
@@ -577,7 +590,13 @@ export function useVoiceSession() {
         });
         if (!response.ok) throw new Error(await responseError(response));
       } catch (error) {
-        if (current.current === session) setMessage(error instanceof Error ? error.message : 'That action could not be completed.');
+        if (current.current === session) {
+          session.researchBusy = false;
+          setResearchBusy(false);
+          setPhase('error');
+          setMessage(error instanceof Error ? error.message : 'That action could not be completed.');
+          if (displayRef.current) showDisplay({ ...displayRef.current, pendingPathId: null });
+        }
       }
       return;
     }
@@ -593,7 +612,7 @@ export function useVoiceSession() {
     }
     setResearchBusy(true);
     setPhase('thinking');
-    setMessage('Looking into this story…');
+    setMessage(actionMessage);
     try {
       const response = await fetch('/api/exploration', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Installation': getInstallationId() },
@@ -610,6 +629,7 @@ export function useVoiceSession() {
       if (controller.signal.aborted || current.current || revision.current !== actionRevision) return;
       setPhase('error');
       setMessage(error instanceof Error ? error.message : 'This story could not be opened. Try again.');
+      if (displayRef.current) showDisplay({ ...displayRef.current, pendingPathId: null });
     } finally {
       if (offline.current === controller) {
         offline.current = null;

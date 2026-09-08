@@ -24,6 +24,9 @@ export const ScreenSnapshotSchema = z.object({
   fullyVisiblePathIds: z.array(z.string().uuid()).max(6).optional(),
   focusedStoryId: z.string().min(8).max(64).nullable().optional(),
   focusedPathId: z.string().uuid().nullable().optional(),
+  primarySection: SectionSchema.nullable().optional(),
+  busy: z.boolean().optional(),
+  expandedPathIds: z.array(z.string().uuid()).max(6).optional(),
 }).strict();
 export const ScreenReportSchema = z.object({
   requestId: z.string().uuid(), outcome: z.enum(['ok', 'boundary', 'view_changed', 'hidden', 'interrupted', 'section_unavailable']),
@@ -36,5 +39,5 @@ export const ScreenSubmissionSchema = z.union([ScreenReportSchema, ScreenObserva
 
 export function screenContextKey(display: ExplorationDisplay | null) {
   // A view/path change invalidates commands issued for the previous content.
-  return [display?.revision ?? 0, display?.view ?? 'stories', display?.headline?.id ?? '', display?.exploration?.currentNode?.id ?? ''].join(':');
+  return [display?.revision ?? 0, display?.view ?? 'stories', display?.headline?.id ?? '', display?.pendingPathId ?? display?.exploration?.currentNode?.id ?? ''].join(':');
 }

@@ -89,6 +89,53 @@ function completeReply(socket: FakeSocket, id = 'reply') {
   socket.receive({ type: 'response.done', response: { id, status: 'completed', output: [] } });
 }
 
+for (const source of ['voice', 'touch'] as const) {
+  test(`${source} path selection supplies context before generation and waits for playback before continuing`, async () => {
+    const pending = deferred<object>();
+    const { control, socket, statuses, executions } = await setup({
+      selectStory: async () => exploration(), execute: async () => pending.promise,
+    });
+    control.selectStory(FIXTURE_HEADLINES[0].id);
+    await flush();
+    completeReply(socket, 'story-intro');
+    const before = socket.sent.filter(event => event.type === 'response.create').length;
+    if (source === 'voice') calls(socket, 'choose', [{ call_id: 'path', name: 'choose_path', arguments: JSON.stringify({ nodeId: NODE_A }) }]);
+    else control.act!({ type: 'choose_path', nodeId: NODE_A });
+    await flush();
+    assert.equal(executions.length, 1);
+    assert.equal(latestDisplay(statuses)?.pendingPathId, NODE_A);
+    assert.equal(latestDisplay(statuses)?.exploration?.currentNode, null);
+    assert.equal(socket.sent.filter(event => event.type === 'response.create').length, before + 1);
+    if (source === 'voice') assert.equal(toolOutputs(socket, 'path')[0].kind, 'path_preview');
+    socket.receive({ type: 'response.created', response: { id: 'path-intro' } });
+    socket.receive({ type: 'output_audio_buffer.started', response_id: 'path-intro' });
+    socket.receive({ type: 'response.done', response: { id: 'path-intro', status: 'completed', output: [] } });
+    pending.resolve(exploration(FIXTURE_HEADLINES[0], true));
+    await flush();
+    assert.equal(latestDisplay(statuses)?.pendingPathId, null);
+    assert.equal(latestDisplay(statuses)?.exploration?.currentNode?.id, NODE_A);
+    assert.equal(socket.sent.filter(event => event.type === 'response.create').length, before + 1);
+    socket.receive({ type: 'output_audio_buffer.stopped', response_id: 'path-intro' });
+    assert.equal(socket.sent.filter(event => event.type === 'response.create').length, before + 2);
+    if (source === 'voice') assert.equal(toolOutputs(socket, 'path').length, 1);
+    control.close();
+  });
+}
+
+test('failed path generation clears its preview and keeps the original choices available', async () => {
+  const { control, socket, statuses } = await setup({ selectStory: async () => exploration(), execute: async () => { throw new Error('mock failure'); } });
+  control.selectStory(FIXTURE_HEADLINES[0].id);
+  await flush();
+  completeReply(socket);
+  calls(socket, 'choose-failure', [{ call_id: 'path-failure', name: 'choose_path', arguments: JSON.stringify({ nodeId: NODE_A }) }]);
+  await flush();
+  assert.equal(latestDisplay(statuses)?.pendingPathId, null);
+  assert.equal(latestDisplay(statuses)?.exploration?.choices?.[0].id, NODE_A);
+  assert.equal(toolOutputs(socket, 'path-failure').length, 1);
+  assert.ok(statuses.some(status => status.type === 'research' && !status.busy && status.message.includes('could not')));
+  control.close();
+});
+
 test('control configures server tools, stays silent on connection, and starts selected-story speech once', async () => {
   const { control, socket, selects, statuses } = await setup();
   const update = socket.sent[0] as { session: { tools: Array<{ name: string }> } };
@@ -1121,6 +1168,30 @@ test('local screen observations are silent, ordered, scoped to the current view 
   assert.ok(t.socket.sent.some(event => event.type === 'conversation.item.delete' && event.item_id === contextItem.id));
   t.control.close();
   assert.equal(t.control.observeScreen!(screen, 4), false);
+});
+
+test('detail screen context resolves local focus against visible saved paths and includes their meaning', async () => {
+  const t = await setup({ selectStory: async () => exploration() });
+  t.control.selectStory(FIXTURE_HEADLINES[0].id);
+  await flush();
+  completeReply(t.socket);
+  const display = latestDisplay(t.statuses)!;
+  const screen = screenResult({ type: 'screen_request', requestId: NODE_B, contextKey: screenContextKey(display), revision: 1 }).screen;
+  Object.assign(screen, { view: 'exploration', visibleStoryIds: [], fullyVisibleStoryIds: [],
+    visibleSections: ['ChoiceCards'], availableSections: ['StoryOverview', 'ChoiceCards'], primarySection: 'ChoiceCards',
+    visiblePathIds: [NODE_A], fullyVisiblePathIds: [NODE_A], expandedPathIds: [NODE_A], focusedPathId: NODE_A,
+  });
+  assert.equal(t.control.observeScreen!(screen, 1), true);
+  t.socket.receive({ type: 'input_audio_buffer.speech_started' });
+  const item = t.socket.sent.findLast(event => event.type === 'conversation.item.create')!.item as { content: Array<{ text: string }> };
+  const context = JSON.parse(item.content[0].text).current_screen;
+  assert.equal(context.screen.focusedPathId, NODE_A);
+  assert.equal(context.screen.primarySection, 'ChoiceCards');
+  assert.equal(context.visiblePaths[0].number, 1);
+  assert.equal(context.visiblePaths[0].assumption, 'Support can be secured.');
+  assert.equal(context.selectedStory.title, FIXTURE_HEADLINES[0].title);
+  assert.equal(display.spotlightPathId, undefined);
+  t.control.close();
 });
 
 test('returning to headlines is silent, reuses the catalog, and can continue an explicitly requested discussion', async () => {

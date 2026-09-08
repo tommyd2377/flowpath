@@ -27,10 +27,13 @@ export function buildExplorationProgram(display: ExplorationDisplay) {
   const snapshotResult = EventSnapshotSchema.safeParse(exploration.snapshot);
   const snapshot = snapshotResult.success ? snapshotResult.data : null;
   const nodeResult = PossibilityNodeSchema.safeParse(exploration.currentNode);
-  const currentNode = nodeResult.success ? nodeResult.data : null;
-  const lineage = nodes(exploration.lineage);
-  const choices = nodes(exploration.choices);
-  const comparison = Array.isArray(exploration.comparison) ? nodes(exploration.comparison.map(item => record(item).node)) : [];
+  const savedChoices = nodes(exploration.choices);
+  const savedComparison = Array.isArray(exploration.comparison) ? nodes(exploration.comparison.map(item => record(item).node)) : [];
+  const pendingNode = [...savedChoices, ...savedComparison].find(node => node.id === display.pendingPathId);
+  const currentNode = pendingNode ?? (nodeResult.success ? nodeResult.data : null);
+  const lineage = [...nodes(exploration.lineage), ...(pendingNode ? [pendingNode] : [])];
+  const choices = pendingNode ? [] : savedChoices;
+  const comparison = pendingNode ? [] : savedComparison;
   const focused = Boolean(currentNode || comparison.length >= 2 || display.insight);
   const preview = display.stories?.find(story => story.id === display.headline?.id);
   const definitions: string[] = [];
@@ -47,7 +50,7 @@ export function buildExplorationProgram(display: ExplorationDisplay) {
     snapshot ? 'Reported context' : 'Initial reporting',
     display.headline?.id || 'story', focused]);
 
-  if (snapshot) {
+  if (currentNode && !pendingNode) {
     add('PathTrail', [lineage.map(node => ({ id: node.id, title: node.title, depth: node.depth })), currentNode?.depth ?? 0]);
   }
 

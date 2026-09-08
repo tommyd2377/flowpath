@@ -1,9 +1,9 @@
 'use client';
 
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ElementNode } from '@openuidev/react-lang';
-import { MotionSection, layoutTransition, revealTransition } from './motion-primitives';
+import { MotionSection, layoutTransition, revealTransition, useSpotlightScroll, useCardHover } from './motion-primitives';
 import { createLibrary, defineComponent, useTriggerAction } from './openui-runtime';
 import { ArrowLeft, ArrowUpRight, ChevronRight, Clock3, GitBranch, Globe2 } from 'lucide-react';
 import { z } from 'zod/v4';
@@ -75,7 +75,7 @@ const ScenarioDetail = defineComponent({
   props: z.object({ title: z.string(), summary: z.string(), reasoning: z.string(), assumption: z.string(), horizon: z.string(), signals: z.array(z.string()), lessLikely: z.string(), nodeId: z.string() }),
   component: function ScenarioDetailView({ props }) {
     const spotlight = useContext(ExplorationSpotlightContext);
-    return <motion.section layout layoutId={`path-${props.nodeId}`} data-path-id={props.nodeId} data-spotlight={spotlight === props.nodeId} className="scenario-detail" aria-label="Current possibility" style={{ borderRadius: 13 }}>
+    return <motion.section layout layoutId={`path-${props.nodeId}`} data-path-id={props.nodeId} data-spotlight={spotlight === props.nodeId} data-expanded="true" className="scenario-detail" aria-label="Current possibility" style={{ borderRadius: 13 }}>
     <div className="section-eyebrow"><GitBranch size={13} aria-hidden="true" /> THE POSSIBILITY WE’RE EXPLORING</div>
     <motion.h3 layout="position" layoutId={`path-title-${props.nodeId}`} tabIndex={-1}>{props.title}</motion.h3><p className="scenario-summary">{props.summary}</p>
     <p className="scenario-reasoning">{props.reasoning}</p>
@@ -97,36 +97,28 @@ const ChoiceCards = defineComponent({
     const triggerAction = useTriggerAction();
     const busy = useContext(ExplorationBusyContext);
     const spotlight = useContext(ExplorationSpotlightContext);
-    const [hovered, setHovered] = useState<string | null>(null);
+    const [hovered, setHovered] = useCardHover();
     const [focused, setFocused] = useState<string | null>(null);
     const grid = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-      const card = Array.from(grid.current?.querySelectorAll<HTMLElement>('[data-path-id]') ?? []).find(element => element.dataset.pathId === spotlight);
-      if (!card) return;
-      const timer = window.setTimeout(() => {
-        const bounds = card.getBoundingClientRect();
-        const dockBottom = document.querySelector('.voice-stage')?.getBoundingClientRect().bottom ?? 0;
-        if (bounds.top < dockBottom + 16 || bounds.bottom > window.innerHeight - 20) {
-          window.scrollBy({ top: bounds.top - dockBottom - 24, behavior: reduced ? 'instant' : 'smooth' });
-        }
-      }, reduced ? 0 : 700);
-      const cancel = () => window.clearTimeout(timer);
-      window.addEventListener('voice-scroll', cancel);
-      return () => { cancel(); window.removeEventListener('voice-scroll', cancel); };
-    }, [spotlight, reduced]);
+    useSpotlightScroll(grid, spotlight, reduced);
     return <section className="possibilities-section" aria-label="Possible next paths">
       <div className="section-heading"><div><div className="section-eyebrow">WHERE COULD THIS GO?</div><h3>Possible next steps</h3></div>
         {props.choices.length >= 2 && <button className="quiet-button" type="button" disabled={busy} onClick={() => triggerAction('Compare these possibilities', undefined, { type: 'compare_paths', params: { nodeIds: props.choices.map(choice => choice.id) } })}>Compare paths <ArrowUpRight size={13} aria-hidden="true" /></button>}
       </div>
-      <motion.div ref={grid} layout className="possibility-grid" data-spotlighting={Boolean(spotlight)}><AnimatePresence initial={false} mode="popLayout">{props.choices.map((choice, index) => <motion.button layout layoutId={`path-${choice.id}`} data-path-id={choice.id} data-spotlight={spotlight === choice.id}
-        data-expanded={spotlight === choice.id || hovered === choice.id || focused === choice.id}
+      <motion.div ref={grid} layout={!reduced} className="possibility-grid" data-spotlighting={Boolean(spotlight)}><AnimatePresence initial={false} mode="popLayout">{props.choices.map((choice, index) => {
+        const expanded = spotlight ? spotlight === choice.id : hovered === choice.id || focused === choice.id;
+        return <motion.button layout={!reduced} layoutId={reduced ? undefined : `path-${choice.id}`} data-path-id={choice.id} data-spotlight={spotlight === choice.id}
+        data-expanded={expanded}
         aria-current={spotlight === choice.id ? true : undefined}
         onHoverStart={() => setHovered(choice.id)} onHoverEnd={() => setHovered(null)} onFocus={() => setFocused(choice.id)} onBlur={() => setFocused(null)} initial={reduced ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0, scale: spotlight === choice.id && !reduced ? 1.025 : 1 }} exit={{ opacity: 0, y: -10 }} transition={{ ...revealTransition, delay: reduced ? 0 : index * 0.035, layout: layoutTransition }} whileHover={reduced ? undefined : { y: -3 }} whileTap={reduced ? undefined : { scale: 0.99 }} style={{ borderRadius: 12 }} className="possibility-card" type="button" key={choice.id} disabled={busy} onClick={() => triggerAction(`Explore ${choice.title}`, undefined, { type: 'choose_path', params: { nodeId: choice.id } })}>
         <span className="possibility-number">0{index + 1}<ArrowUpRight size={16} aria-hidden="true" /></span>
-        <motion.strong layout="position" layoutId={`path-title-${choice.id}`}>{choice.title}</motion.strong><motion.span layout="position" className="possibility-summary">{choice.summary}</motion.span>
-        <motion.span layout="position" className="possibility-context">{choice.context}</motion.span>
+        <motion.strong layout={reduced ? false : 'position'} layoutId={reduced ? undefined : `path-title-${choice.id}`}>{choice.title}</motion.strong>
+        <motion.span className="card-copy" aria-hidden={!expanded} initial={false} animate={{ height: expanded ? 'auto' : 0, opacity: expanded ? 1 : 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : 0.45 }}>
+          <span className="possibility-summary">{choice.summary}</span>
+          <span className="possibility-context">{choice.context}</span>
+        </motion.span>
         <span className="possibility-horizon"><Clock3 size={11} aria-hidden="true" />{choice.horizon}</span>
-      </motion.button>)}</AnimatePresence></motion.div>
+      </motion.button>; })}</AnimatePresence></motion.div>
       <p className="interaction-note">Say a name or number to explore it, or choose a card. These are possibilities, not forecasts.</p>
     </section>;
   },

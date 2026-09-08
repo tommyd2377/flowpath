@@ -35,13 +35,13 @@ function parse(display: ExplorationDisplay) {
 test('OpenUI renders researched context, cited evidence and actionable paths from one exploration', () => {
   const display = fixture();
   const { program, sections } = parse(display);
-  assert.deepEqual(sections.map(section => section.typeName), ['StoryOverview', 'PathTrail', 'ChoiceCards', 'EvidencePanel']);
+  assert.deepEqual(sections.map(section => section.typeName), ['StoryOverview', 'ChoiceCards', 'EvidencePanel']);
   assert.equal((sections.find(section => section.typeName === 'ChoiceCards')!.props.choices as unknown[]).length, 3);
   const html = renderToStaticMarkup(createElement(Renderer, { library: explorationLibrary, response: program, isStreaming: false }));
   assert.match(html, /Possible next steps/);
   assert.match(html, /Policy response accelerates/);
   assert.match(html, /target="_blank" rel="noopener noreferrer"/);
-  assert.match(html, /Depth 0 \/ 5/);
+  assert.doesNotMatch(html, /Depth 0 \/ 5/);
   assert.doesNotMatch(html, /transcript|iframe|<script/);
 });
 
@@ -56,6 +56,16 @@ test('model text cannot escape a quoted OpenUI value or inject a component, quer
   const html = renderToStaticMarkup(createElement(Renderer, { library: explorationLibrary, response: program, isStreaming: false }));
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>/);
+});
+
+test('a pending path previews its existing analysis without claiming deeper choices are ready', () => {
+  const display = fixture();
+  const node = display.exploration!.choices![1];
+  display.pendingPathId = node.id;
+  const { sections } = parse(display);
+  assert.equal(sections.find(section => section.typeName === 'ScenarioDetail')!.props.nodeId, node.id);
+  assert.ok(!sections.some(section => section.typeName === 'ChoiceCards' || section.typeName === 'PathTrail'));
+  assert.equal(display.exploration!.currentNode, null);
 });
 
 test('a deep path includes its assumptions, lineage and comparison without displaying invalid nodes', () => {
@@ -145,7 +155,7 @@ test('a headline-based map with no search citations still renders its actionable
   };
   const { sections, program } = parse(display);
   assert.ok(sections.some(section => section.typeName === 'ChoiceCards'));
-  assert.ok(sections.some(section => section.typeName === 'PathTrail'));
+  assert.ok(!sections.some(section => section.typeName === 'PathTrail'));
   assert.ok(!sections.some(section => section.typeName === 'ContextNote'));
   assert.equal(sections[0].props.evidenceLabel, 'Reported context');
   const html = renderToStaticMarkup(createElement(Renderer, { library: explorationLibrary, response: program, isStreaming: false }));

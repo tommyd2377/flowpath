@@ -54,6 +54,7 @@ export const ExplorationDisplaySchema = z.object({
   stories: z.array(CuratedStorySchema).max(20).optional(),
   spotlightStoryId: z.string().min(8).max(64).nullable().optional(),
   spotlightPathId: z.string().uuid().nullable().optional(),
+  pendingPathId: z.string().uuid().nullable().optional(),
 });
 export type ExplorationDisplay = z.infer<typeof ExplorationDisplaySchema>;
 
@@ -66,7 +67,7 @@ export function displayResult(previous: ExplorationDisplay, result: object): Exp
   if (exploration.success) {
     const visiblePaths = [exploration.data.currentNode, ...(exploration.data.choices ?? []), ...(exploration.data.comparison ?? []).map(item => item.node)];
     const spotlightPathId = visiblePaths.some(node => node?.id === previous.spotlightPathId) ? previous.spotlightPathId : null;
-    return { ...previous, headline: exploration.data.headline, exploration: exploration.data, insight: null, spotlightPathId };
+    return { ...previous, headline: exploration.data.headline, exploration: exploration.data, insight: null, spotlightPathId, pendingPathId: null };
   }
   const research = ResearchDisplaySchema.safeParse(result);
   if (research.success) return { ...previous, research: research.data, insight: null };
