@@ -134,14 +134,18 @@ export default function VoiceExperience() {
         '--status-space': statusText ? `${statusHeight + 14}px` : '0px', '--status-shift': statusText ? '4px' : '0px' }}
       transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.52, '--opening-progress': { ...revealTransition, duration: reducedMotion ? 0 : 1.25 } }}>
       <div className="voice-stage" ref={stage}>
-      <h1 className="sr-only">The Voice</h1>
+      <motion.header className="wordmark" initial={false} animate={{ opacity: docked ? 0 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.65 }}>
+        <span className="wordmark-line" aria-hidden="true" />
+        <h1>THE VOICE</h1>
+        <span className="wordmark-line" aria-hidden="true" />
+      </motion.header>
       <section className="conversation" aria-label="Voice conversation">
         <button
           className="wave-control"
           type="button"
           aria-label={label}
           aria-pressed={active}
-          aria-describedby={statusText ? 'voice-status' : undefined}
+          aria-describedby={statusText ? 'voice-status' : !docked ? 'voice-hint' : undefined}
           onClick={beginConversation}
         >
           <Waveform phase={phase} inputAnalyser={inputAnalyser} outputAnalyser={outputAnalyser} />
@@ -149,6 +153,7 @@ export default function VoiceExperience() {
         <motion.div className="conversation-copy" aria-hidden={!statusText} initial={false} animate={{ opacity: statusText ? 1 : 0, y: statusText || reducedMotion ? 0 : -4 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.45 }}>
           <div ref={statusCopy}><p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{statusText || lastStatus}</p></div>
         </motion.div>
+        <motion.p className="voice-hint" id="voice-hint" aria-hidden={docked} initial={false} animate={{ opacity: docked ? 0 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.65 }}>Tap the wave whenever you’re ready</motion.p>
       </section>
       </div>
       <motion.div ref={dashboard} className="dashboard-stage" initial={false} animate={{ opacity: !docked ? 0.55 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.8 }}>

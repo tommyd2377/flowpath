@@ -54,6 +54,9 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
   await page.addInitScript(({ microphone }) => {
     const tracker = {
       microphoneCalls: 0,
+      microphoneEnabled: true,
+      captureEnabled: true,
+      stoppedOutgoingTracks: 0,
       stoppedTracks: 0,
       closedPeers: 0,
       closedContexts: 0,
@@ -98,7 +101,15 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
       });
       return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
     };
-    const track = { stop: () => { tracker.stoppedTracks++; }, onended: null };
+    const track = { stop: () => { tracker.stoppedTracks++; }, onended: null,
+      get enabled() { return tracker.captureEnabled; },
+      set enabled(value: boolean) { tracker.captureEnabled = value; tracker.microphoneEnabled = value; },
+      clone: () => ({
+        get enabled() { return tracker.microphoneEnabled; },
+        set enabled(value: boolean) { tracker.microphoneEnabled = value; },
+        stop: () => { tracker.stoppedOutgoingTracks++; },
+      }),
+    };
     const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
     Object.defineProperty(navigator, 'mediaDevices', {
       value: {
@@ -150,7 +161,9 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
         close: () => { this.channel.onclose?.(); },
         send: (value: string) => { tracker.sentEvents.push(value); },
       };
-      addTrack() {}
+      addTrack(outgoing: { enabled: boolean }) {
+        Object.defineProperty(tracker, 'outgoingEnabled', { get: () => outgoing.enabled, configurable: true });
+      }
       createDataChannel() {
         tracker.emit = (event: object) => this.channel.onmessage?.({ data: JSON.stringify(event) });
         return this.channel;
@@ -224,6 +237,51 @@ async function metrics(page: Page) {
   });
 }
 
+test('iPhone opening sends silence before the briefing request and restores interruption after two seconds of playback', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', {
+    value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+  }));
+  await page.clock.install();
+  await fakeAudio(page);
+  await mockSessions(page);
+  const microphoneEnabled = () => page.evaluate(() => (window as unknown as {
+    voiceTest: { outgoingEnabled: boolean };
+  }).voiceTest.outgoingEnabled);
+  let enabledAtRequest: boolean | undefined;
+  await page.route('**/api/session/action', async route => {
+    enabledAtRequest = await microphoneEnabled();
+    await route.fulfill({ status: 202, json: { ok: true } });
+    await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect.poll(() => enabledAtRequest).toBe(false);
+  expect(await page.evaluate(() => (window as unknown as { voiceTest: { captureEnabled: boolean } }).voiceTest.captureEnabled)).toBe(true);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 100);
+  await emit(page, { type: 'response.created', response: { id: 'opening' } });
+  await emit(page, { type: 'response.done', response: { id: 'opening', status: 'completed', output: [{ content: [{ type: 'audio' }] }] } });
+  expect(await microphoneEnabled()).toBe(false);
+  await emit(page, { type: 'output_audio_buffer.started', response_id: 'opening' });
+  await page.clock.fastForward(1999);
+  expect(await microphoneEnabled()).toBe(false);
+  await page.clock.fastForward(1);
+  expect(await microphoneEnabled()).toBe(true);
+  // The opening is still playing, but the user can already interrupt it.
+  await emit(page, { type: 'input_audio_buffer.speech_started' });
+  await emit(page, { type: 'output_audio_buffer.cleared', response_id: 'opening' });
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  await emit(page, { type: 'input_audio_buffer.speech_stopped' });
+  await emit(page, { type: 'response.created', response: { id: 'next-story' } });
+  await emit(page, { type: 'output_audio_buffer.started', response_id: 'next-story' });
+  await emit(page, { type: 'input_audio_buffer.speech_started' });
+  await emit(page, { type: 'output_audio_buffer.cleared', response_id: 'next-story' });
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  expect(await microphoneEnabled()).toBe(true);
+  await page.keyboard.press('Escape');
+  expect((await metrics(page)).stoppedTracks).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { voiceTest: { stoppedOutgoingTracks: number } }).voiceTest.stoppedOutgoingTracks)).toBe(1);
+});
+
 test('idle is quiet; missing setup never asks for the microphone or creates a call', async ({ page }) => {
   await fakeAudio(page);
   const calls = await mockSessions(page, false);
@@ -249,6 +307,7 @@ test('conversation follows actual playback, handles interruptions, and cleans up
   await page.getByRole('button', { name: 'Start conversation' }).focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  expect(await page.evaluate(() => (window as unknown as { voiceTest: { microphoneEnabled: boolean } }).voiceTest.microphoneEnabled)).toBe(true);
   await emit(page, { type: 'input_audio_buffer.speech_started' });
   await emit(page, { type: 'input_audio_buffer.speech_stopped' });
   await expect(page.getByRole('status')).toHaveText('Thinking…');
@@ -1231,7 +1290,7 @@ test('desktop voice opening glides upward without resizing the canvas and spotli
   expect((await metrics(page)).microphoneCalls).toBe(0);
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await expect.poll(() => actions).toEqual(['start_briefing']);
-  await expect(page.locator('.wordmark')).toHaveCount(0);
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
   await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
   await expect(page.locator('.ai-note')).toHaveCount(0);
   await expect.poll(async () => (await page.locator('.wave-control').boundingBox())!.y).toBeLessThan(8);
@@ -1328,7 +1387,7 @@ for (const viewport of [
     await page.screenshot({ path: testInfo.outputPath('mobile-opening.png') });
     await page.getByRole('button', { name: 'Start conversation' }).tap();
     await expect.poll(() => actions).toEqual(['start_briefing']);
-    await expect(page.locator('.wordmark')).toHaveCount(0);
+    await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
     await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
     await expect(page.locator('.ai-note')).toHaveCount(0);
     await expect.poll(async () => (await page.locator('.wave-control').boundingBox())!.y).toBeLessThan(8);
@@ -1408,7 +1467,7 @@ test('mobile reduced motion follows a headline instantly and keeps voice through
   await expect.poll(async () => { const box = (await spotlight.boundingBox())!; return box.y + box.height; }).toBeLessThan(824);
   expect(await spotlight.evaluate(element => getComputedStyle(element).transform)).toMatch(/none|matrix\(1, 0, 0, 1, 0, 0\)/);
   await page.setViewportSize({ width: 844, height: 390 });
-  await expect(page.locator('.wordmark')).toHaveCount(0);
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
   await spotlight.tap();
   await emitServer(page, { type: 'display', display: explorationDisplay(2), revision: 1 });
   await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });

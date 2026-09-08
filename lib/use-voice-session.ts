@@ -9,6 +9,7 @@ import { toStoryHeadline } from './story-contracts';
 import { ScreenRequestSchema } from './screen-contracts';
 import { handleScreenRequest, observeScreen } from './screen-client';
 import { createSessionTransport, type SessionTransport } from './session-transport';
+import { createStartupAudioGuard, needsStartupAudioGuard, type VoiceAudioEvent } from './voice-startup';
 
 type ResearchStatus = { busy: boolean; message: string; revision: number };
 
@@ -21,6 +22,7 @@ type LiveSession = {
   peer?: RTCPeerConnection;
   channel?: RTCDataChannel;
   audio?: HTMLAudioElement;
+  startupAudio?: ReturnType<typeof createStartupAudioGuard>;
   setupTimer?: ReturnType<typeof setTimeout>;
   sessionTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
@@ -79,6 +81,7 @@ export function useVoiceSession() {
     clearTimeout(session.sessionTimer);
     clearTimeout(session.idleTimer);
     clearTimeout(session.disconnectTimer);
+    session.startupAudio?.dispose();
     session.channel?.close();
     session.peer?.close();
     session.stream?.getTracks().forEach((track) => track.stop());
@@ -242,6 +245,7 @@ export function useVoiceSession() {
       if (!alive() || !session.sdpReady || !session.channelReady || session.selectionPending) return;
       if (!session.desiredHeadlineId && briefHeadlines && !session.briefingRequested) {
         session.briefingRequested = true;
+        session.startupAudio?.start();
         session.researchBusy = true;
         setResearchBusy(true);
         clearTimeout(session.idleTimer);
@@ -252,6 +256,7 @@ export function useVoiceSession() {
           if (!response.ok) throw new Error(await responseError(response));
         }).catch((error) => {
           if (!alive() || session.desiredHeadlineId) return;
+          session.startupAudio?.release('briefing_request_failed');
           session.researchBusy = false;
           setResearchBusy(false);
           setMessage(error instanceof Error ? error.message : 'The briefing could not start. You can still ask about the news.');
@@ -259,6 +264,7 @@ export function useVoiceSession() {
         });
       }
       if (!session.desiredHeadlineId || session.desiredHeadlineId === session.selectedHeadlineId) return;
+      session.startupAudio?.release('story_selected');
       session.selectionPending = true;
       session.researchBusy = true;
       setResearchBusy(true);
@@ -401,6 +407,12 @@ export function useVoiceSession() {
         return;
       }
       session.stream = stream;
+      session.startupAudio = createStartupAudioGuard({
+        stream,
+        enabled: briefHeadlines && !headlineId && needsStartupAudioGuard(navigator),
+        debug: new URLSearchParams(window.location.search).get('voiceDebug') === '1',
+        protectionMs: Number(new URLSearchParams(window.location.search).get('voiceStartupMs')),
+      });
       for (const track of stream.getAudioTracks()) {
         track.onended = () => fail(session, 'Microphone access ended. Tap the wave to reconnect.');
       }
@@ -438,7 +450,7 @@ export function useVoiceSession() {
           clearTimeout(session.disconnectTimer);
         }
       };
-      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+      session.startupAudio.tracks.forEach((track) => peer.addTrack(track, stream));
       const channel = peer.createDataChannel('oai-events');
       session.channel = channel;
       channel.onopen = () => {
@@ -454,9 +466,10 @@ export function useVoiceSession() {
       channel.onerror = () => fail(session, 'The voice connection was interrupted. Tap the wave to reconnect.');
       channel.onmessage = (messageEvent) => {
         if (!alive()) return;
-        let event: { type: string; response_id?: string; response?: { id?: string; status?: string }; error?: { code?: string; event_id?: string } };
+        let event: VoiceAudioEvent;
         try { event = JSON.parse(messageEvent.data); } catch { return; }
         if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
+        session.startupAudio?.handle(event);
         switch (event.type) {
           case 'input_audio_buffer.speech_started':
             session.userSpeaking = true;
