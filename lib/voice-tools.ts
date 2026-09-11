@@ -1,3 +1,4 @@
+import type { LiveAudioState, LiveUsage } from './gpt-live/protocol';
 import type { ScreenReport, ScreenRequest, ScreenSnapshot } from './screen-contracts';
 import type { CuratedStory, StoryCatalogResponse } from './story-contracts';
 import type { ExplorationAction, ExplorationDisplay } from './visual-contracts';
@@ -64,6 +65,8 @@ export type ExplorationBackend = {
 };
 
 export type VoiceStatus =
+  | ({ type: 'usage' } & LiveUsage)
+  | { type: 'backend_usage'; usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }
   | ScreenRequest
   | { type: 'research'; busy: boolean; message: string; revision: number }
   | { type: 'story'; headlineId: string; revision: number }
@@ -77,7 +80,8 @@ export type VoiceControl = {
   subscribe(listener: (event: VoiceStatus) => void): () => void;
   reportScreen?(report: ScreenReport): boolean;
   observeScreen?(screen: ScreenSnapshot, sequence: number): boolean;
-  close(message?: string): void;
+  observeAudio?(state: LiveAudioState): void;
+  close(message?: string): void | Promise<LiveUsage>;
 };
 
 export type VoiceControlOptions = {
@@ -85,4 +89,5 @@ export type VoiceControlOptions = {
   apiKey: string;
   installationId: string;
   onFatal: () => void;
+  idleTimeoutMs?: number;
 };

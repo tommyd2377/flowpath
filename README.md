@@ -1,5 +1,8 @@
 # The Voice
 
+Voice now uses **GPT-Live-1 with a separate Luna backend**. See [GPT-Live architecture and verification](docs/gpt-live.md) for the shared core, publisher defaults, limits and migration details.
+
+
 A voice-guided news exploration app: an interactive waveform, a curated U.S. and global story briefing, and visual analysis that follows a spoken conversation. Keeps the charcoal/ivory interface and Thomas DeVito’s footer in the app palette.
 
 ## Run locally
@@ -43,7 +46,7 @@ Create `.env.local` in this project folder and set `OPENAI_API_KEY` to your key.
 
 The key stays on the server. The browser sends an SDP offer to `/api/session`; the server uses OpenAI’s unified WebRTC interface and returns only the SDP answer and an opaque local session identifier. Audio travels directly between your browser and OpenAI. A server-side control connection handles voice tools; a separate local event stream carries research status and structured visual state. `/api/stories` serves the briefing, `/api/exploration` restores or navigates without voice, and `/api/session/action` routes clicks through an active conversation.
 
-The voice model is `gpt-realtime-2.1`, voice `marin`, with low reasoning effort and semantic turn detection. Research retains Flowpath’s `gpt-5.6-luna` default. Initial research uses one Responses request with medium search context and up to two web tool calls for the story and background, bounded to 4,000 output tokens and 75 seconds. Descendant expansions inherit the frozen, cited context without repeating searches. The voice agent’s `search_web` tool separately researches follow-up questions through Responses, using the selected story and path when available. Each fresh follow-up request allows one web search with medium context, 2,200 output tokens, a 45-second timeout, and no retries. Factual findings must cite sources actually consulted by that request. There is no automatic model fallback or connection retry. Actual spoken-choice recognition and live provider behavior require a separately authorized live test.
+The voice layer is GPT-Live-1 with voice `marin`; substantive work delegates to `gpt-5.6-luna`. Research retains Flowpath’s `gpt-5.6-luna` default. Initial research uses one Responses request with medium search context and up to two web tool calls for the story and background, bounded to 4,000 output tokens and 75 seconds. Descendant expansions inherit the frozen, cited context without repeating searches. The voice agent’s `search_web` tool separately researches follow-up questions through Responses, using the selected story and path when available. Each fresh follow-up request allows one web search with medium context, 2,200 output tokens, a 45-second timeout, and no retries. Factual findings must cite sources actually consulted by that request. There is no automatic model fallback or connection retry. Actual spoken-choice recognition and live provider behavior require a separately authorized live test.
 
 Development reloads refresh the instructions and research implementation for the next voice connection while preserving an active call and its cleanup/rate-limit state. An already open conversation retains its original instructions until you end it and reconnect. Processes started before this reload hook was added require one normal restart.
 
@@ -58,7 +61,7 @@ Curation uses one Responses request with the existing analysis model, up to two 
 - One active conversation per local server process. Hosted conversations use a shared database lease to allow one active conversation across Vercel instances.
 - A maximum of three local session starts per minute; hosted starts are spaced at least 20 seconds apart.
 - Ten-minute local session limit; hosted calls allow about 4½ minutes within the existing Vercel Hobby function limit. Both are bounded in the browser and server; tap again to resume the saved exploration. The hosted connection closes before its function deadline, leaving time to hang up the provider call.
-- Disconnect after 45 seconds of inactivity; assistant playback, active user speech, and pending research do not count as inactivity.
+- Disconnect after 45 seconds of inactivity; assistant playback, active user speech, and pending research do not count as inactivity. The browser and server enforce the same boundary, and tapping the wave starts a fresh Live session.
 - At most 1,024 output tokens per response. This and the timers limit usage; they are **not a guaranteed dollar cap**.
 - Manual stop, errors, navigation away, and timeouts close browser audio resources and request server-side hangup. A failed server hangup blocks new sessions in that process.
 - Saved maps are bounded to ten generation calls, 64 nodes, and five levels per graph. Those bounds do not restrict conversational reasoning or follow-up web research. Both graph generation and fresh follow-up searches share the durable limit of 20 research requests per installation per hour. Revisited branches and replayed tool calls reuse results. A natural endpoint ends saved expansion but allows further discussion and backtracking.

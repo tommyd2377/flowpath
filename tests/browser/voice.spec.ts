@@ -125,6 +125,16 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
     class AudioNode {
       connect(node: unknown) { return node; }
     }
+    let inputActive = false, outputActive = false, playingId = '';
+    tracker.emit = (value: object) => {
+      if (!value || typeof value !== 'object') return;
+      const event = value as { type: string; response_id?: string };
+      if (event.type === 'media.input.active') inputActive = true;
+      if (event.type === 'media.input.quiet') inputActive = false;
+      if (event.type === 'media.output.active') { outputActive = true; playingId = event.response_id ?? ''; }
+      if (['media.output.quiet', 'media.output.clear'].includes(event.type) && (!event.response_id || event.response_id === playingId)) outputActive = false;
+    };
+    let analyserIndex = 0;
     class FakeAudioContext {
       state = 'running';
       destination = {};
@@ -133,8 +143,10 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
       createMediaStreamSource() { return new AudioNode(); }
       createGain() { return Object.assign(new AudioNode(), { gain: { value: 1 } }); }
       createAnalyser() {
+        const output = analyserIndex++ % 2 === 1;
         return Object.assign(new AudioNode(), {
           fftSize: 2048,
+          getByteTimeDomainData: (array: Uint8Array) => array.fill((output ? outputActive : inputActive) ? 144 : 128),
           getFloatTimeDomainData: (array: Float32Array) => {
             for (let i = 0; i < array.length; i++) array[i] = Math.sin(i / 16) * 0.075;
           },
@@ -151,6 +163,7 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
     }
     class FakePeer {
       constructor() { tracker.createdPeers++; }
+      iceGatheringState = 'complete';
       connectionState = 'new';
       onconnectionstatechange: (() => void) | null = null;
       ontrack: ((event: unknown) => void) | null = null;
@@ -164,10 +177,7 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
       addTrack(outgoing: { enabled: boolean }) {
         Object.defineProperty(tracker, 'outgoingEnabled', { get: () => outgoing.enabled, configurable: true });
       }
-      createDataChannel() {
-        tracker.emit = (event: object) => this.channel.onmessage?.({ data: JSON.stringify(event) });
-        return this.channel;
-      }
+      createDataChannel() { throw new Error('Live provider commands must stay server-side'); }
       createOffer() { return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }); }
       setLocalDescription() { return Promise.resolve(); }
       setRemoteDescription() {
@@ -258,23 +268,26 @@ test('iPhone opening sends silence before the briefing request and restores inte
   await expect.poll(() => enabledAtRequest).toBe(false);
   expect(await page.evaluate(() => (window as unknown as { voiceTest: { captureEnabled: boolean } }).voiceTest.captureEnabled)).toBe(true);
   await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 100);
-  await emit(page, { type: 'response.created', response: { id: 'opening' } });
-  await emit(page, { type: 'response.done', response: { id: 'opening', status: 'completed', output: [{ content: [{ type: 'audio' }] }] } });
+  await emit(page, { type: 'backend.created', response: { id: 'opening' } });
+  await emit(page, { type: 'backend.completed', response: { id: 'opening', status: 'completed', output: [{ content: [{ type: 'audio' }] }] } });
   expect(await microphoneEnabled()).toBe(false);
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'opening' });
+  await emit(page, { type: 'media.output.active', response_id: 'opening' });
+  await page.clock.fastForward(50);
   await page.clock.fastForward(1999);
   expect(await microphoneEnabled()).toBe(false);
   await page.clock.fastForward(1);
   expect(await microphoneEnabled()).toBe(true);
   // The opening is still playing, but the user can already interrupt it.
-  await emit(page, { type: 'input_audio_buffer.speech_started' });
-  await emit(page, { type: 'output_audio_buffer.cleared', response_id: 'opening' });
+  await emit(page, { type: 'media.input.active' });
+  await emit(page, { type: 'media.output.clear', response_id: 'opening' });
+  await page.clock.fastForward(1250);
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
-  await emit(page, { type: 'input_audio_buffer.speech_stopped' });
-  await emit(page, { type: 'response.created', response: { id: 'next-story' } });
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'next-story' });
-  await emit(page, { type: 'input_audio_buffer.speech_started' });
-  await emit(page, { type: 'output_audio_buffer.cleared', response_id: 'next-story' });
+  await emit(page, { type: 'media.input.quiet' });
+  await emit(page, { type: 'backend.created', response: { id: 'next-story' } });
+  await emit(page, { type: 'media.output.active', response_id: 'next-story' });
+  await emit(page, { type: 'media.input.active' });
+  await emit(page, { type: 'media.output.clear', response_id: 'next-story' });
+  await page.clock.fastForward(1250);
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
   expect(await microphoneEnabled()).toBe(true);
   await page.keyboard.press('Escape');
@@ -308,22 +321,25 @@ test('conversation follows actual playback, handles interruptions, and cleans up
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
   expect(await page.evaluate(() => (window as unknown as { voiceTest: { microphoneEnabled: boolean } }).voiceTest.microphoneEnabled)).toBe(true);
-  await emit(page, { type: 'input_audio_buffer.speech_started' });
-  await emit(page, { type: 'input_audio_buffer.speech_stopped' });
+  await emit(page, { type: 'media.input.active' });
+  await emit(page, { type: 'media.input.quiet' });
+  await emitServer(page, { type: 'research', busy: true, message: 'Thinking…', revision: 0 });
   await expect(page.getByRole('status')).toHaveText('Thinking…');
-  await emit(page, { type: 'response.created', response: { id: 'r1' } });
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'r1' });
+  await emit(page, { type: 'backend.created', response: { id: 'r1' } });
+  await emit(page, { type: 'media.output.active', response_id: 'r1' });
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
-  await emit(page, { type: 'response.done', response: { id: 'r1', status: 'completed' } });
+  await emit(page, { type: 'backend.completed', response: { id: 'r1', status: 'completed' } });
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
-  await emit(page, { type: 'input_audio_buffer.speech_started' });
-  await emit(page, { type: 'output_audio_buffer.cleared', response_id: 'r1' });
+  await emit(page, { type: 'media.input.active' });
+  await emit(page, { type: 'media.output.clear', response_id: 'r1' });
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
-  await emit(page, { type: 'response.created', response: { id: 'r2' } });
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'r2' });
-  await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'r1' });
+  await emit(page, { type: 'media.input.quiet' });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
+  await emit(page, { type: 'backend.created', response: { id: 'r2' } });
+  await emit(page, { type: 'media.output.active', response_id: 'r2' });
+  await emit(page, { type: 'media.output.quiet', response_id: 'r1' });
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
-  await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'r2' });
+  await emit(page, { type: 'media.output.quiet', response_id: 'r2' });
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation' })).toBeVisible();
@@ -365,6 +381,7 @@ test('silence closes the conversation and releases the microphone', async ({ pag
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await briefingReady;
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  await page.clock.runFor(1300);
   await page.clock.fastForward(45_100);
   await expect(page.locator('main')).toHaveClass(/phase-idle/);
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
@@ -381,12 +398,13 @@ test('assistant playback suspends the silence cutoff until the audio actually fi
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await briefingReady;
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'long-answer' });
-  await emit(page, { type: 'response.done', response: { id: 'long-answer', status: 'completed' } });
+  await emit(page, { type: 'media.output.active', response_id: 'long-answer' });
+  await emit(page, { type: 'backend.completed', response: { id: 'long-answer', status: 'completed' } });
+  await page.clock.runFor(100);
   await page.clock.fastForward(60_000);
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   expect((await metrics(page)).stoppedTracks).toBe(0);
-  await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'long-answer' });
+  await emit(page, { type: 'media.output.quiet', response_id: 'long-answer' });
   await page.clock.fastForward(45_100);
   await expect(page.locator('main')).toHaveClass(/phase-idle/);
   expect((await metrics(page)).stoppedTracks).toBe(1);
@@ -399,7 +417,7 @@ test('ten-minute absolute session cutoff still applies while the user is speakin
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
-  await emit(page, { type: 'input_audio_buffer.speech_started' });
+  await emit(page, { type: 'media.input.active' });
   await page.clock.fastForward(180_100);
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await page.clock.fastForward(420_000);
@@ -439,8 +457,8 @@ test('late response events never start an inactivity cutoff during speech', asyn
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
-  await emit(page, { type: 'input_audio_buffer.speech_started' });
-  await emit(page, { type: 'response.created', response: { id: 'previous' } });
+  await emit(page, { type: 'media.input.active' });
+  await emit(page, { type: 'backend.created', response: { id: 'previous' } });
   await page.clock.fastForward(46_000);
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
   expect((await metrics(page)).stoppedTracks).toBe(0);
@@ -700,7 +718,7 @@ test('a previous story cannot replace status while the next selection acknowledg
   await page.keyboard.press('Escape');
 });
 
-test('recoverable server cleanup errors keep voice open while ordinary service errors close it', async ({ page }) => {
+test('provider events cannot control the browser; an application terminal event closes voice', async ({ page }) => {
   await fakeAudio(page);
   await mockSessions(page);
   await page.goto('/');
@@ -710,7 +728,7 @@ test('recoverable server cleanup errors keep voice open while ordinary service e
   await emit(page, { type: 'error', error: { code: 'conversation_already_has_active_response' } });
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
   expect((await metrics(page)).stoppedTracks).toBe(0);
-  await emit(page, { type: 'error', error: { code: 'server_error' } });
+  await emitServer(page, { type: 'ended', message: 'The voice service reported a problem.' });
   await expect(page.getByRole('status')).toContainText('voice service reported a problem');
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
@@ -765,10 +783,10 @@ test('microphone denial keeps the selected visual exploration available', async 
   await expect(page.getByRole('heading', { name: headlines[0].title, exact: true })).toBeVisible();
 });
 
-test('stories and dynamic exploration stay responsive without showing conversation transcripts', async ({ page }) => {
+test('stories and dynamic exploration stay responsive without showing conversation transcripts', async ({ page, baseURL }) => {
   const remoteScripts: string[] = [];
   page.on('request', request => {
-    if (request.resourceType() === 'script' && new URL(request.url()).origin !== 'http://127.0.0.1:3210') remoteScripts.push(request.url());
+    if (request.resourceType() === 'script' && new URL(request.url()).origin !== new URL(baseURL!).origin) remoteScripts.push(request.url());
   });
   await fakeAudio(page);
   await mockSessions(page);
@@ -790,7 +808,7 @@ test('stories and dynamic exploration stay responsive without showing conversati
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
   await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
-  await emit(page, { type: 'response.output_audio_transcript.delta', delta: 'PRIVATE_ANALYSIS_SENTINEL' });
+  await emit(page, { type: 'session.output_transcript.delta', delta: 'PRIVATE_ANALYSIS_SENTINEL' });
   await emit(page, { type: 'conversation.item.input_audio_transcription.completed', transcript: 'PRIVATE_USER_TRANSCRIPT_SENTINEL' });
   await expect(page.getByText('PRIVATE_ANALYSIS_SENTINEL')).toHaveCount(0);
   await expect(page.getByText('PRIVATE_USER_TRANSCRIPT_SENTINEL')).toHaveCount(0);
@@ -915,10 +933,10 @@ test('click-only exploration reaches all five levels and survives reload without
   expect((await metrics(page)).microphoneCalls).toBe(0);
 });
 
-test('the real local route accepts its public origin without creating a provider session', async ({ request }) => {
+test('the real local route accepts its public origin without creating a provider session', async ({ request, baseURL }) => {
   // Invalid SDP stops before the provider request, even with a funded key configured.
   const response = await request.post('/api/session', {
-    headers: { Origin: 'http://127.0.0.1:3210', 'Content-Type': 'application/sdp' },
+    headers: { Origin: new URL(baseURL!).origin, 'Content-Type': 'application/sdp' },
     data: 'invalid-offer',
   });
   expect([400, 503]).toContain(response.status());
@@ -929,7 +947,7 @@ test('the real local route accepts its public origin without creating a provider
   expect(wrongOrigin.status()).toBe(403);
   // A random nonmatching local id never hangs up someone else's active call.
   const end = await request.delete('/api/session', {
-    headers: { Origin: 'http://127.0.0.1:3210', 'X-Voice-Session': 'offline-check-no-active-session' },
+    headers: { Origin: new URL(baseURL!).origin, 'X-Voice-Session': 'offline-check-no-active-session' },
   });
   expect(end.status()).toBe(204);
 });
@@ -997,8 +1015,8 @@ test('motion continuity: spoken selection and slow research never replace or pau
   await wave.focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
-  await emit(page, { type: 'response.created', response: { id: 'story-introduction' } });
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'story-introduction' });
+  await emit(page, { type: 'backend.created', response: { id: 'story-introduction' } });
+  await emit(page, { type: 'media.output.active', response_id: 'story-introduction' });
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
   await emitServer(page, { type: 'display', revision: 1, display: {
     ...emptyDisplay(1), headline: headlines[0], view: 'exploration', stories,
@@ -1011,14 +1029,14 @@ test('motion continuity: spoken selection and slow research never replace or pau
   expect(await canvas!.evaluate(node => node === document.querySelector('canvas'))).toBe(true);
 
   // Speech can finish while research is still pending without starting the silence cutoff.
-  await emit(page, { type: 'response.done', response: { id: 'story-introduction', status: 'completed' } });
-  await emit(page, { type: 'output_audio_buffer.stopped', response_id: 'story-introduction' });
+  await emit(page, { type: 'backend.completed', response: { id: 'story-introduction', status: 'completed' } });
+  await emit(page, { type: 'media.output.quiet', response_id: 'story-introduction' });
   await page.clock.fastForward(60_000);
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
   await emitServer(page, { type: 'display', display: explorationDisplay(), revision: 1 });
   await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
   await expect(page.getByRole('heading', { name: 'Possible next steps' })).toBeVisible();
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'researched-answer' });
+  await emit(page, { type: 'media.output.active', response_id: 'researched-answer' });
   await page.getByRole('button', { name: 'All stories', exact: true }).click();
   await expect(page.locator('.headline-grid')).toBeVisible();
   await clickStory(page, 0);
@@ -1046,7 +1064,7 @@ test('motion desktop: story expansion, comparison and backtracking preserve layo
   const gridStageHeight = (await page.locator('.voice-stage').boundingBox())!.height;
   await captureMotion(page, 'desktop-1440-grid');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'explore-aloud' });
+  await emit(page, { type: 'media.output.active', response_id: 'explore-aloud' });
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
   const display = explorationDisplay();
   // Sample actual intermediate geometry while the React layout changes.
@@ -1219,7 +1237,7 @@ test('motion rapid navigation: native transitions stay clickable through interru
   expect(await page.evaluate(() => typeof Element.prototype.animate)).toBe('function');
   const canvas = await page.locator('canvas').elementHandle();
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await emit(page, { type: 'output_audio_buffer.started', response_id: 'continuous-discussion' });
+  await emit(page, { type: 'media.output.active', response_id: 'continuous-discussion' });
   // Reverse the view as soon as its controls become available, while its shared
   // layout transition may still be running. No fake clock or forced clicks.
   for (let pass = 0; pass < 4; pass++) {
@@ -1305,7 +1323,7 @@ test('desktop voice opening glides upward without resizing the canvas and spotli
     await expect.poll(async () => (await page.locator('.headline-card').last().boundingBox())!.y).toBeLessThan(viewport.height);
     await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
     const unfocused = (await page.locator('.headline-card').nth(7).boundingBox())!;
-    await emit(page, { type: 'output_audio_buffer.started', response_id: 'spoken-eighth' });
+    await emit(page, { type: 'media.output.active', response_id: 'spoken-eighth' });
     await emitServer(page, { type: 'display', display: { ...emptyDisplay(), stories: nine, spotlightStoryId: nine[7].id }, revision: 0 });
     await expect(page.locator('[data-spotlight="true"]')).toHaveCount(1);
     await expect(page.locator('[data-spotlight="true"]')).toHaveAttribute('data-story-id', nine[7].id);
@@ -1399,7 +1417,7 @@ for (const viewport of [
     for (const index of [0, 7, 1]) {
       const card = page.locator(`[data-story-id="${nine[index].id}"]`);
       const collapsedHeight = (await card.boundingBox())!.height;
-      await emit(page, { type: 'output_audio_buffer.started', response_id: `spoken-${index}` });
+      await emit(page, { type: 'media.output.active', response_id: `spoken-${index}` });
       await emitServer(page, { type: 'display', display: { ...emptyDisplay(), stories: nine, spotlightStoryId: nine[index].id }, revision: 0 });
       await expect(card).toHaveAttribute('data-spotlight', 'true');
       await expect(card).toHaveAttribute('aria-pressed', 'false');
@@ -1418,7 +1436,7 @@ for (const viewport of [
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       expect(await audioLifetime(page)).toMatchObject({ createdAudio: 1, pausedAudio: 0, createdPeers: 1 });
       await page.screenshot({ path: testInfo.outputPath(`mobile-story-${index + 1}.png`) });
-      await emit(page, { type: 'output_audio_buffer.stopped', response_id: `spoken-${index}` });
+      await emit(page, { type: 'media.output.quiet', response_id: `spoken-${index}` });
     }
     // The dock remains a usable touch target after scrolling through the briefing.
     await page.getByRole('button', { name: 'End conversation' }).tap();
@@ -1625,7 +1643,7 @@ for (const viewport of [{ width: 464, height: 931 }, { width: 1440, height: 1000
     await expect(page.locator('main')).toHaveCSS('--opening-progress', '0');
     const wave = (await page.locator('.wave-control').boundingBox())!;
     for (const index of [0, 7, 8]) {
-      await emit(page, { type: 'output_audio_buffer.started', response_id: `focus-${index}` });
+      await emit(page, { type: 'media.output.active', response_id: `focus-${index}` });
       await emitServer(page, { type: 'display', display: { ...emptyDisplay(), stories: items, spotlightStoryId: items[index].id }, revision: 0 });
       const card = page.locator(`[data-story-id="${items[index].id}"]`);
       await expect(card).toHaveAttribute('data-spotlight', 'true');

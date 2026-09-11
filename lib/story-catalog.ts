@@ -264,7 +264,9 @@ export function createStoryCatalogService(options: {
       const catalog = StoryCatalogResponseSchema.parse({ ok: true, items, fetchedAt: new Date(now()).toISOString(), stale: feed.stale, curated: true, warning: feed.stale ? "Some Google News feeds could not be refreshed; this selection uses the available reporting." : null });
       await store.finish(owner, now(), version, catalog);
       return catalog;
-    } catch {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[story-catalog] live refresh failed: ${detail.slice(0, 500)}`);
       const usableCache = cached && now() - Date.parse(cached.fetchedAt) < MAX_STALE_MS ? cached : null;
       const recentCandidates = candidates && now() - candidates.fetchedAt < MAX_STALE_MS ? candidates : null;
       // Failed AI ranking must not hide newer headlines that RSS already supplied.

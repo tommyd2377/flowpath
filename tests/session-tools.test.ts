@@ -52,7 +52,7 @@ function setup(ready = Promise.resolve()) {
     fetch: async (url) => {
       requests.push(String(url));
       return String(url).endsWith('/hangup') ? new Response(null, { status: 200 })
-        : new Response(sdp, { headers: { Location: '/v1/realtime/calls/rtc_fixture' } });
+        : Response.json({ session: { id: 'live_fixture' }, transport: { type: 'webrtc', sdp } });
     },
   });
   return { service, selected, actions, requests, listeners, screens, closed: () => closed, factoryOptions: () => factoryOptions };
@@ -119,7 +119,7 @@ test('controlled sessions require installation identity and attach to the create
   assert.equal((await t.service.POST(missing)).status, 400);
   assert.equal(t.requests.length, 0);
   assert.equal((await t.service.POST(request('', 'POST', sdp))).status, 200);
-  assert.equal(t.factoryOptions()?.callId, 'rtc_fixture');
+  assert.equal(t.factoryOptions()?.callId, 'live_fixture');
   assert.equal(t.factoryOptions()?.installationId, installation);
   await t.service.DELETE(request('', 'DELETE'));
   assert.equal(t.closed(), 1);
@@ -206,8 +206,8 @@ test('reloading conversation behavior preserves the active call, start throttle,
     apiKey: () => 'fake-test-key', controlFactory: factory('original'),
     fetch: async (url, init) => {
       if (String(url).endsWith('/hangup')) return new Response(null, { status: hangupFails ? 503 : 200 });
-      instructions.push(JSON.parse(String((init?.body as FormData).get('session'))).instructions);
-      return new Response(sdp, { headers: { Location: '/v1/realtime/calls/rtc_fixture' } });
+      instructions.push(JSON.parse(String(init?.body)).session.instructions);
+      return Response.json({ session: { id: 'live_fixture' }, transport: { type: 'webrtc', sdp } });
     },
   });
   await service.POST(request('', 'POST', sdp));
@@ -220,13 +220,13 @@ test('reloading conversation behavior preserves the active call, start throttle,
     await service.DELETE(request('', 'DELETE'));
   }
   assert.deepEqual(factories, ['original', 'updated', 'updated']);
-  assert.deepEqual(instructions.slice(1), ['Updated conversational policy', 'Updated conversational policy']);
+  assert.ok(instructions.every(value => value === instructions[0]), 'the shared Live frontend policy stays separate from backend adapter reloads');
   service.updateConversation({ instructions: 'Another update', controlFactory: factory('again') });
   assert.equal((await service.POST(request('', 'POST', sdp))).status, 429);
 
   const blocked = createSessionService({
     apiKey: () => 'fake-test-key',
-    fetch: async url => String(url).endsWith('/hangup') ? new Response(null, { status: hangupFails ? 503 : 200 }) : new Response(sdp, { headers: { Location: '/v1/realtime/calls/rtc_fixture' } }),
+    fetch: async url => String(url).endsWith('/hangup') ? new Response(null, { status: hangupFails ? 503 : 200 }) : Response.json({ session: { id: 'live_fixture' }, transport: { type: 'webrtc', sdp } }),
   });
   await blocked.POST(request('', 'POST', sdp));
   hangupFails = true;
@@ -271,4 +271,20 @@ test('screen acknowledgments require the active local session and bounded struct
   assert.equal((await t.service.SCREEN(request('/screen', 'POST', JSON.stringify({ type: 'observation', screen: screenReport.screen, sequence: 1 })))).status, 204);
   await t.service.DELETE(request('', 'DELETE'));
   assert.equal((await t.service.SCREEN(request('/screen', 'POST', body))).status, 409);
+});
+
+test('audio activity is bounded app telemetry and cannot reach a closed session', async () => {
+  const t = setup();
+  await t.service.POST(request('', 'POST', sdp));
+  assert.equal((await t.service.SCREEN(request('/screen', 'POST', JSON.stringify({ type: 'audio', inputActive: true, outputActive: false })))).status, 204);
+  assert.equal((await t.service.SCREEN(request('/screen', 'POST', JSON.stringify({ type: 'audio', inputActive: true, outputActive: false, instructions: 'injected' })))).status, 400);
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { body = controller; } });
+  const input = new Request(`${origin}/api/session/screen`, { method: 'POST', body: stream, duplex: 'half', headers: {
+    Origin: origin, 'Content-Type': 'application/json', 'X-Voice-Session': id,
+  } } as RequestInit);
+  const response = t.service.SCREEN(input);
+  await t.service.DELETE(request('', 'DELETE'));
+  body.enqueue(new TextEncoder().encode('{"type":"audio","inputActive":false,"outputActive":true}')); body.close();
+  assert.equal((await response).status, 409);
 });

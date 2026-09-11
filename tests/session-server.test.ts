@@ -18,13 +18,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function providerAnswer(body: BodyInit = ANSWER, callId = 'rtc_test_call') {
-  return new Response(body, {
-    headers: {
-      'content-type': 'application/sdp',
-      location: `https://api.openai.com/v1/realtime/calls/${callId}`,
-    },
-  });
+function providerAnswer(body: BodyInit = ANSWER, callId = 'live_test_call') {
+  if (body instanceof ReadableStream) {
+    const source = body;
+    return new Response(new ReadableStream({ async start(output) {
+      output.enqueue(new TextEncoder().encode(JSON.stringify({ session: { id: callId } }).slice(0, -1) + ',"transport":{"type":"webrtc","sdp":"'));
+      const reader = source.getReader();
+      while (true) { const part = await reader.read(); if (part.done) break; output.enqueue(new TextEncoder().encode(JSON.stringify(new TextDecoder().decode(part.value)).slice(1, -1))); }
+      output.enqueue(new TextEncoder().encode('"}}')); output.close();
+    } }));
+  }
+  return Response.json({ session: { id: callId }, transport: { type: 'webrtc', sdp: body } });
 }
 
 function setup(options: {
@@ -143,15 +147,13 @@ test('a successful call uses the configured model and returns only the opaque lo
   assert.equal(response.headers.get('location'), null);
   assert.equal(await response.text(), ANSWER);
   const creation = creates()[0];
-  assert.equal(creation.url, 'https://api.openai.com/v1/realtime/calls');
+  assert.equal(creation.url, 'https://api.openai.com/v1/live/sessions');
   assert.equal(creation.init?.method, 'POST');
   assert.equal(new Headers(creation.init?.headers).get('authorization'), `Bearer ${FAKE_KEY}`);
-  assert.ok(creation.init?.body instanceof FormData);
-  assert.equal(creation.init.body.get('sdp'), OFFER);
-  const config = JSON.parse(String(creation.init.body.get('session')));
-  assert.equal(config.model, MODEL);
-  assert.deepEqual(config.output_modalities, ['audio']);
-  assert.equal(config.audio.input.turn_detection.interrupt_response, true);
+  const { session: config, transport } = JSON.parse(String(creation.init?.body));
+  assert.equal(transport.sdp, OFFER); assert.equal(config.model, MODEL);
+  assert.deepEqual(config.delegation, { type: 'client' }); assert.equal(config.audio.output.voice, 'marin');
+  assert.equal('turn_detection' in config, false);
   await service.DELETE(request('DELETE'));
 });
 
@@ -208,7 +210,7 @@ test('DELETE requires the matching opaque id and never uses an arbitrary id as t
   assert.equal(hangups().length, 0);
   assert.equal((await service.DELETE(request('DELETE'))).status, 204);
   assert.equal(hangups().length, 1);
-  assert.equal(hangups()[0].url, 'https://api.openai.com/v1/realtime/calls/rtc_test_call/hangup');
+  assert.equal(hangups()[0].url, 'https://api.openai.com/v1/live/sessions/live_test_call/hangup');
   assert.equal((await service.DELETE(request('DELETE'))).status, 204);
   assert.equal(hangups().length, 1);
 });

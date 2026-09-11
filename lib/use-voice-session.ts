@@ -9,7 +9,8 @@ import { toStoryHeadline } from './story-contracts';
 import { ScreenRequestSchema } from './screen-contracts';
 import { handleScreenRequest, observeScreen } from './screen-client';
 import { createSessionTransport, type SessionTransport } from './session-transport';
-import { createStartupAudioGuard, needsStartupAudioGuard, type VoiceAudioEvent } from './voice-startup';
+import { createStartupAudioGuard, needsStartupAudioGuard, monitorLiveAudio, waitForIce } from './gpt-live/browser';
+import { createLiveIdleTimer, liveIdleMessage } from './gpt-live/idle';
 
 type ResearchStatus = { busy: boolean; message: string; revision: number };
 
@@ -20,13 +21,13 @@ type LiveSession = {
   context?: AudioContext;
   stream?: MediaStream;
   peer?: RTCPeerConnection;
-  channel?: RTCDataChannel;
+  stopMonitor?: () => void;
   audio?: HTMLAudioElement;
   startupAudio?: ReturnType<typeof createStartupAudioGuard>;
   setupTimer?: ReturnType<typeof setTimeout>;
   sessionTimer?: ReturnType<typeof setTimeout>;
-  idleTimer?: ReturnType<typeof setTimeout>;
   disconnectTimer?: ReturnType<typeof setTimeout>;
+  idle?: ReturnType<typeof createLiveIdleTimer>;
   requested: boolean;
   speaking: boolean;
   userSpeaking: boolean;
@@ -79,26 +80,28 @@ export function useVoiceSession() {
     session.controller.abort();
     clearTimeout(session.setupTimer);
     clearTimeout(session.sessionTimer);
-    clearTimeout(session.idleTimer);
     clearTimeout(session.disconnectTimer);
-    session.startupAudio?.dispose();
-    session.channel?.close();
-    session.peer?.close();
-    session.stream?.getTracks().forEach((track) => track.stop());
+    session.idle?.close();
+    session.stopMonitor?.();
+    session.startupAudio?.setInputEnabled(false);
+    if (session.audio) session.audio.muted = true;
+    const releaseMedia = () => { session.startupAudio?.dispose(); session.peer?.close(); session.stream?.getTracks().forEach(track => track.stop());
+      if (session.context?.state !== 'closed') void session.context?.close().catch(() => {});
+    };
     if (session.audio) {
       session.audio.pause();
       session.audio.srcObject = null;
     }
-    if (session.context?.state !== 'closed') void session.context?.close().catch(() => {});
     if (session.requested) {
       // keepalive lets the local server close the call when the page is leaving.
       return session.transport.fetch('/api/session', {
         method: 'DELETE',
         headers: { 'X-Voice-Session': session.id },
         keepalive: true,
-      }).then((response) => response.ok).catch(() => false).finally(() => session.transport.close());
+        signal: AbortSignal.timeout(10_000),
+      }).then((response) => response.ok).catch(() => false).finally(() => { releaseMedia(); session.transport.close(); });
     }
-    session.transport.close();
+    releaseMedia(); session.transport.close();
     return Promise.resolve(true);
   }, []);
 
@@ -150,7 +153,7 @@ export function useVoiceSession() {
           session.bufferedDisplay = undefined;
           session.researchBusy = true;
           setResearchBusy(true);
-          clearTimeout(session.idleTimer);
+          session.idle?.observeBusy(true);
           if (session.channelReady) {
             setMessage('Looking into this story…');
             setPhase(session.speaking ? 'speaking' : session.userSpeaking ? 'listening' : 'thinking');
@@ -191,15 +194,17 @@ export function useVoiceSession() {
     setSessionActive(true);
     revision.current++;
     const alive = () => current.current === session;
+    session.idle = createLiveIdleTimer({
+      timeoutMs: IDLE_SECONDS * 1000,
+      onIdle: () => { if (alive()) stop(liveIdleMessage(IDLE_SECONDS * 1000)); },
+    });
     setPhase('connecting');
     setMessage('');
 
     const idle = () => {
-      clearTimeout(session.idleTimer);
-      if (session.researchBusy || session.selectionPending || session.speaking || session.userSpeaking) return;
-      session.idleTimer = setTimeout(() => {
-        if (alive()) stop('Taking a pause. Tap the wave when you’re ready.');
-      }, IDLE_SECONDS * 1000);
+      session.idle?.observeBusy(session.researchBusy || session.selectionPending);
+      session.idle?.observeAudio({ inputActive: session.userSpeaking, outputActive: session.speaking });
+      if (session.sdpReady && session.channelReady) session.idle?.start();
     };
 
     const restingPhase = () => {
@@ -248,7 +253,7 @@ export function useVoiceSession() {
         session.startupAudio?.start();
         session.researchBusy = true;
         setResearchBusy(true);
-        clearTimeout(session.idleTimer);
+        session.idle?.observeBusy(true);
         void session.transport.fetch('/api/session/action', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Session': session.id },
           body: JSON.stringify({ action: { type: 'start_briefing' } }), signal: session.controller.signal,
@@ -268,7 +273,7 @@ export function useVoiceSession() {
       session.selectionPending = true;
       session.researchBusy = true;
       setResearchBusy(true);
-      clearTimeout(session.idleTimer);
+      session.idle?.observeBusy(true);
       setMessage('Looking into this story…');
       restingPhase();
       void (async () => {
@@ -437,6 +442,17 @@ export function useVoiceSession() {
         session.context.createMediaStreamSource(remoteStream).connect(output);
         output.connect(silent).connect(session.context.destination);
         setOutputAnalyser(output);
+        session.stopMonitor = monitorLiveAudio(input, output, state => {
+          if (!alive()) return;
+          if (state.outputActive && !session.speaking) session.startupAudio?.playbackStarted();
+          const inputActive = state.inputActive && Boolean(session.startupAudio?.tracks.some(track => track.enabled));
+          session.speaking = state.outputActive; session.userSpeaking = inputActive;
+          restingPhase(); idle();
+          if (session.sdpReady) void session.transport.fetch('/api/session/screen', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Session': session.id },
+            body: JSON.stringify({ type: 'audio', inputActive, outputActive: state.outputActive }), signal: session.controller.signal,
+          }).catch(() => {});
+        });
         void session.audio.play().catch(() => fail(session, 'Audio playback was blocked. Tap the wave to try again.'));
       };
       peer.onconnectionstatechange = () => {
@@ -448,87 +464,20 @@ export function useVoiceSession() {
           session.disconnectTimer = setTimeout(() => fail(session, 'The connection was lost. Tap the wave to reconnect.'), 5_000);
         } else if (peer.connectionState === 'connected') {
           clearTimeout(session.disconnectTimer);
+          session.channelReady = true; clearTimeout(session.setupTimer); restingPhase(); session.sendSelection?.();
         }
       };
       session.startupAudio.tracks.forEach((track) => peer.addTrack(track, stream));
-      const channel = peer.createDataChannel('oai-events');
-      session.channel = channel;
-      channel.onopen = () => {
-        if (!alive()) return;
-        session.channelReady = true;
-        clearTimeout(session.setupTimer);
-        restingPhase();
-        session.sendSelection?.();
-      };
-      channel.onclose = () => {
-        if (alive()) fail(session, 'The conversation ended. Tap the wave to start again.');
-      };
-      channel.onerror = () => fail(session, 'The voice connection was interrupted. Tap the wave to reconnect.');
-      channel.onmessage = (messageEvent) => {
-        if (!alive()) return;
-        let event: VoiceAudioEvent;
-        try { event = JSON.parse(messageEvent.data); } catch { return; }
-        if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
-        session.startupAudio?.handle(event);
-        switch (event.type) {
-          case 'input_audio_buffer.speech_started':
-            session.userSpeaking = true;
-            session.speaking = false;
-            clearTimeout(session.idleTimer);
-            setPhase('listening');
-            break;
-          case 'input_audio_buffer.speech_stopped':
-            session.userSpeaking = false;
-            setPhase('thinking');
-            idle();
-            break;
-          case 'response.created':
-            session.responseId = event.response?.id;
-            if (!session.speaking && !session.userSpeaking) {
-              setPhase('thinking');
-              idle();
-            }
-            break;
-          case 'output_audio_buffer.started':
-            session.speaking = true;
-            session.playingId = event.response_id;
-            clearTimeout(session.idleTimer);
-            setPhase('speaking');
-            break;
-          case 'output_audio_buffer.stopped':
-          case 'output_audio_buffer.cleared':
-            if (event.response_id && session.playingId && event.response_id !== session.playingId) break;
-            session.speaking = false;
-            session.playingId = undefined;
-            restingPhase();
-            if (!session.userSpeaking) idle();
-            break;
-          case 'response.done':
-            if (event.response?.id && session.responseId && event.response.id !== session.responseId) break;
-            if (event.response?.status === 'failed') {
-              fail(session, 'The voice service could not respond. Tap the wave to try again.');
-            } else if (!session.speaking && !session.userSpeaking) {
-              // Generation completion may precede playback completion.
-              restingPhase();
-              idle();
-            }
-            break;
-          case 'error':
-            if ((typeof event.error?.event_id === 'string' && event.error.event_id.startsWith('voice_cleanup_'))
-              || event.error?.code === 'conversation_already_has_active_response') break;
-            fail(session, 'The voice service reported a problem. Tap the wave to try again.');
-            break;
-        }
-      };
       const offer = await peer.createOffer();
       if (!alive()) return;
       await peer.setLocalDescription(offer);
+      await waitForIce(peer, session.controller.signal);
       if (!alive()) return;
       session.requested = true;
       const response = await session.transport.fetch('/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp', 'X-Voice-Session': session.id, 'X-Voice-Installation': getInstallationId() },
-        body: offer.sdp,
+        body: peer.localDescription?.sdp ?? offer.sdp,
         signal: session.controller.signal,
       });
       if (!response.ok) {
@@ -592,6 +541,7 @@ export function useVoiceSession() {
       if (!session.sdpReady || !session.channelReady) return;
       if (action.type === 'choose_path' || action.type === 'navigate_path' || action.type === 'compare_paths') {
         session.researchBusy = true;
+        session.idle?.observeBusy(true);
         setResearchBusy(true);
         setMessage(actionMessage);
         setPhase(session.speaking ? 'speaking' : 'thinking');
@@ -605,6 +555,7 @@ export function useVoiceSession() {
       } catch (error) {
         if (current.current === session) {
           session.researchBusy = false;
+          session.idle?.observeBusy(session.selectionPending);
           setResearchBusy(false);
           setPhase('error');
           setMessage(error instanceof Error ? error.message : 'That action could not be completed.');

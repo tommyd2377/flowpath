@@ -1,5 +1,6 @@
+import { liveSessionConfig, liveSessionId, liveSessionUrl } from './gpt-live/protocol';
 import { randomUUID } from 'node:crypto';
-import { MODEL, SESSION_SECONDS } from './session-config';
+import { IDLE_SECONDS, SESSION_SECONDS } from './session-config';
 import { localRequest, validId } from './local-request';
 import { VOICE_INSTRUCTIONS, type VoiceControl, type VoiceControlOptions } from './voice-tools';
 import { ExplorationActionSchema } from './visual-contracts';
@@ -50,7 +51,7 @@ async function readOffer(request: Request) {
     reader.releaseLock();
   }
   const offer = Buffer.concat(chunks).toString('utf8');
-  return offer.startsWith('v=0') && /(?:\r?\n)m=audio /.test(offer) ? offer : null;
+  return offer.startsWith('v=0') && /(?:\r?\n)m=audio /.test(offer) && !/(?:^|\r?\n)m=(?!audio )/.test(offer) && !/(?:^|\r?\n)a=(?:sctp|dcmap|dcsa)/i.test(offer) ? offer : null;
 }
 
 // One local process, one session. This is intentionally not a public access gate.
@@ -64,11 +65,12 @@ export function createSessionService(options: Options) {
 
   async function performHangup(session: Session) {
     if (session.timer) clearTimeout(session.timer);
-    session.control?.close();
+    const finalUsage = await session.control?.close();
+    if (finalUsage?.finalized) { if (active === session) active = undefined; return true; }
     if (!session.callId) return true;
     try {
       const response = await requestOpenAI(
-        `https://api.openai.com/v1/realtime/calls/${session.callId}/hangup`,
+        liveSessionUrl(session.callId, 'hangup'),
         {
           method: 'POST',
           headers: { Authorization: `Bearer ${options.apiKey()}` },
@@ -131,7 +133,7 @@ export function createSessionService(options: Options) {
     },
 
     async POST(request: Request) {
-      const { instructions, controlFactory } = conversation;
+      const { controlFactory } = conversation;
       if (!localRequest(request, true)) return json({ error: 'Only same-origin local requests are allowed.' }, 403);
       if (process.env.VERCEL === '1' && !options.hostedConnection) return json({ error: 'Use the hosted voice connection.' }, 409);
       if (options.fixtureMode) return json({ error: 'Voice is disabled in the fixture preview.' }, 503);
@@ -162,25 +164,10 @@ export function createSessionService(options: Options) {
       request.signal.addEventListener('abort', onAbort, { once: true });
 
       try {
-        const form = new FormData();
-        form.set('sdp', offer);
-        form.set('session', JSON.stringify({
-          type: 'realtime',
-          model: MODEL,
-          output_modalities: ['audio'],
-          reasoning: { effort: 'low' },
-          max_output_tokens: 1024,
-          instructions,
-          audio: {
-            input: { turn_detection: { type: 'semantic_vad', eagerness: 'auto', create_response: true, interrupt_response: true } },
-            output: { voice: 'marin' },
-          },
-        }));
-        const response = await requestOpenAI('https://api.openai.com/v1/realtime/calls', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${apiKey}` },
-          body: form,
-          signal: AbortSignal.timeout(15_000),
+        const response = await requestOpenAI('https://api.openai.com/v1/live/sessions', {
+          method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session: liveSessionConfig(), transport: { type: 'webrtc', sdp: offer } }),
+          redirect: 'error', signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) {
           active = undefined;
@@ -191,26 +178,19 @@ export function createSessionService(options: Options) {
               : 'The voice service is unavailable right now. Please try again.';
           return json({ error: message }, response.status === 429 ? 429 : 502);
         }
-        const location = new URL(response.headers.get('location') ?? '', 'https://api.openai.com');
-        const match = location.origin === 'https://api.openai.com'
-          ? location.pathname.match(/^\/v1\/realtime\/calls\/(rtc_[a-zA-Z0-9_-]+)$/)
-          : null;
-        if (!match) {
-          blocked = true;
-          active = undefined;
-          return json({ error: 'The voice service returned an incomplete connection.' }, 502);
-        }
-        session.callId = match[1];
+        const payload = await response.json();
+        try { session.callId = liveSessionId(payload?.session?.id); }
+        catch { blocked = true; active = undefined; return json({ error: 'The voice service returned an incomplete connection.' }, 502); }
         if (session.ended || request.signal.aborted) {
           await hangup(session);
           return json({ error: 'The conversation was canceled.' }, 409);
         }
-        const answer = await response.text();
+        const answer = payload?.transport?.sdp;
         if (session.ended || request.signal.aborted) {
           await hangup(session);
           return json({ error: 'The conversation was canceled.' }, 409);
         }
-        if (!answer.startsWith('v=0')) {
+        if (typeof answer !== 'string' || answer.length > 65536 || !answer.startsWith('v=0') || /(?:^|\r?\n)m=(?!audio )/.test(answer)) {
           await hangup(session);
           return json({ error: 'The voice service returned an invalid connection.' }, 502);
         }
@@ -220,6 +200,7 @@ export function createSessionService(options: Options) {
             callId: session.callId,
             installationId: session.installationId,
             onFatal: () => { session.ended = true; void hangup(session); },
+            idleTimeoutMs: IDLE_SECONDS * 1000,
           });
           await session.control.ready;
           if (session.ended || request.signal.aborted) {
@@ -243,7 +224,7 @@ export function createSessionService(options: Options) {
         });
       } catch {
         if (session.callId) await hangup(session);
-        else if (active === session) active = undefined;
+        else if (active === session) { active = undefined; blocked = true; }
         return json({ error: 'The voice connection timed out. Please try again.' }, 502);
       } finally {
         request.signal.removeEventListener('abort', onAbort);
@@ -312,7 +293,11 @@ export function createSessionService(options: Options) {
           if (length > 8192) { await reader.cancel(); return json({ error: 'The screen result is too large.' }, 413); }
           chunks.push(value);
         }
-        const parsed = ScreenSubmissionSchema.safeParse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (active !== session || session.ended || request.signal.aborted) return json({ error: 'The conversation has ended.' }, 409);
+        const audio = z.object({ type: z.literal('audio'), inputActive: z.boolean(), outputActive: z.boolean() }).strict().safeParse(body);
+        if (audio.success) { session.control.observeAudio?.(audio.data); return new Response(null, { status: 204 }); }
+        const parsed = ScreenSubmissionSchema.safeParse(body);
         if (!parsed.success) return json({ error: 'Invalid screen result.' }, 400);
         if (active !== session || session.ended || request.signal.aborted) return json({ error: 'The conversation has ended.' }, 409);
         if ('type' in parsed.data) {

@@ -44,10 +44,12 @@ export function canonicalizeHttpsUrl(rawUrl: string) {
     if (url.protocol !== "https:" || url.username || url.password) return null;
     url.hash = "";
     for (const key of [...url.searchParams.keys()]) {
-      if (key.toLowerCase().startsWith("utm_")) url.searchParams.delete(key);
+      const normalized = key.toLowerCase();
+      if (normalized.startsWith("utm_") || ["gclid", "fbclid", "mc_cid", "mc_eid"].includes(normalized)) url.searchParams.delete(key);
     }
     url.searchParams.sort();
-    url.hostname = url.hostname.toLowerCase();
+    url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
     return url.toString();
   } catch {
     return null;
@@ -243,4 +245,3 @@ export function allUrlsBelongToSnapshot(
     })
   );
 }
-

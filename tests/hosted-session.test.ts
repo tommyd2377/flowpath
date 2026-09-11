@@ -19,7 +19,7 @@ import { createSessionTransport } from '../lib/session-transport';
 globalThis.WebSocket ??= WebSocket as unknown as typeof globalThis.WebSocket;
 
 const offer = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n';
-const answer = () => new Response(offer, { headers: { location: 'https://api.openai.com/v1/realtime/calls/rtc_mock' } });
+const answer = () => Response.json({ session: { id: 'live_mock' }, transport: { type: 'webrtc', sdp: offer } });
 
 test('hosted origins stay HTTPS and reject foreign, absent mutation origins and spoofed hosts', () => {
   const env = { NODE_ENV: 'test' as const, VERCEL: '1', VERCEL_URL: 'preview.vercel.app' };
