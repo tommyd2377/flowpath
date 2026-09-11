@@ -37,8 +37,7 @@ a { color: inherit; }
 .voice-stage { position: sticky; top: 0; z-index: 20; width: calc(100% + 56px); padding: calc(25px - var(--exploration-progress) * 7px) 28px 12px; background: linear-gradient(#101110 82%, #101110f5); border-bottom: 1px solid #32342a70; }
 .voice-stage .wordmark { justify-content: center; }
 .wordmark { display: flex; align-items: center; gap: 17px; flex: none; }
-.wordmark h1 { margin: 0; font-size: 11px; font-weight: 400; letter-spacing: 0.36em; padding-left: 0.36em; color: #bab9ad; }
-.wordmark-line { width: 24px; height: 1px; background: #3c3e34; }
+.wordmark-logo { display: block; width: min(160px, 45vw); height: auto; }
 .conversation { width: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 3px 0 10px; }
 .wave-control {
   position: relative;
@@ -271,7 +270,7 @@ a { color: inherit; }
     background: #101110;
   }
   .voice-page[data-started="true"] .voice-stage { position: sticky; }
-  .voice-stage .wordmark { position: absolute; top: calc(6px + var(--opening-progress) * 20svh - 32px); left: 0; right: 0; }
+  .voice-stage .wordmark { position: absolute; top: calc(6px + var(--opening-progress) * 20svh - 100px); left: 0; right: 0; }
   .conversation { position: absolute; top: calc(6px + var(--status-shift) + var(--opening-progress) * 20svh); left: 28px; right: 28px; width: auto; padding: 0; }
   .wave-control { height: var(--wave-height); flex: none; }
   .voice-page[data-started="true"] .conversation { pointer-events: none; }
@@ -318,7 +317,7 @@ a { color: inherit; }
     background: #101110;
   }
   .voice-page[data-started="true"] .voice-stage { position: sticky; }
-  .voice-stage .wordmark { position: absolute; top: calc(var(--wave-top) + var(--opening-progress) * 20svh - 32px); left: 0; right: 0; }
+  .voice-stage .wordmark { position: absolute; top: calc(var(--wave-top) + var(--opening-progress) * 20svh - 100px); left: 0; right: 0; }
   .conversation { position: absolute; top: calc(var(--wave-top) + var(--status-shift) + var(--opening-progress) * 20svh); left: 18px; right: 18px; width: auto; padding: 0; }
   .wave-control { height: var(--wave-height); flex: none; }
   .voice-page[data-started="true"] .conversation { pointer-events: none; }

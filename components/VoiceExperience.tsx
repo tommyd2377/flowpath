@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { InterfaceMotion, MotionView, revealTransition, useSpotlightScroll } from './motion-primitives';
@@ -135,9 +136,7 @@ export default function VoiceExperience() {
       transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.52, '--opening-progress': { ...revealTransition, duration: reducedMotion ? 0 : 1.25 } }}>
       <div className="voice-stage" ref={stage}>
       <motion.header className="wordmark" initial={false} animate={{ opacity: docked ? 0 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.65 }}>
-        <span className="wordmark-line" aria-hidden="true" />
-        <h1>THE VOICE</h1>
-        <span className="wordmark-line" aria-hidden="true" />
+        <Image className="wordmark-logo" src="/brand/flowpath-logo-full.png" alt="FlowPath" width={1536} height={1024} priority />
       </motion.header>
       <section className="conversation" aria-label="Voice conversation">
         <button
