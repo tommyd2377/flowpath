@@ -17,10 +17,10 @@ class Socket extends EventEmitter {
   frame(value: object) { this.emit('message', Buffer.from(JSON.stringify(value))); }
 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
-function harness(delegate: Parameters<typeof createLiveRuntime>[0]['delegate']) {
+function harness(delegate: Parameters<typeof createLiveRuntime>[0]['delegate'], onTaskError?: (message: string) => void) {
   const socket = new Socket(), failures: string[] = [];
   const live = createLiveRuntime({ sessionId: 'live_test', apiKey: 'synthetic', delegate, closeTimeoutMs: 10,
-    onFatal: message => failures.push(message), socketFactory: (url) => { assert.equal(url, 'wss://api.openai.com/v1/live/sessions/live_test/attach'); return socket as unknown as LiveSocket; } });
+    onFatal: message => failures.push(message), onTaskError, socketFactory: (url) => { assert.equal(url, 'wss://api.openai.com/v1/live/sessions/live_test/attach'); return socket as unknown as LiveSocket; } });
   socket.open(); live.start();
   return { live, socket, failures };
 }
@@ -46,6 +46,16 @@ test('fragments are preserved and only delegation executes work; duplicate IDs e
   assert.equal((jobs[0] as { transcripts: { delta: string }[] }).transcripts.map(x => x.delta).join(''), 'What is this?');
   assert.ok(h.socket.sent.some(x => x.type === 'session.commentary.append' && x.delegation_id === 'item_task'));
   assert.ok(!h.socket.sent.some(x => ['response.create', 'session.start', 'session.update'].includes(String(x.type))));
+  await h.live.close();
+});
+
+test('delegated failures expose a bounded reason to the visitor and the UI', async () => {
+  const messages: string[] = [];
+  const h = harness(async () => { throw new Error('The conversation backend did not finish.'); }, message => messages.push(message));
+  transcript(h.socket, 'Find images.'); delegate(h.socket); await flush();
+  assert.deepEqual(messages, ['The conversation backend did not return a complete answer.']);
+  assert.ok(h.socket.sent.some(x => String(x.content).includes('did not return a complete answer')));
+  assert.ok(!h.socket.sent.some(x => String(x.content).includes('I could not complete that request')));
   await h.live.close();
 });
 
@@ -100,10 +110,21 @@ test('backend executes one validated tool then a tool-free bounded continuation 
       : [{ type: 'message', content: [{ type: 'output_text', text: 'Confirmed.' }] }] }); },
   });
   assert.deepEqual(executed, ['show']); assert.equal(result.text, 'Confirmed.'); assert.equal(requests[0].model, 'gpt-5.6-luna');
+  assert.deepEqual(requests[0].include, ['reasoning.encrypted_content']);
   assert.deepEqual(requests[1].tools, []); assert.equal(requests[1].max_output_tokens, 500);
   let attempts = 0;
-  await assert.rejects(runLiveBackend({ apiKey: 'synthetic', instructions: '', context: {}, signal: new AbortController().signal, tools: [], execute: async () => ({ data: {} }), fetch: async () => { attempts++; return new Response(null, { status: 429 }); } }));
+  await assert.rejects(runLiveBackend({ apiKey: 'synthetic', instructions: '', context: {}, signal: new AbortController().signal, tools: [], execute: async () => ({ data: {} }), fetch: async () => { attempts++; return new Response(null, { status: 429 }); } }), /busy/);
   assert.equal(attempts, 1);
+});
+
+test('tool failures can return deterministic spoken text without a continuation', async () => {
+  let requests = 0;
+  const result = await runLiveBackend({ apiKey: 'synthetic', instructions: '', context: {}, signal: new AbortController().signal,
+    tools: [{ type: 'function', name: 'search', description: '', parameters: {} }], maxToolRounds: 1,
+    execute: async () => ({ data: { status: 'unavailable' }, directText: 'Image search returned no displayable results.' }),
+    fetch: async () => { requests++; return Response.json({ status: 'completed', output: [{ type: 'function_call', name: 'search', call_id: 'call_search', arguments: '{}' }] }); },
+  });
+  assert.equal(result.text, 'Image search returned no displayable results.'); assert.equal(requests, 1);
 });
 
 test('unsupported or multiple backend tools never execute', async () => {

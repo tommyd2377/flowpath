@@ -7,11 +7,28 @@ export type LiveRuntimeOptions = {
   delegate: (context: { transcripts: LiveTranscript[]; history: LiveHistory }, signal: AbortSignal) => Promise<{ text: string; silent?: boolean }>;
   onTranscript?: (fragment: LiveTranscript) => void;
   onUsage?: (usage: LiveUsage) => void; onBusy?: (busy: boolean) => void;
+  onTaskError?: (message: string) => void;
   onFatal: (message: string) => void;
   socketFactory?: (url: string, options: WebSocket.ClientOptions) => LiveSocket;
   closeTimeoutMs?: number; taskTimeoutMs?: number;
 };
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+
+/** Convert bounded server failures into useful visitor-facing language without exposing provider details. */
+export function liveTaskFailureMessage(error: unknown) {
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'That request took too long to complete.';
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'The conversation backend is unavailable.' || message === 'The conversation backend is temporarily unavailable.') return 'The conversation backend is unavailable right now.';
+  if (message === 'The conversation backend is busy. Try again shortly.') return message;
+  if (message === 'The conversation backend rejected the request.') return 'The conversation backend rejected that request.';
+  if (message === 'The conversation backend returned too much data.') return 'The conversation backend returned too much data.';
+  if (message === 'The conversation backend did not finish.') return 'The conversation backend did not return a complete answer.';
+  if (message === 'The conversation backend returned no answer.') return 'The conversation backend returned no answer.';
+  if (message === 'The conversation backend exceeded its tool limit.' || message === 'The conversation backend exceeded its limit.') return 'That request needed more steps than voice allows.';
+  if (message === 'Invalid backend tool.') return 'The voice request contained an invalid action.';
+  if (message === 'The current view is no longer valid. Reload to continue.') return message;
+  return 'The conversation backend could not complete that request.';
+}
 
 /** Identical server owner in both apps. Audio and backend work have independent lifetimes. */
 export function createLiveRuntime(options: LiveRuntimeOptions) {
@@ -88,8 +105,12 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
       signal.throwIfAborted();
       if (closing || version !== epoch) return;
       if (!result.silent) append('commentary', result.text, id);
-    } catch {
-      if (!closing && version === epoch && !controller.signal.aborted) append('commentary', 'I could not complete that request. You can try another question or use the page controls.', id);
+    } catch (error) {
+      if (!closing && version === epoch && !controller.signal.aborted) {
+        const message = liveTaskFailureMessage(error);
+        options.onTaskError?.(message);
+        append('commentary', `${message} You can try another question or use the page controls.`, id);
+      }
     } finally {
       if (version === epoch) { task = undefined; options.onBusy?.(false); }
     }
