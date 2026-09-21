@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { EventSnapshotSchema, HeadlineItemSchema, PossibilityNodeSchema, SourceSchema } from './atlas/contracts';
-import { CuratedStorySchema } from './story-contracts';
+import { CuratedStorySchema, StoryCatalogMetadataSchema } from './story-contracts';
 
 export const ExplorationActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('select_story'), storyId: z.string().min(8).max(64) }).strict(),
@@ -8,6 +8,7 @@ export const ExplorationActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('navigate_path'), target: z.enum(['parent', 'root', 'node']), nodeId: z.string().uuid().optional() }).strict(),
   z.object({ type: z.literal('compare_paths'), nodeIds: z.array(z.string().uuid()).min(2).max(5) }).strict(),
   z.object({ type: z.literal('show_stories') }).strict(),
+  z.object({ type: z.literal('refresh_stories') }).strict(),
   z.object({ type: z.literal('start_briefing') }).strict(),
 ]);
 export type ExplorationAction = z.infer<typeof ExplorationActionSchema>;
@@ -52,6 +53,9 @@ export const ExplorationDisplaySchema = z.object({
   view: z.enum(['stories', 'exploration']),
   revision: z.number().int().nonnegative(),
   stories: z.array(CuratedStorySchema).max(20).optional(),
+  storyCatalog: StoryCatalogMetadataSchema.optional(),
+  storyCatalogId: z.string().uuid().optional(),
+  storyCatalogError: z.string().max(240).optional(),
   spotlightStoryId: z.string().min(8).max(64).nullable().optional(),
   spotlightPathId: z.string().uuid().nullable().optional(),
   pendingPathId: z.string().uuid().nullable().optional(),

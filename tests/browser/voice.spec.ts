@@ -291,7 +291,7 @@ test('iPhone opening sends silence before the briefing request and restores inte
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
   expect(await microphoneEnabled()).toBe(true);
   await page.keyboard.press('Escape');
-  expect((await metrics(page)).stoppedTracks).toBe(1);
+  await expect.poll(async () => (await metrics(page)).stoppedTracks).toBe(1);
   expect(await page.evaluate(() => (window as unknown as { voiceTest: { stoppedOutgoingTracks: number } }).voiceTest.stoppedOutgoingTracks)).toBe(1);
 });
 
@@ -344,7 +344,7 @@ test('conversation follows actual playback, handles interruptions, and cleans up
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation' })).toBeVisible();
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
-  expect(await metrics(page)).toEqual({ microphoneCalls: 1, stoppedTracks: 1, closedPeers: 1, closedContexts: 1 });
+  await expect.poll(() => metrics(page)).toEqual({ microphoneCalls: 1, stoppedTracks: 1, closedPeers: 1, closedContexts: 1 });
   expect(errors).toEqual([]);
 });
 
@@ -1766,4 +1766,124 @@ test('web search status expands the dock temporarily during a voice conversation
   await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0');
   await expect.poll(async () => (await page.locator('.voice-stage').boundingBox())!.height).toBeLessThan(initial + 1);
   await page.getByRole('button', { name: 'End conversation' }).click();
+});
+
+test('story updates finish loading, fade below the wave, and keep a timestamp beside refresh', async ({ page }, testInfo) => {
+  await page.clock.install();
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const updated = { ...catalog, fetchedAt: '2026-09-21T13:30:00Z', items: stories.map(item => ({ ...item, title: `Updated: ${item.title}` })) };
+  await page.route('**/api/stories', async route => {
+    calls++;
+    if (calls === 1) await ready;
+    await route.fulfill({ json: calls === 1 ? catalog : updated });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  release();
+  await expect(page.locator('.headline-card:not(.headline-skeleton)')).toHaveCount(3);
+  await expect(page.getByRole('status')).toContainText('Stories updated');
+  await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', catalog.fetchedAt);
+  await page.clock.runFor(5600);
+  await expect(page.locator('.conversation-copy')).toHaveAttribute('aria-hidden', 'true');
+  const canvas = await page.locator('.wave-control canvas').elementHandle();
+  await page.getByRole('button', { name: 'Refresh stories', exact: true }).click();
+  await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', updated.fetchedAt);
+  expect(calls).toBe(2);
+  expect(await canvas?.evaluate(element => element.isConnected)).toBe(true);
+  await page.getByRole('button', { name: /Updated: City weighs/ }).focus();
+  await page.clock.runFor(600);
+  await expect(page.locator('.headline-card[data-expanded="true"] .headline-context')).toHaveText(stories[0].whyItMatters);
+  await page.screenshot({ path: testInfo.outputPath('stories-refresh-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.runFor(6000);
+  await page.getByRole('button', { name: 'Refresh stories', exact: true }).scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('stories-refresh-mobile.png') });
+});
+
+test('a stalled story request times out and refresh recovers without reloading the page', async ({ page }) => {
+  await page.clock.install();
+  let requested = false;
+  await page.route('**/api/stories', () => { requested = true; });
+  await page.goto('/');
+  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await expect.poll(() => requested).toBe(true);
+  await page.clock.fastForward(100_100);
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+  await expect(page.locator('.stories-notice')).toContainText('Stories couldn’t be loaded');
+  await expect(page.locator('.voice-page')).toHaveAttribute('data-working', 'false');
+  await page.route('**/api/stories', route => route.fulfill({ json: catalog }));
+  await page.getByRole('button', { name: 'Refresh stories' }).click();
+  await expect(page.locator('.headline-card')).toHaveCount(3);
+  await expect(page.locator('.stories-notice')).toHaveCount(0);
+});
+
+test('a failed refresh keeps the displayed stories and their original update time', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.headline-card')).toHaveCount(3);
+  await page.route('**/api/stories', route => route.fulfill({ status: 503, json: { error: 'Unavailable' } }));
+  await page.getByRole('button', { name: 'Refresh stories' }).click();
+  await expect(page.locator('.stories-notice')).toContainText('Your saved stories are still here');
+  await expect(page.locator('.headline-card')).toHaveCount(3);
+  await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', catalog.fetchedAt);
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+});
+
+test('fallback notices fade beneath the waveform and are not presented as story analysis', async ({ page }) => {
+  await page.clock.install();
+  const warning = 'Showing uncurated Google News headlines. AI grouping and ranking are temporarily unavailable.';
+  await page.route('**/api/stories', route => route.fulfill({ json: { ...catalog, curated: false, warning,
+    items: stories.map(story => ({ ...story, summary: story.title, whyItMatters: 'This headline has not been grouped or assessed for significance.' })) } }));
+  await page.goto('/');
+  await expect(page.getByRole('status')).toHaveText(warning);
+  await page.clock.runFor(5600);
+  await expect(page.locator('.conversation-copy')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('.stories-notice')).toHaveText(warning);
+  await expect(page.getByText('This headline has not been grouped or assessed for significance.')).toHaveCount(0);
+});
+
+test('a voice catalog completes a stalled page load and active refresh waits for its own result', async ({ page }) => {
+  await fakeAudio(page); await mockSessions(page);
+  await page.route('**/api/stories', () => {});
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  const metadata = { fetchedAt: catalog.fetchedAt, curated: true, stale: false, warning: null };
+  const display = { ...emptyDisplay(), stories, storyCatalog: metadata, storyCatalogId: '00000000-0000-4000-8000-000000000001' };
+  await emitServer(page, { type: 'display', display, revision: 0 });
+  await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', catalog.fetchedAt);
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+  let refreshes = 0;
+  await page.route('**/api/session/action', async route => {
+    if (route.request().postDataJSON().action.type === 'refresh_stories') refreshes++;
+    await route.fulfill({ status: 202, json: { ok: true } });
+  });
+  await page.getByRole('button', { name: 'Refresh stories' }).click();
+  await expect.poll(() => refreshes).toBe(1);
+  await emitServer(page, { type: 'display', display: { ...display, spotlightStoryId: stories[1].id }, revision: 0 });
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeDisabled();
+  await emitServer(page, { type: 'display', display: { ...display, storyCatalogId: '00000000-0000-4000-8000-000000000002', storyCatalog: { ...metadata, fetchedAt: '2026-09-21T14:00:00Z' } }, revision: 0 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+  await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', '2026-09-21T14:00:00Z');
+  await mkdir('/private/tmp/flowpath-news-qa', { recursive: true });
+  await page.waitForTimeout(650);
+  await page.screenshot({ path: '/private/tmp/flowpath-news-qa/refreshed-news-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(650);
+  await page.screenshot({ path: '/private/tmp/flowpath-news-qa/refreshed-news-mobile.png' });
+  await page.getByRole('button', { name: 'Refresh stories' }).click();
+  await expect.poll(() => refreshes).toBe(2);
+  await emitServer(page, { type: 'display', display: { ...display, storyCatalogId: '00000000-0000-4000-8000-000000000003', storyCatalogError: 'Couldn’t refresh stories.' }, revision: 0 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+  await expect(page.locator('.stories-notice')).toContainText('Your saved stories are still here');
+  await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', '2026-09-21T14:00:00Z');
+  await page.getByRole('button', { name: 'Refresh stories' }).click();
+  await expect.poll(() => refreshes).toBe(3);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.voice-page')).toHaveAttribute('data-working', 'false');
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
 });

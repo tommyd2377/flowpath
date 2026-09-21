@@ -8,6 +8,9 @@ test('animated waveform tails stay anchored on a high-density mobile screen', as
   await page.route('**/api/**', route => route.fulfill({ status: 503, json: {} }));
   await page.route('https://api.openai.com/**', route => route.abort('blockedbyclient'));
   await page.goto('/');
+  // News recovery notices now fade away; measure canvas stability after that
+  // intentional status/dock transition, rather than treating it as jitter.
+  await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '0', { timeout: 8_000 });
   await page.waitForFunction(() => {
     const canvas = document.querySelector('canvas');
     const context = canvas?.getContext('2d');

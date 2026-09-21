@@ -4,7 +4,7 @@ import { HeadlineItemSchema, type HeadlineItem } from "./atlas/contracts";
 export const MAX_CURATED_STORIES = 20;
 export const CuratedStorySchema = HeadlineItemSchema.extend({
   summary: z.string().min(1).max(500),
-  whyItMatters: z.string().min(1).max(420),
+  whyItMatters: z.string().max(420),
   scope: z.enum(["us", "global", "both"]),
   headlines: z.array(HeadlineItemSchema).min(1).max(90),
   contextSources: z.array(z.object({ title: z.string().min(1).max(240), url: z.string().url().startsWith("https://") }).strict()).max(4),
@@ -20,6 +20,15 @@ export const StoryCatalogResponseSchema = z.object({
   curated: z.boolean(),
 }).strict();
 export type StoryCatalogResponse = z.infer<typeof StoryCatalogResponseSchema>;
+
+export const StoryCatalogMetadataSchema = StoryCatalogResponseSchema.omit({ ok: true, items: true });
+export function storyCatalogMetadata({ fetchedAt, stale, warning, curated }: StoryCatalogResponse) {
+  return { fetchedAt, stale, warning, curated };
+}
+
+export function formatStoriesUpdatedAt(value: string) {
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
+}
 
 export function toStoryHeadline(story: CuratedStory): HeadlineItem {
   return {

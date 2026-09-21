@@ -11,15 +11,14 @@ import ExplorationPanel from './ExplorationPanel';
 import { useVoiceSession } from '@/lib/use-voice-session';
 import type { HeadlineItem } from '@/lib/atlas/contracts';
 import { loadSelectedHeadline, saveSelectedHeadline } from '@/lib/news-storage';
-import { StoryCatalogResponseSchema, type CuratedStory } from '@/lib/story-contracts';
+import { useStoryCatalog } from '@/lib/use-story-catalog';
 
 export default function VoiceExperience() {
   const { phase, message, inputAnalyser, outputAnalyser, start, stop, selectStory, display, act, sessionActive, researchBusy } = useVoiceSession();
   const [entered, setEntered] = useState(false);
-  const [headlines, setHeadlines] = useState<CuratedStory[]>([]);
+  const { catalog, loading, notice: feedMessage, error: feedError, refresh, dismissNotice } = useStoryCatalog(display, sessionActive);
+  const headlines = display?.stories && !display.storyCatalog ? display.stories : catalog?.items ?? display?.stories ?? [];
   const [savedHeadline, setSavedHeadline] = useState<HeadlineItem | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [feedMessage, setFeedMessage] = useState('');
   const stage = useRef<HTMLDivElement>(null);
   const dashboard = useRef<HTMLDivElement>(null);
   const statusCopy = useRef<HTMLDivElement>(null);
@@ -33,8 +32,8 @@ export default function VoiceExperience() {
   const docked = entered || active || exploring;
   const working = researchBusy || phase === 'connecting' || phase === 'thinking' || (loading && !exploring);
   const statusText = phase === 'error' ? message : working
-    ? (researchBusy && message) || (phase === 'connecting' ? 'Connecting…' : loading && !exploring ? 'Loading stories…' : 'Thinking…')
-    : !active && feedMessage ? feedMessage : '';
+    ? (researchBusy && message) || (phase === 'connecting' ? 'Connecting…' : loading && !exploring ? headlines.length ? 'Refreshing stories…' : 'Loading stories…' : 'Thinking…')
+    : !exploring ? feedMessage : '';
   const [lastStatus, setLastStatus] = useState('');
   if (statusText && statusText !== lastStatus) setLastStatus(statusText);
   const label = phase === 'connecting' ? 'Cancel connection' : active ? 'End conversation' : 'Start conversation';
@@ -45,21 +44,6 @@ export default function VoiceExperience() {
     queueMicrotask(() => {
       if (controller.signal.aborted) return;
       setSavedHeadline(loadSelectedHeadline());
-    });
-    void fetch('/api/stories', { cache: 'no-store', signal: controller.signal }).then(async (response) => {
-      const parsed = StoryCatalogResponseSchema.safeParse(await response.json());
-      if (!response.ok || !parsed.success) throw new Error('Stories are unavailable. Refresh the page to try again.');
-      if (controller.signal.aborted) return;
-      const body = parsed.data;
-      const items = body.items;
-      setHeadlines(items);
-      setFeedMessage(items.length === 0 ? 'No stories are available right now. Refresh the page to try again.'
-        : typeof body.warning === 'string' && body.warning ? body.warning
-          : body.stale ? 'Showing the latest saved stories.' : '');
-    }).catch(() => {
-      if (!controller.signal.aborted) setFeedMessage('Stories are unavailable. Refresh the page to try again.');
-    }).finally(() => {
-      if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
   }, []);
@@ -111,6 +95,7 @@ export default function VoiceExperience() {
   }, []);
 
   const chooseHeadline = (headline: HeadlineItem) => {
+    dismissNotice();
     setEntered(true);
     rememberKeyboardNavigation();
     const reference = { id: headline.id, title: headline.title, publisher: headline.publisher, publisherUrl: headline.publisherUrl,
@@ -119,10 +104,11 @@ export default function VoiceExperience() {
     saveSelectedHeadline(reference);
     selectStory(headline.id);
   };
-  const currentStories = display?.stories ?? headlines;
+  const currentStories = headlines;
   const visibleHeadlines = selectedHeadline && !currentStories.some((headline) => headline.id === selectedHeadline.id)
     ? [selectedHeadline, ...currentStories].slice(0, 20) : currentStories;
   const beginConversation = () => {
+    dismissNotice();
     if (active) { stop('Conversation ended. Take your time.'); return; }
     setEntered(true);
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -162,7 +148,7 @@ export default function VoiceExperience() {
               <ExplorationPanel display={{ ...display, stories: display.stories ?? headlines }} busy={researchBusy} message={message} onAction={(action) => { if (action.type !== 'compare_paths') rememberKeyboardNavigation(); else focusAfterAction.current = false; void act(action); }} />
             </MotionView>
             : <MotionView key="stories" className="dashboard-view">
-              <HeadlineGrid spotlightStoryId={active ? display?.spotlightStoryId : null} headlines={visibleHeadlines} selectedHeadlineId={selectedHeadline?.id ?? null} loading={loading && !display?.stories?.length} onSelect={chooseHeadline} />
+              <HeadlineGrid spotlightStoryId={active ? display?.spotlightStoryId : null} headlines={visibleHeadlines} selectedHeadlineId={selectedHeadline?.id ?? null} loading={loading} catalog={catalog} error={feedError} onRefresh={() => void refresh(active ? () => act({ type: 'refresh_stories' }) : undefined)} onSelect={chooseHeadline} />
             </MotionView>}
         </AnimatePresence>
       </motion.div>

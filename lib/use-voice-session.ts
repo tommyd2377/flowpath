@@ -520,7 +520,7 @@ export function useVoiceSession() {
     const session = current.current;
     const actionMessage = action.type === 'choose_path' ? 'Exploring this possibility…'
       : action.type === 'navigate_path' ? 'Returning to this path…'
-        : action.type === 'compare_paths' ? 'Comparing possibilities…' : 'Looking into this story…';
+        : action.type === 'compare_paths' ? 'Comparing possibilities…' : action.type === 'refresh_stories' ? 'Refreshing stories…' : 'Looking into this story…';
     if (action.type === 'choose_path' && displayRef.current?.exploration && (!session || (session.sdpReady && session.channelReady))) {
       showDisplay({ ...displayRef.current, pendingPathId: action.nodeId, spotlightPathId: action.nodeId });
     }
@@ -539,7 +539,7 @@ export function useVoiceSession() {
     }
     if (session) {
       if (!session.sdpReady || !session.channelReady) return;
-      if (action.type === 'choose_path' || action.type === 'navigate_path' || action.type === 'compare_paths') {
+      if (action.type === 'choose_path' || action.type === 'navigate_path' || action.type === 'compare_paths' || action.type === 'refresh_stories') {
         session.researchBusy = true;
         session.idle?.observeBusy(true);
         setResearchBusy(true);
@@ -557,9 +557,10 @@ export function useVoiceSession() {
           session.researchBusy = false;
           session.idle?.observeBusy(session.selectionPending);
           setResearchBusy(false);
-          setPhase('error');
+          setPhase(action.type === 'refresh_stories' ? session.speaking ? 'speaking' : 'listening' : 'error');
           setMessage(error instanceof Error ? error.message : 'That action could not be completed.');
           if (displayRef.current) showDisplay({ ...displayRef.current, pendingPathId: null });
+          if (action.type === 'refresh_stories') throw error;
         }
       }
       return;
@@ -586,7 +587,7 @@ export function useVoiceSession() {
       const parsed = ExplorationDisplaySchema.safeParse((await response.json()).display);
       if (!parsed.success) throw new Error('The story returned an incomplete display. Try again.');
       if (controller.signal.aborted || current.current || revision.current !== actionRevision) return;
-      showDisplay({ ...parsed.data, view: displayRef.current?.view ?? parsed.data.view, stories: displayRef.current?.stories });
+      showDisplay({ ...parsed.data, view: action.type === 'refresh_stories' ? 'stories' : displayRef.current?.view ?? parsed.data.view, stories: parsed.data.stories ?? displayRef.current?.stories, storyCatalog: parsed.data.storyCatalog ?? displayRef.current?.storyCatalog });
       setMessage('');
       setPhase('idle');
     } catch (error) {

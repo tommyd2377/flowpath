@@ -24,8 +24,8 @@ function response(): AtlasParsedResponse<unknown> {
     output: [{ type: "web_search_call", status: "completed", action: { type: "search", sources: [{ url: SOURCE }] } }],
     output_parsed: {
       stories: [
-        { title: "Transit policy debate", summary: "A city is considering a transit plan.", whyItMatters: "If adopted, the plan could change how people travel.", scope: "us", memberIds: [FIXTURE_HEADLINES[0].id], sourceUrls: [SOURCE] },
-        { title: "New energy research", summary: "Researchers announced a pilot.", whyItMatters: "A successful pilot could inform future research.", scope: "both", memberIds: [FIXTURE_HEADLINES[1].id], sourceUrls: [] },
+        { title: "Transit policy debate", summary: "A city is considering a transit plan.", whyItMatters: "If adopted, the plan could change how people travel.", scope: "us", memberIds: ["item-001"], sourceUrls: [SOURCE] },
+        { title: "New energy research", summary: "Researchers announced a pilot.", whyItMatters: "A successful pilot could inform future research.", scope: "both", memberIds: ["item-002"], sourceUrls: [] },
       ],
       sources: [{ title: "Official report", url: SOURCE }],
     },
@@ -66,6 +66,7 @@ test("curates bounded, neutral stories with server-owned IDs and validated repor
   assert.equal(call.request.store, false);
   assert.equal(call.request.max_output_tokens, 6000);
   assert.equal(call.request.max_tool_calls, 2);
+  assert.equal(call.request.tool_choice, undefined, 'additional search is optional');
   assert.deepEqual(call.request.tools, [{ type: "web_search", search_context_size: "medium" }]);
   assert.equal(call.options.timeout, STORY_RESEARCH_TIMEOUT_MS);
   assert.equal(call.options.maxRetries, 0);
@@ -125,9 +126,11 @@ test("collects at most 90 deduplicated candidates across top, world and US feeds
   const input = JSON.parse(h.adapter.calls[0].request.input[1].content);
   assert.equal(input.candidates.length, 90);
   assert.equal(new Set(input.candidates.map((item: HeadlineItem) => item.id)).size, 90);
-  assert.match(input.candidates[0].id, /^top-/);
-  assert.match(input.candidates[1].id, /^world-/);
-  assert.match(input.candidates[2].id, /^us-/);
+  assert.equal(input.candidates[0].id, 'item-001');
+  assert.match(input.candidates[0].title, /^top /);
+  assert.match(input.candidates[1].title, /^world /);
+  assert.match(input.candidates[2].title, /^us /);
+  assert.equal(input.candidates[0].googleNewsUrl, undefined);
 });
 
 test("concurrent callers share one request and one aborted page does not cancel the catalog", async t => {
@@ -279,4 +282,41 @@ test("catalog history is bounded and rejects attempts to finish another owner's 
   const result = await client.execute("SELECT COUNT(*) AS count FROM voice_story_catalogs");
   assert.equal(result.rows[0].count, STORY_HISTORY_LIMIT);
   assert.equal((await h.repository.latest("test"))?.items.length, 2);
+});
+
+test('headline-grounded summaries and significance do not require additional web results', async t => {
+  for (const output of [[], [{ type: 'web_search_call', status: 'failed' }]]) {
+    const h = harness(t, new Adapter(async () => {
+      const value = response();
+      const payload = value.output_parsed as { stories: Array<{ sourceUrls: string[] }>; sources: unknown[] };
+      value.output = output;
+      payload.sources = [];
+      payload.stories.forEach(story => { story.sourceUrls = []; });
+      return value;
+    }));
+    const catalog = await h.service.getStories();
+    assert.equal(catalog.curated, true);
+    assert.equal(catalog.warning, null);
+    assert.match(catalog.items[0].whyItMatters, /could change/);
+    assert.equal(catalog.items[0].contextSources.length, 0);
+    assert.equal(h.adapter.calls.length, 1);
+  }
+});
+
+test('curation preserves the RSS retrieval time instead of pretending old feeds were updated', async t => {
+  const h = harness(t);
+  h.setNow(NOW + 60 * 60 * 1000);
+  h.feeds[0].getHeadlines = async () => ({ ...feed(), stale: true });
+  const catalog = await h.service.getStories();
+  assert.equal(catalog.curated, true);
+  assert.equal(catalog.stale, true);
+  assert.equal(catalog.fetchedAt, new Date(NOW).toISOString());
+});
+
+test('repeated refresh requests retain the real timestamp and shared paid-call cooldown', async t => {
+  const h = harness(t);
+  const first = await h.service.getStories();
+  h.setNow(NOW + 60_000);
+  for (let i = 0; i < 4; i++) assert.deepEqual(await h.createService().getStories(), first);
+  assert.equal(h.adapter.calls.length, 1);
 });

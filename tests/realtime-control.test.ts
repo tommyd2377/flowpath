@@ -56,3 +56,63 @@ test('scroll tool waits for a browser result and does not invent a successful mo
 test('an unknown backend function never calls app research or selection', async t => {
   const h = await setup([liveTool('invent_tool', {})]); t.after(() => h.control.close()); h.socket.user('Try it'); await flushLive(); assert.equal(h.selected.length, 0); assert.equal(h.requests.length, 1);
 });
+
+test('spoken refresh updates catalog metadata and completes silently without a second reasoning call', async t => {
+  let refreshes = 0;
+  const h = await setup([liveTool('refresh_stories', {})], { listStories: async () => { refreshes++; return catalog; } });
+  t.after(() => h.control.close());
+  h.socket.user('Refresh the news'); await flushLive();
+  assert.equal(refreshes, 1);
+  assert.equal(h.requests.length, 1);
+  const shown = h.events.findLast(x => x.type === 'display');
+  assert.ok(shown?.type === 'display');
+  assert.equal(shown.display.storyCatalog?.fetchedAt, catalog.fetchedAt);
+  assert.equal(shown.display.storyCatalog?.curated, true);
+  assert.ok(shown.display.storyCatalogId);
+});
+
+test('the refresh button uses the voice session catalog and preserves a newer manual selection', async t => {
+  let finish!: (value: StoryCatalogResponse) => void;
+  const h = await setup([], { listStories: () => new Promise(resolve => { finish = resolve; }) });
+  t.after(() => h.control.close());
+  h.control.act?.({ type: 'refresh_stories' });
+  h.control.selectStory(catalog.items[1].id);
+  await flushLive();
+  finish(catalog); await flushLive();
+  const shown = h.events.findLast(x => x.type === 'display');
+  assert.ok(shown?.type === 'display');
+  assert.equal(shown.display.view, 'exploration');
+  assert.equal(shown.display.headline?.id, catalog.items[1].id);
+});
+
+test('refreshing an unchanged catalog emits a new completion while spotlight changes retain it', async t => {
+  const h = await setup(); t.after(() => h.control.close());
+  h.control.act?.({ type: 'refresh_stories' }); await flushLive();
+  const first = h.events.findLast(x => x.type === 'display');
+  h.control.act?.({ type: 'refresh_stories' }); await flushLive();
+  const second = h.events.findLast(x => x.type === 'display');
+  assert.ok(first?.type === 'display' && second?.type === 'display');
+  assert.notEqual(first.display.storyCatalogId, second.display.storyCatalogId);
+  assert.equal(first.display.storyCatalog?.fetchedAt, second.display.storyCatalog?.fetchedAt);
+});
+
+test('a failed session refresh preserves the catalog, clears busy state and can recover', async t => {
+  let fail = false;
+  const h = await setup([], { listStories: async () => { if (fail) throw new Error('Simulated outage'); return catalog; } });
+  t.after(() => h.control.close());
+  h.control.act?.({ type: 'refresh_stories' }); await flushLive();
+  fail = true;
+  h.control.act?.({ type: 'refresh_stories' }); await flushLive();
+  const failed = h.events.findLast(x => x.type === 'display');
+  assert.ok(failed?.type === 'display');
+  assert.equal(failed.display.stories?.length, catalog.items.length);
+  assert.match(failed.display.storyCatalogError!, /Couldn’t refresh/);
+  assert.equal(failed.display.storyCatalog?.fetchedAt, catalog.fetchedAt);
+  const status = h.events.findLast(x => x.type === 'research');
+  assert.ok(status?.type === 'research' && !status.busy);
+  fail = false;
+  h.control.act?.({ type: 'refresh_stories' }); await flushLive();
+  const recovered = h.events.findLast(x => x.type === 'display');
+  assert.ok(recovered?.type === 'display');
+  assert.equal(recovered.display.storyCatalogError, undefined);
+});

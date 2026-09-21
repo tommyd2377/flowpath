@@ -7,7 +7,7 @@ import type { LiveAudioState } from './gpt-live/protocol';
 import { ScrollArgsSchema, screenContextKey, type ScreenReport, type ScreenSnapshot, type ScrollArgs } from './screen-contracts';
 import { VOICE_INSTRUCTIONS, VOICE_TOOLS, type ExplorationBackend, type VoiceControl, type VoiceControlOptions, type VoiceStatus } from './voice-tools';
 import { displayResult, emptyDisplay, InsightSchema, type ExplorationAction } from './visual-contracts';
-import { toStoryHeadline, type CuratedStory } from './story-contracts';
+import { storyCatalogMetadata, toStoryHeadline, type CuratedStory } from './story-contracts';
 
 type Options = VoiceControlOptions & { exploration: ExplorationBackend; socketFactory?: (url: string, key: string) => WebSocket; fetch?: typeof fetch; readyTimeoutMs?: number };
 
@@ -52,7 +52,7 @@ export function createRealtimeControl(options: Options): VoiceControl {
       if (closed || version !== briefingVersion) return;
       if (!catalog.items.length) throw new Error();
       catalogContext = { fetchedAt: catalog.fetchedAt, stale: catalog.stale, warning: catalog.warning, curated: catalog.curated };
-      display = { ...display, view: 'stories', stories: catalog.items, spotlightStoryId: null }; emit({ type: 'display', display, revision });
+      display = { ...display, view: 'stories', stories: catalog.items, storyCatalog: catalogContext, storyCatalogId: randomUUID(), storyCatalogError: undefined, spotlightStoryId: null }; emit({ type: 'display', display, revision });
       briefing = { items: catalog.items.slice(0, 20), index: 0, heard: false }; speakBriefingStory();
     }).catch(() => { if (!closed && version === briefingVersion) live.append('commentary', 'The opening news list could not be retrieved. You can ask about a topic.'); })
       .finally(() => { idle.observeBusy(pending > 0 || live.busy); if (!closed && version === briefingVersion) emit({ type: 'research', busy: false, message: '', revision }); });
@@ -163,7 +163,7 @@ export function createRealtimeControl(options: Options): VoiceControl {
             try { parsedArgs = JSON.parse(rawArgs); } catch { return { error: 'The tool request could not be understood. Please clarify it.' }; }
             if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) return { error: 'The tool request could not be understood.' };
             let args = parsedArgs as Record<string, unknown>;
-            if (['show_stories', 'scroll_page', 'navigate_path'].includes(name)) {
+            if (['show_stories', 'refresh_stories', 'scroll_page', 'navigate_path'].includes(name)) {
               const { continueDiscussion, ...navigation } = args as Record<string, unknown>;
               if (continueDiscussion !== undefined && typeof continueDiscussion !== 'boolean') return { error: 'continueDiscussion must be a boolean.' };
               silent = continueDiscussion !== true;
@@ -195,7 +195,7 @@ export function createRealtimeControl(options: Options): VoiceControl {
               emit({ type: 'display', display, revision });
               return { number: (display.stories?.indexOf(focused) ?? 0) + 1, storyId: focused.id, title: focused.title, summary: focused.summary, whyItMatters: focused.whyItMatters, publisher: focused.publisher, publishedAt: focused.publishedAt };
             }
-            if (name === 'list_stories' || name === 'show_stories') {
+            if (name === 'list_stories' || name === 'show_stories' || name === 'refresh_stories') {
               if (Object.keys(args).length) return { error: 'No arguments are needed to show the briefing.' };
               if (!options.exploration.listStories && !display.stories?.length) return { error: 'The story briefing is temporarily unavailable.' };
               // Returning to the grid reuses its catalog; it is not a news refresh.
@@ -203,8 +203,11 @@ export function createRealtimeControl(options: Options): VoiceControl {
                 ? { items: display.stories, ...catalogContext }
                 : await options.exploration.listStories!();
               signal.throwIfAborted();
+              if (closed || version !== revision) throw new DOMException('Cancelled', 'AbortError');
+              if (!catalog.items.length) return { error: 'The news could not be refreshed. Keep the displayed stories and try again later.' };
+              stopBriefing();
               catalogContext = { fetchedAt: catalog.fetchedAt, stale: catalog.stale, warning: catalog.warning, curated: catalog.curated };
-              display = { ...display, view: 'stories', stories: catalog.items, spotlightStoryId: null };
+              display = { ...display, view: 'stories', stories: catalog.items, storyCatalog: catalogContext, storyCatalogId: name === 'show_stories' && display.storyCatalogId ? display.storyCatalogId : randomUUID(), storyCatalogError: undefined, spotlightStoryId: null };
               emit({ type: 'display', display, revision });
               return { kind: 'story_catalog', availability: catalog.items.length ? 'available' : 'unavailable',
                 asOf: new Date().toISOString(), fetchedAt: catalog.fetchedAt, stale: catalog.stale,
@@ -260,7 +263,7 @@ export function createRealtimeControl(options: Options): VoiceControl {
             return options.exploration.execute(options.installationId, name, args as Record<string, unknown>, signal, story);
 
     };
-    emit({ type: 'research', busy: true, message: name === 'search_web' ? 'Searching the web…' : 'Exploring the story…', revision });
+    emit({ type: 'research', busy: true, message: name === 'search_web' ? 'Searching the web…' : name === 'refresh_stories' ? 'Refreshing stories…' : 'Exploring the story…', revision });
     try {
       const result = await operation(); signal.throwIfAborted();
       if (closed || version !== revision && name !== 'choose_story') throw new DOMException('Cancelled', 'AbortError');
@@ -271,6 +274,9 @@ export function createRealtimeControl(options: Options): VoiceControl {
   }
   const live = createLiveRuntime({
     sessionId: options.callId, apiKey: options.apiKey,
+    // A catalog miss can use 75 seconds for curation plus feed/database time.
+    // Keep spoken refresh within that existing bound instead of cancelling at 35s.
+    taskTimeoutMs: 100_000,
     socketFactory: options.socketFactory ? (url) => options.socketFactory!(url, options.apiKey) : undefined,
     onFatal: () => { if (!closed) { void close('The voice connection was interrupted.'); options.onFatal(); } },
     onUsage: usage => { emit({ type: 'usage', ...usage }); },
@@ -300,7 +306,7 @@ export function createRealtimeControl(options: Options): VoiceControl {
     controller.abort(); controller = new AbortController();
     revision++; const version = revision; const signal = controller.signal;
     story = headlineId; selectedReady = false; selectionFailed = false; selectionContext = undefined; observedScreen = undefined;
-    display = { ...emptyDisplay(revision), headline: preview ? toStoryHeadline(preview) : null, view: 'exploration', stories: display.stories };
+    display = { ...emptyDisplay(revision), headline: preview ? toStoryHeadline(preview) : null, view: 'exploration', stories: display.stories, storyCatalog: display.storyCatalog, storyCatalogId: display.storyCatalogId };
     if (preview) selectionContext = { kind: 'story_preview', researchPending: true, headline: preview, attribution: 'Existing card reporting, not completed research.' };
     emit({ type: 'story', headlineId, revision }); emit({ type: 'display', display, revision });
     pending++; idle.observeBusy(true); emit({ type: 'research', busy: true, message: 'Looking into this story…', revision });
@@ -344,6 +350,27 @@ export function createRealtimeControl(options: Options): VoiceControl {
       if (expectedHeadlineId && expectedHeadlineId !== story) throw new Error('The selected story changed.');
       live.interrupt();
       discussion++;
+      if (action.type === 'refresh_stories') {
+        if (!options.exploration.listStories) throw new Error('The story briefing is temporarily unavailable.');
+        const version = revision, interaction = discussion;
+        pending++; idle.observeBusy(true);
+        emit({ type: 'research', busy: true, message: 'Refreshing stories…', revision });
+        void options.exploration.listStories().then(catalog => {
+          if (closed || version !== revision || interaction !== discussion) return;
+          if (!catalog.items.length) throw new Error('No stories available');
+          catalogContext = storyCatalogMetadata(catalog);
+          display = { ...display, view: 'stories', stories: catalog.items, storyCatalog: catalogContext, storyCatalogId: randomUUID(), storyCatalogError: undefined, spotlightStoryId: null };
+          emit({ type: 'display', display, revision });
+        }).catch(() => {
+          if (closed || version !== revision || interaction !== discussion) return;
+          display = { ...display, storyCatalogId: randomUUID(), storyCatalogError: 'Couldn’t refresh stories. Try Refresh again.' };
+          emit({ type: 'display', display, revision });
+        }).finally(() => {
+          pending = Math.max(0, pending - 1); idle.observeBusy(pending > 0 || live.busy);
+          if (!closed && version === revision && interaction === discussion) emit({ type: 'research', busy: pending > 0, message: '', revision });
+        });
+        return revision;
+      }
       if (action.type === 'show_stories') { display = { ...display, view: 'stories' }; emit({ type: 'display', display, revision }); return revision; }
       if (!story || !selectedReady) throw new Error('The selected story has no saved paths yet.');
       controller.abort(); controller = new AbortController();
