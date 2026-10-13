@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFileSync, existsSync } from 'node:fs';
 import test from 'node:test';
 import { createLiveRuntime, type LiveSocket } from '../lib/gpt-live/runtime';
 import { runLiveBackend } from '../lib/gpt-live/backend';
@@ -161,10 +160,4 @@ test('startup protection preserves capture and ends two seconds after actual pla
   guard.start(); assert.equal(source.enabled, true); assert.equal(clone.enabled, false);
   t.mock.timers.tick(3000); guard.playbackStarted(); t.mock.timers.tick(1500); guard.playbackStarted(); t.mock.timers.tick(500);
   assert.equal(clone.enabled, true); guard.setInputEnabled(false); assert.equal(clone.enabled, false); guard.dispose();
-});
-
-test('the installed sibling checkout has byte-identical Live runtime and browser architecture', () => {
-  const sibling = process.cwd().endsWith('/theVoice') ? '../flowpath' : '../theVoice';
-  if (!existsSync(`${sibling}/lib/gpt-live/protocol.ts`)) return; // Each repo also builds independently.
-  for (const file of ['protocol.ts', 'runtime.ts', 'backend.ts', 'browser.ts', 'idle.ts']) assert.equal(readFileSync(`lib/gpt-live/${file}`, 'utf8'), readFileSync(`${sibling}/lib/gpt-live/${file}`, 'utf8'), file);
 });

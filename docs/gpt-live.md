@@ -1,6 +1,6 @@
 # GPT-Live voice architecture
 
-Studio and the independent FlowPath app use identical copies of `lib/gpt-live/{protocol,backend,runtime,browser}.ts`. Each repository builds independently; `tests/gpt-live.test.ts` compares these files byte for byte when both sibling checkouts are available. Changes to the common core must be applied to both repositories. Product content and tool adapters remain app-specific.
+The independent FlowPath news app owns its local `lib/gpt-live/{protocol,backend,runtime,browser,idle}.ts` implementation. Its build and tests do not require a sibling Studio checkout or byte-identical files in another application. Studio's former shared implementation is historical context; the news app's voice runtime and app-specific tool adapters can evolve independently.
 
 ## Shared path
 
