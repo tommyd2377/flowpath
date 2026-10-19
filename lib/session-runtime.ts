@@ -1,16 +1,16 @@
-import { createSessionService } from './session-server';
+import { createLocalSessionRouter } from './session-server';
 import { createRealtimeControl } from './realtime-control';
 import { explorationService } from './exploration-server';
 import { VOICE_INSTRUCTIONS, type VoiceControlOptions } from './voice-tools';
 import { getGenerationCacheRepository } from './atlas/server/generation-cache';
 
 const localProcess = globalThis as typeof globalThis & {
-  voiceSessions?: ReturnType<typeof createSessionService>;
+  voiceSessions?: ReturnType<typeof createLocalSessionRouter>;
 };
 
 const controlFactory = (options: VoiceControlOptions) => createRealtimeControl({ ...options, exploration: explorationService });
 
-export const voiceSessions = localProcess.voiceSessions ??= createSessionService({
+export const voiceSessions = localProcess.voiceSessions ??= createLocalSessionRouter({
   fixtureMode: process.env.VOICE_FIXTURE_MODE === '1',
   // Fixture previews must never open paid Realtime sessions, even with a local key.
   apiKey: () => process.env.VOICE_FIXTURE_MODE === '1' ? undefined : process.env.OPENAI_API_KEY,

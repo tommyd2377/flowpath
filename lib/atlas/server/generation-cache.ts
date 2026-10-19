@@ -508,19 +508,10 @@ export class GenerationCacheRepository {
   async hasHostedSession(installationId: string, now = Date.now()) {
     await this.ready();
     const result = await this.client.execute({
-      sql: 'SELECT 1 FROM generation_leases WHERE cache_key = ? AND lease_expires_at > ?',
-      args: [`hosted-installation:${installationId}`, now],
+      sql: 'SELECT 1 FROM generation_leases WHERE cache_key LIKE ? AND lease_expires_at > ? LIMIT 1',
+      args: [`hosted-installation:${installationId}:%`, now],
     });
     return result.rows.length > 0;
-  }
-
-  async leaseExpiresAt(key: string) {
-    await this.ready();
-    const result = await this.client.execute({
-      sql: 'SELECT lease_expires_at FROM generation_leases WHERE cache_key = ?',
-      args: [key],
-    });
-    return result.rows.length ? Number(result.rows[0].lease_expires_at) : null;
   }
 
   async reserveInstallationGeneration(input: {

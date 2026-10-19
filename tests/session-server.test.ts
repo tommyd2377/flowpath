@@ -175,15 +175,14 @@ test('only one provider call can be opening or active at a time', async () => {
   await service.DELETE(request('DELETE'));
 });
 
-test('ending conversations does not bypass the three-start minute limit', async () => {
+test('fresh conversations have no accumulated start quota or cooldown', async () => {
   const { service, creates, hangups } = setup();
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     assert.equal((await service.POST(request('POST'))).status, 200);
     assert.equal((await service.DELETE(request('DELETE'))).status, 204);
   }
-  assert.equal((await service.POST(request('POST'))).status, 429);
-  assert.equal(creates().length, 3);
-  assert.equal(hangups().length, 3);
+  assert.equal(creates().length, 5);
+  assert.equal(hangups().length, 5);
 });
 
 test('upstream error bodies and exceptions are redacted from client responses', async () => {

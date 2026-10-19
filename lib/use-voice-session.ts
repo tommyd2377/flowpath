@@ -187,7 +187,14 @@ export function useVoiceSession() {
       id: sessionId,
       transport: createSessionTransport({
         sessionId, installationId: getInstallationId(),
-        onDisconnect: () => fail(session, 'The hosted connection ended. Tap the wave to reconnect.'),
+        onDisconnect: reason => {
+          if (reason === 'session_limit' && current.current === session) {
+            // The owning server closes this call; no DELETE can travel over
+            // its now-closed socket, and this is a normal session boundary.
+            session.requested = false;
+            stop('This session has ended. Tap the wave to begin a fresh session.');
+          } else fail(session, 'The hosted connection ended. Tap the wave to reconnect.');
+        },
       }),
       controller: new AbortController(),
       requested: false,

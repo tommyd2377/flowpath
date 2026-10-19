@@ -11,7 +11,7 @@ const operations: Record<string, string> = {
 export function createSessionTransport(options: {
   sessionId: string;
   installationId: string;
-  onDisconnect: () => void;
+  onDisconnect: (reason?: 'session_limit') => void;
   hosted?: boolean;
 }): SessionTransport {
   if (!(options.hosted ?? process.env.NEXT_PUBLIC_VOICE_HOSTED === '1')) {
@@ -43,16 +43,16 @@ export function createSessionTransport(options: {
     if (request.stream) request.stream.error(error);
     else request.reject(error);
   };
-  function disconnect(intentional: boolean) {
+  function disconnect(intentional: boolean, reason?: 'session_limit') {
     if (closed) return;
     closed = true;
     const error = new Error('The hosted voice connection ended. Tap the wave to reconnect.');
     failed(error);
     for (const id of pending.keys()) reject(id, error);
-    if (!intentional) options.onDisconnect();
+    if (!intentional) options.onDisconnect(reason);
   }
   socket.addEventListener('open', () => ready());
-  socket.addEventListener('close', () => disconnect(false));
+  socket.addEventListener('close', event => disconnect(false, event.code === 1000 && event.reason === 'Session limit' ? 'session_limit' : undefined));
   socket.addEventListener('error', () => { disconnect(false); socket.close(); });
   socket.addEventListener('message', event => {
     try {

@@ -181,12 +181,12 @@ test('ending a session ends its status stream and disables further selections', 
   assert.equal((await t.service.STORY(request('/story', 'POST', '{"headlineId":"headline_a"}'))).status, 409);
 });
 
-test('ten-minute server cutoff closes the control channel and upstream call', async (context) => {
+test('five-minute server cutoff closes the control channel and upstream call', async (context) => {
   context.mock.timers.enable({ apis: ['setTimeout'] });
   const t = setup();
-  assert.equal(SESSION_SECONDS, 600);
+  assert.equal(SESSION_SECONDS, 300);
   await t.service.POST(request('', 'POST', sdp));
-  context.mock.timers.tick(599_999);
+  context.mock.timers.tick(299_999);
   assert.equal(t.closed(), 0);
   context.mock.timers.tick(1);
   for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -194,7 +194,7 @@ test('ten-minute server cutoff closes the control channel and upstream call', as
   assert.equal(t.requests.filter((url) => url.endsWith('/hangup')).length, 1);
 });
 
-test('reloading conversation behavior preserves the active call, start throttle, and cleanup guard', async () => {
+test('reloading conversation behavior preserves its active call and cleanup guard without a start quota', async () => {
   const factories: string[] = [];
   const instructions: string[] = [];
   let hangupFails = false;
@@ -222,7 +222,8 @@ test('reloading conversation behavior preserves the active call, start throttle,
   assert.deepEqual(factories, ['original', 'updated', 'updated']);
   assert.ok(instructions.every(value => value === instructions[0]), 'the shared Live frontend policy stays separate from backend adapter reloads');
   service.updateConversation({ instructions: 'Another update', controlFactory: factory('again') });
-  assert.equal((await service.POST(request('', 'POST', sdp))).status, 429);
+  assert.equal((await service.POST(request('', 'POST', sdp))).status, 200);
+  await service.DELETE(request('', 'DELETE'));
 
   const blocked = createSessionService({
     apiKey: () => 'fake-test-key',

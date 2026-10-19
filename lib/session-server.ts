@@ -54,13 +54,12 @@ async function readOffer(request: Request) {
   return offer.startsWith('v=0') && /(?:\r?\n)m=audio /.test(offer) && !/(?:^|\r?\n)m=(?!audio )/.test(offer) && !/(?:^|\r?\n)a=(?:sctp|dcmap|dcsa)/i.test(offer) ? offer : null;
 }
 
-// One local process, one session. This is intentionally not a public access gate.
+// One owning connection, one session. Local routing isolates each connection too.
 export function createSessionService(options: Options) {
   const requestOpenAI = options.fetch ?? globalThis.fetch;
   const durationMs = options.durationMs ?? SESSION_SECONDS * 1000;
   let conversation = { instructions: VOICE_INSTRUCTIONS, controlFactory: options.controlFactory };
   let active: Session | undefined;
-  let starts: number[] = [];
   let blocked = false;
 
   async function performHangup(session: Session) {
@@ -105,8 +104,8 @@ export function createSessionService(options: Options) {
       return !blocked;
     },
     hasActiveSession(installationId: string) { return Boolean(active && active.installationId === installationId); },
-    // Dev reloads can refresh future conversations while the current call, start
-    // throttle, and failed-cleanup guard keep their original lifetime.
+    // Dev reloads refresh future conversations while this call and its cleanup
+    // state keep their original lifetime.
     updateConversation(next: { instructions: string; controlFactory: Options['controlFactory'] }) {
       conversation = next;
     },
@@ -154,10 +153,6 @@ export function createSessionService(options: Options) {
       if (blocked) return json({ error: 'The previous connection could not be closed. Check the local server before trying again.' }, 503);
       if (request.signal.aborted) return json({ error: 'The conversation was canceled.' }, 409);
       if (active) return json({ error: 'A conversation is already open.' }, 409);
-      const now = Date.now();
-      starts = starts.filter((time) => now - time < 60_000);
-      if (starts.length >= 3) return json({ error: 'Please wait a minute before starting another conversation.' }, 429);
-      starts.push(now);
       const session: Session = { id, ended: false, installationId: installationId ?? undefined };
       active = session;
       const onAbort = () => { session.ended = true; };
@@ -343,6 +338,56 @@ export function createSessionService(options: Options) {
         cancel() { end(); },
       });
       return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' } });
+    },
+  };
+}
+
+/** Local HTTP requests use the same per-connection isolation as hosted sockets. */
+export function createLocalSessionRouter(options: Options) {
+  const readiness = createSessionService(options);
+  const sessions = new Map<string, { service: ReturnType<typeof createSessionService>; timer: ReturnType<typeof setTimeout> }>();
+  let conversation = { instructions: VOICE_INSTRUCTIONS, controlFactory: options.controlFactory };
+  type Operation = 'GET' | 'POST' | 'DELETE' | 'STORY' | 'ACTION' | 'SCREEN' | 'EVENTS';
+  async function route(operation: Operation, request: Request) {
+    if (!localRequest(request, operation !== 'GET' && operation !== 'EVENTS')) return json({ error: 'Only same-origin local requests are allowed.' }, 403);
+    const id = request.headers.get('x-voice-session');
+    if (operation === 'GET' && !id) return readiness.GET(request);
+    if (!validId(id)) return json({ error: 'Missing or invalid session identifier.' }, 400);
+    let entry = sessions.get(id);
+    if (!entry && operation === 'POST') {
+      const service = createSessionService(options);
+      service.updateConversation(conversation);
+      const timer = setTimeout(() => {
+        sessions.delete(id);
+        void service.shutdown();
+      }, (SESSION_SECONDS + 30) * 1000);
+      timer.unref?.();
+      entry = { service, timer }; sessions.set(id, entry);
+    }
+    if (!entry) return operation === 'GET' ? readiness.GET(request)
+      : operation === 'DELETE' ? new Response(null, { status: 204 })
+        : json({ error: 'The voice conversation is not active.' }, 409);
+    return entry.service[operation](request);
+  }
+  return {
+    GET: (request: Request) => route('GET', request),
+    POST: (request: Request) => route('POST', request),
+    DELETE: (request: Request) => route('DELETE', request),
+    STORY: (request: Request) => route('STORY', request),
+    ACTION: (request: Request) => route('ACTION', request),
+    SCREEN: (request: Request) => route('SCREEN', request),
+    EVENTS: (request: Request) => route('EVENTS', request),
+    hasActiveSession: (installationId: string) => [...sessions.values()].some(entry => entry.service.hasActiveSession(installationId)),
+    updateConversation(next: typeof conversation) {
+      conversation = next;
+      readiness.updateConversation(next);
+      for (const entry of sessions.values()) entry.service.updateConversation(next);
+    },
+    async shutdown() {
+      const closing = [...sessions.values()]; sessions.clear();
+      for (const entry of closing) clearTimeout(entry.timer);
+      const results = await Promise.allSettled(closing.map(entry => entry.service.shutdown()));
+      return results.every(result => result.status === 'fulfilled' && result.value);
     },
   };
 }

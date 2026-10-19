@@ -11,7 +11,7 @@ import { localRequest } from '../lib/local-request';
 import { GenerationCacheRepository, resolveGenerationDatabaseConfig } from '../lib/atlas/server/generation-cache';
 import { voiceDatabaseClient } from '../lib/voice-database';
 import { StoryCatalogRepository } from '../lib/story-catalog';
-import { claimHostedSession, HostedAdmissionError, serveHostedSession } from '../lib/hosted-session';
+import { claimHostedSession, serveHostedSession } from '../lib/hosted-session';
 import { createSessionService } from '../lib/session-server';
 import { createSessionTransport } from '../lib/session-transport';
 
@@ -68,21 +68,28 @@ test('remote tables, indexes and maintenance are isolated from legacy FlowPath r
   assert.ok(indexes.every(row => String(row.name).startsWith('the_voice_v1_')));
 });
 
-test('shared admission allows one call across instances and preserves the start cooldown', async t => {
+test('voice leases isolate visitors and fresh sessions without shared admission or cooldowns', async t => {
   const repo = new GenerationCacheRepository(voiceDatabaseClient(database(t), true));
   const installationId = randomUUID();
-  const first = await claimHostedSession(repo, installationId, 1000);
+  const sessionId = randomUUID();
+  // Old deployments' still-live global locks must not affect this release.
+  await repo.acquireLease({ key: 'hosted-voice:active:v1', ownerToken: 'old-release', now: 1000, ttlMs: 500_000 });
+  await repo.acquireLease({ key: 'hosted-voice:start:v1', ownerToken: 'old-release', now: 1000, ttlMs: 500_000 });
+  const first = await claimHostedSession(repo, installationId, sessionId, 1000);
   assert.ok(first);
   assert.equal(await repo.hasHostedSession(installationId, 1001), true);
-  await assert.rejects(claimHostedSession(repo, randomUUID(), 1001), (error: unknown) => error instanceof HostedAdmissionError && error.code === 'session_active' && error.retryAfterSeconds === 315);
+  const other = await claimHostedSession(repo, randomUUID(), randomUUID(), 1001);
+  assert.ok(other);
+  assert.equal(await claimHostedSession(repo, installationId, sessionId, 1001), null, 'only replaying this exact session is rejected');
+  const refreshed = await claimHostedSession(repo, installationId, randomUUID(), 1001);
+  assert.ok(refreshed, 'refresh does not wait for an old session or a cooldown');
   await first();
-  assert.equal(await repo.hasHostedSession(installationId, 1002), false);
-  await assert.rejects(claimHostedSession(repo, installationId, 1002), (error: unknown) => error instanceof HostedAdmissionError && error.code === 'start_cooldown' && error.retryAfterSeconds === 20);
-  const next = await claimHostedSession(repo, installationId, 21_001);
-  assert.ok(next); await next();
+  assert.equal(await repo.hasHostedSession(installationId, 1002), true, 'closing an old session does not remove the new one');
+  await refreshed(); await other();
+  assert.equal(await repo.hasHostedSession(installationId, 1003), false);
 });
 
-async function harness(t: TestContext, options: { durationMs?: number; lifetimeMs?: number; denied?: boolean; admissionError?: HostedAdmissionError; cleanupFails?: boolean; create?: () => Promise<Response> } = {}) {
+async function harness(t: TestContext, options: { durationMs?: number; lifetimeMs?: number; denied?: boolean; repository?: GenerationCacheRepository; cleanupFails?: boolean; create?: () => Promise<Response> } = {}) {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await once(server, 'listening');
   const address = server.address();
@@ -110,13 +117,19 @@ async function harness(t: TestContext, options: { durationMs?: number; lifetimeM
     });
     completions.push(serveHostedSession(socket, {
       origin, service, lifetimeMs: options.lifetimeMs ?? 60_000,
-      claim: async () => { claims++; if (options.admissionError) throw options.admissionError; return options.denied ? null : async () => { releases++; }; },
+      claim: async (installationId, sessionId) => {
+        claims++;
+        if (options.denied) return null;
+        const release = options.repository ? await claimHostedSession(options.repository, installationId, sessionId) : async () => {};
+        return release ? async () => { await release(); releases++; } : null;
+      },
     }));
   });
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { href: origin } } });
   let disconnects = 0;
-  const transport = createSessionTransport({ hosted: true, sessionId: randomUUID(), installationId: randomUUID(), onDisconnect: () => { disconnects++; } });
+  let disconnectReason: string | undefined;
+  const transport = createSessionTransport({ hosted: true, sessionId: randomUUID(), installationId: randomUUID(), onDisconnect: reason => { disconnects++; disconnectReason = reason; } });
   t.after(async () => {
     transport.close();
     for (const socket of server.clients) socket.terminate();
@@ -125,7 +138,7 @@ async function harness(t: TestContext, options: { durationMs?: number; lifetimeM
     if (previous) Object.defineProperty(globalThis, 'window', previous);
     else Reflect.deleteProperty(globalThis, 'window');
   });
-  return { transport, server, calls, selections, origin, done: () => Promise.all(completions), releases: () => releases, claims: () => claims, disconnects: () => disconnects };
+  return { transport, server, calls, selections, origin, done: () => Promise.all(completions), releases: () => releases, claims: () => claims, disconnects: () => disconnects, disconnectReason: () => disconnectReason };
 }
 
 test('hosted transport carries SDP, event stream, actions and hangup through the same connection', async t => {
@@ -150,17 +163,24 @@ test('denied hosted admission never calls the provider', async t => {
   const h = await harness(t, { denied: true });
   const response = await h.transport.fetch('/api/session', { method: 'POST', body: offer });
   assert.equal(response.status, 409);
-  assert.match((await response.json()).error, /on this site/);
+  assert.match((await response.json()).error, /This voice session is already open/);
   assert.deepEqual(h.calls, []);
 });
 
-test('hosted cooldown reports its exact remaining wait without starting the provider', async t => {
-  const h = await harness(t, { admissionError: new HostedAdmissionError('start_cooldown', 7) });
-  const response = await h.transport.fetch('/api/session', { method: 'POST', body: offer });
-  assert.equal(response.status, 429);
-  assert.equal(response.headers.get('retry-after'), '7');
-  assert.deepEqual(await response.json(), { error: 'Please wait 7 seconds between voice starts, then tap the wave again.', code: 'start_cooldown', retryAfterSeconds: 7 });
-  assert.deepEqual(h.calls, []);
+test('concurrent hosted users and a refreshed visitor all open independent calls without waiting', async t => {
+  const repository = new GenerationCacheRepository(voiceDatabaseClient(database(t), true));
+  const h = await harness(t, { repository });
+  const installationId = randomUUID();
+  const other = createSessionTransport({ hosted: true, sessionId: randomUUID(), installationId, onDisconnect: () => {} });
+  const refresh = createSessionTransport({ hosted: true, sessionId: randomUUID(), installationId, onDisconnect: () => {} });
+  const transports = [h.transport, other, refresh];
+  t.after(() => { for (const transport of transports) transport.close(); });
+  const starts = await Promise.all(transports.map(transport => transport.fetch('/api/session', { method: 'POST', body: offer })));
+  assert.deepEqual(starts.map(response => response.status), [200, 200, 200]);
+  assert.equal(h.calls.length, 3);
+  assert.equal((await h.transport.fetch('/api/session', { method: 'DELETE' })).status, 204);
+  assert.equal((await other.fetch('/api/session/action', { method: 'POST', body: JSON.stringify({ action: { type: 'show_stories' } }) })).status, 202);
+  for (const transport of [other, refresh]) await transport.fetch('/api/session', { method: 'DELETE' });
 });
 
 test('hangup waits for a canceled handshake and releases its lock before a restart can proceed', async t => {
@@ -207,7 +227,7 @@ test('canceling a handshake waits for its provider call ID and closes that call'
   assert.equal(h.calls.length, 2); assert.equal(h.releases(), 1);
 });
 
-test('failed provider cleanup retains the shared admission lease', async t => {
+test('failed provider cleanup retains only the old session lease', async t => {
   const h = await harness(t, { cleanupFails: true });
   await h.transport.fetch('/api/session', { method: 'POST', body: offer });
   assert.equal((await h.transport.fetch('/api/session', { method: 'DELETE' })).status, 502);
@@ -221,6 +241,8 @@ test('server lifetime closes the provider even when the browser sends nothing', 
   await h.transport.fetch('/api/session', { method: 'POST', body: offer });
   await h.done();
   assert.equal(h.calls.filter(url => url.endsWith('/hangup')).length, 1);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(h.disconnectReason(), 'session_limit', 'a normal session boundary is distinguishable from a broken connection');
 });
 
 test('duplicate RPC IDs cannot repeat actions; changing the bound installation closes the socket', async t => {

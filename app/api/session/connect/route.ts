@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   if (lifetimeMs < 60_000) return new Response(null, { status: 503 });
   return experimental_upgradeWebSocket(socket => serveHostedSession(socket, {
     origin: request.headers.get('origin')!, lifetimeMs,
-    claim: installationId => claimHostedSession(getGenerationCacheRepository(), installationId),
+    claim: (installationId, sessionId) => claimHostedSession(getGenerationCacheRepository(), installationId, sessionId),
     service: createSessionService({
       hostedConnection: true,
       durationMs: HOSTED_SESSION_SECONDS * 1000,

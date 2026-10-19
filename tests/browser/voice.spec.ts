@@ -443,7 +443,7 @@ test('assistant playback suspends the silence cutoff until the audio actually fi
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
 
-test('ten-minute absolute session cutoff still applies while the user is speaking', async ({ page }) => {
+test('five-minute absolute session cutoff still applies while the user is speaking', async ({ page }) => {
   await page.clock.install();
   await fakeAudio(page);
   await mockSessions(page);
@@ -453,9 +453,30 @@ test('ten-minute absolute session cutoff still applies while the user is speakin
   await emit(page, { type: 'media.input.active' });
   await page.clock.fastForward(180_100);
   expect((await metrics(page)).stoppedTracks).toBe(0);
-  await page.clock.fastForward(420_000);
+  await page.clock.fastForward(120_000);
   await expect(page.locator('main')).toHaveClass(/phase-idle/);
   expect((await metrics(page)).stoppedTracks).toBe(1);
+});
+
+test('refresh gives the visitor a fresh five-minute session without inheriting elapsed time', async ({ page }) => {
+  await page.clock.install();
+  await fakeAudio(page);
+  const calls = await mockSessions(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  await emit(page, { type: 'media.input.active' });
+  await page.clock.fastForward(180_100);
+  await page.reload();
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  await emit(page, { type: 'media.input.active' });
+  await page.clock.fastForward(180_100);
+  expect((await metrics(page)).stoppedTracks).toBe(0);
+  await page.clock.fastForward(120_000);
+  await expect(page.locator('main')).toHaveClass(/phase-idle/);
+  expect((await metrics(page)).stoppedTracks).toBe(1);
+  expect(calls.filter(method => method === 'POST')).toHaveLength(2);
 });
 
 test('mobile layout, footer links, and reduced motion stay usable', async ({ page }) => {
@@ -999,7 +1020,7 @@ test('the real local route accepts its public origin without creating a provider
   expect(wrongOrigin.status()).toBe(403);
   // A random nonmatching local id never hangs up someone else's active call.
   const end = await request.delete('/api/session', {
-    headers: { Origin: new URL(baseURL!).origin, 'X-Voice-Session': 'offline-check-no-active-session' },
+    headers: { Origin: new URL(baseURL!).origin, 'X-Voice-Session': randomUUID() },
   });
   expect(end.status()).toBe(204);
 });

@@ -3,8 +3,9 @@ import type { WebSocket, RawData } from 'ws';
 import { z } from 'zod';
 import type { createSessionService } from './session-server';
 import type { GenerationCacheRepository } from './atlas/server/generation-cache';
+import { SESSION_SECONDS } from './session-config';
 
-export const HOSTED_CONNECTION_MS = 285_000;
+export const HOSTED_CONNECTION_MS = SESSION_SECONDS * 1000;
 const Frame = z.object({
   id: z.string().uuid(),
   operation: z.enum(['GET', 'POST', 'DELETE', 'STORY', 'ACTION', 'SCREEN', 'EVENTS']),
@@ -14,49 +15,22 @@ const Frame = z.object({
 }).strict();
 const Cancel = z.object({ cancel: z.string().uuid() }).strict();
 type Service = ReturnType<typeof createSessionService>;
-type LeaseRepository = Pick<GenerationCacheRepository, 'acquireLease' | 'releaseLease' | 'leaseExpiresAt'>;
+type LeaseRepository = Pick<GenerationCacheRepository, 'acquireLease' | 'releaseLease'>;
 
-export class HostedAdmissionError extends Error {
-  constructor(readonly code: 'session_active' | 'start_cooldown' | 'cleanup_pending', readonly retryAfterSeconds: number) {
-    super(code === 'start_cooldown'
-      ? `Please wait ${retryAfterSeconds} seconds between voice starts, then tap the wave again.`
-      : code === 'cleanup_pending'
-        ? `Your previous voice connection is still closing. Try again in up to ${retryAfterSeconds} seconds.`
-        : `A voice conversation is already active on this site. Only one can run at a time. End it in the other tab or device, or try again in up to ${retryAfterSeconds} seconds.`);
-  }
-}
-
-async function admissionError(repository: LeaseRepository, key: string, now: number, code: HostedAdmissionError['code']) {
-  const expires = await repository.leaseExpiresAt(key);
-  return new HostedAdmissionError(code, Math.max(1, Math.ceil(((expires ?? now + 1000) - now) / 1000)));
-}
-
-// Preserve the personal prototype's single-call capacity across cold starts.
-// A failed cleanup retains its lease until expiry. A separate 20-second lease
-// bounds repeated starts across connections, including failed handshakes.
-export async function claimHostedSession(repository: LeaseRepository, installationId: string, now = Date.now()) {
+// Track only this session for exploration routing and duplicate-ID protection.
+// Other visitors and fresh sessions never compete for the same lease.
+export async function claimHostedSession(repository: LeaseRepository, installationId: string, sessionId: string, now = Date.now()) {
   const ownerToken = randomUUID();
-  const key = 'hosted-voice:active:v1';
+  const key = `hosted-installation:${installationId}:${sessionId}`;
   const active = await repository.acquireLease({ key, ownerToken, now, ttlMs: HOSTED_CONNECTION_MS + 30_000 });
-  if (!active) throw await admissionError(repository, key, now, 'session_active');
-  const installationKey = `hosted-installation:${installationId}`;
-  try {
-    const allowed = await repository.acquireLease({ key: 'hosted-voice:start:v1', ownerToken, now, ttlMs: 20_000 });
-    if (!allowed) throw await admissionError(repository, 'hosted-voice:start:v1', now, 'start_cooldown');
-    if (!await repository.acquireLease({ key: installationKey, ownerToken, now, ttlMs: HOSTED_CONNECTION_MS + 30_000 })) {
-      throw await admissionError(repository, installationKey, now, 'cleanup_pending');
-    }
-    return async () => { await repository.releaseLease(installationKey, ownerToken); await repository.releaseLease(key, ownerToken); };
-  } catch (error) {
-    await repository.releaseLease(key, ownerToken);
-    throw error;
-  }
+  if (!active) return null;
+  return () => repository.releaseLease(key, ownerToken);
 }
 
 export function serveHostedSession(socket: WebSocket, options: {
   origin: string;
   service: Service;
-  claim: (installationId: string) => Promise<(() => Promise<void>) | null>;
+  claim: (installationId: string, sessionId: string) => Promise<(() => Promise<void>) | null>;
   lifetimeMs?: number;
 }) {
   const { service, origin } = options;
@@ -108,8 +82,8 @@ export function serveHostedSession(socket: WebSocket, options: {
         if (postStarted) { send({ id, status: 409, body: '{"error":"This connection already started a conversation."}' }); return; }
         postStarted = true;
         clearTimeout(setupTimer);
-        release = (await options.claim(frame.installationId)) ?? undefined;
-        if (!release) throw new HostedAdmissionError('session_active', 20);
+        release = (await options.claim(frame.installationId, frame.sessionId)) ?? undefined;
+        if (!release) { send({ id, status: 409, body: '{"error":"This voice session is already open. Refresh the page to start a fresh session."}' }); return; }
       }
       // A canceled handshake can still be waiting for its provider ID. Its job
       // must finish cleanup before DELETE confirms that a restart is safe.
@@ -153,14 +127,7 @@ export function serveHostedSession(socket: WebSocket, options: {
         }
         send({ id, end: true });
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-    } catch (error) {
-      if (error instanceof HostedAdmissionError) {
-        console.info('[flowpath:voice_admission_rejected]', JSON.stringify({ code: error.code, retryAfterSeconds: error.retryAfterSeconds }));
-        send({ id, status: error.code === 'start_cooldown' ? 429 : 409,
-          headers: { 'retry-after': String(error.retryAfterSeconds) },
-          body: JSON.stringify({ error: error.message, code: error.code, retryAfterSeconds: error.retryAfterSeconds }) });
-        return;
-      }
+    } catch {
       send({ id, status: 503, body: '{"error":"The hosted connection is temporarily unavailable."}' });
     }
   }
