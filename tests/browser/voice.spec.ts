@@ -210,6 +210,32 @@ async function mockSessions(page: Page, ready = true) {
   return calls;
 }
 
+test('an immediate voice restart waits for confirmed cleanup before requesting another connection', async ({ page }) => {
+  await fakeAudio(page);
+  const calls = await mockSessions(page);
+  let finishCleanup!: () => void;
+  const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
+  let closing = false;
+  await page.route('**/api/session', async route => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    calls.push('DELETE'); closing = true;
+    await cleanup; await route.fulfill({ status: 204 });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  await page.getByRole('button', { name: 'End conversation' }).click();
+  await expect.poll(() => closing).toBe(true);
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await expect(page.getByRole('button', { name: 'Cancel connection' })).toBeVisible();
+  expect(calls).toEqual(['GET', 'POST', 'DELETE']);
+  expect((await metrics(page)).microphoneCalls).toBe(1);
+  finishCleanup();
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  expect(calls).toEqual(['GET', 'POST', 'DELETE', 'GET', 'POST']);
+  await page.getByRole('button', { name: 'End conversation' }).click();
+});
+
 async function emit(page: Page, event: object) {
   await page.evaluate((event) => {
     (window as unknown as { voiceTest: { emit: (value: object) => void } }).voiceTest.emit(event);

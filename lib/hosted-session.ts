@@ -14,7 +14,22 @@ const Frame = z.object({
 }).strict();
 const Cancel = z.object({ cancel: z.string().uuid() }).strict();
 type Service = ReturnType<typeof createSessionService>;
-type LeaseRepository = Pick<GenerationCacheRepository, 'acquireLease' | 'releaseLease'>;
+type LeaseRepository = Pick<GenerationCacheRepository, 'acquireLease' | 'releaseLease' | 'leaseExpiresAt'>;
+
+export class HostedAdmissionError extends Error {
+  constructor(readonly code: 'session_active' | 'start_cooldown' | 'cleanup_pending', readonly retryAfterSeconds: number) {
+    super(code === 'start_cooldown'
+      ? `Please wait ${retryAfterSeconds} seconds between voice starts, then tap the wave again.`
+      : code === 'cleanup_pending'
+        ? `Your previous voice connection is still closing. Try again in up to ${retryAfterSeconds} seconds.`
+        : `A voice conversation is already active on this site. Only one can run at a time. End it in the other tab or device, or try again in up to ${retryAfterSeconds} seconds.`);
+  }
+}
+
+async function admissionError(repository: LeaseRepository, key: string, now: number, code: HostedAdmissionError['code']) {
+  const expires = await repository.leaseExpiresAt(key);
+  return new HostedAdmissionError(code, Math.max(1, Math.ceil(((expires ?? now + 1000) - now) / 1000)));
+}
 
 // Preserve the personal prototype's single-call capacity across cold starts.
 // A failed cleanup retains its lease until expiry. A separate 20-second lease
@@ -23,19 +38,19 @@ export async function claimHostedSession(repository: LeaseRepository, installati
   const ownerToken = randomUUID();
   const key = 'hosted-voice:active:v1';
   const active = await repository.acquireLease({ key, ownerToken, now, ttlMs: HOSTED_CONNECTION_MS + 30_000 });
-  if (!active) return null;
+  if (!active) throw await admissionError(repository, key, now, 'session_active');
   const installationKey = `hosted-installation:${installationId}`;
   try {
     const allowed = await repository.acquireLease({ key: 'hosted-voice:start:v1', ownerToken, now, ttlMs: 20_000 });
-    if (allowed && await repository.acquireLease({ key: installationKey, ownerToken, now, ttlMs: HOSTED_CONNECTION_MS + 30_000 })) {
-      return async () => { await repository.releaseLease(installationKey, ownerToken); await repository.releaseLease(key, ownerToken); };
+    if (!allowed) throw await admissionError(repository, 'hosted-voice:start:v1', now, 'start_cooldown');
+    if (!await repository.acquireLease({ key: installationKey, ownerToken, now, ttlMs: HOSTED_CONNECTION_MS + 30_000 })) {
+      throw await admissionError(repository, installationKey, now, 'cleanup_pending');
     }
+    return async () => { await repository.releaseLease(installationKey, ownerToken); await repository.releaseLease(key, ownerToken); };
   } catch (error) {
     await repository.releaseLease(key, ownerToken);
     throw error;
   }
-  await repository.releaseLease(key, ownerToken);
-  return null;
 }
 
 export function serveHostedSession(socket: WebSocket, options: {
@@ -53,6 +68,7 @@ export function serveHostedSession(socket: WebSocket, options: {
   let eventsStarted = false;
   let closing = false;
   let release: (() => Promise<void>) | undefined;
+  let startJob: Promise<void> | undefined;
   let finished!: () => void;
   const done = new Promise<void>(resolve => { finished = resolve; });
   const send = (value: object) => {
@@ -93,8 +109,11 @@ export function serveHostedSession(socket: WebSocket, options: {
         postStarted = true;
         clearTimeout(setupTimer);
         release = (await options.claim(frame.installationId)) ?? undefined;
-        if (!release) { send({ id, status: 429, body: '{"error":"A conversation is active, or another was just started. Please try again shortly."}' }); return; }
+        if (!release) throw new HostedAdmissionError('session_active', 20);
       }
+      // A canceled handshake can still be waiting for its provider ID. Its job
+      // must finish cleanup before DELETE confirms that a restart is safe.
+      if (operation === 'DELETE') await startJob;
       if (closing || controller.signal.aborted) return;
       if (operation === 'EVENTS') {
         if (eventsStarted) { send({ id, status: 409, body: '{"error":"The event stream is already open."}' }); return; }
@@ -110,6 +129,15 @@ export function serveHostedSession(socket: WebSocket, options: {
         method, headers, signal: controller.signal,
         ...(method === 'POST' ? { body: frame.body ?? '' } : {}),
       }));
+      // Release admission before acknowledging a confirmed hangup, rather than
+      // making the next connection race this WebSocket's close event.
+      if (operation === 'DELETE' && response.ok) {
+        if (!await service.shutdown()) {
+          send({ id, status: 502, body: '{"error":"The previous voice connection could not be closed. Wait for the session limit before reconnecting."}' });
+          return;
+        }
+        await release?.(); release = undefined;
+      }
       if (operation !== 'EVENTS' || !response.ok || !response.body) {
         send({ id, status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() });
         return;
@@ -125,7 +153,14 @@ export function serveHostedSession(socket: WebSocket, options: {
         }
         send({ id, end: true });
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-    } catch {
+    } catch (error) {
+      if (error instanceof HostedAdmissionError) {
+        console.info('[flowpath:voice_admission_rejected]', JSON.stringify({ code: error.code, retryAfterSeconds: error.retryAfterSeconds }));
+        send({ id, status: error.code === 'start_cooldown' ? 429 : 409,
+          headers: { 'retry-after': String(error.retryAfterSeconds) },
+          body: JSON.stringify({ error: error.message, code: error.code, retryAfterSeconds: error.retryAfterSeconds }) });
+        return;
+      }
       send({ id, status: 503, body: '{"error":"The hosted connection is temporarily unavailable."}' });
     }
   }
@@ -149,6 +184,7 @@ export function serveHostedSession(socket: WebSocket, options: {
     const controller = new AbortController();
     pending.set(frame.id, controller);
     const job = handle(frame, controller).finally(() => { pending.delete(frame.id); jobs.delete(job); });
+    if (frame.operation === 'POST' && !startJob) startJob = job;
     jobs.add(job);
   });
   socket.on('close', () => { void close(); });

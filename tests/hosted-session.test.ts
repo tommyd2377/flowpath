@@ -11,7 +11,7 @@ import { localRequest } from '../lib/local-request';
 import { GenerationCacheRepository, resolveGenerationDatabaseConfig } from '../lib/atlas/server/generation-cache';
 import { voiceDatabaseClient } from '../lib/voice-database';
 import { StoryCatalogRepository } from '../lib/story-catalog';
-import { claimHostedSession, serveHostedSession } from '../lib/hosted-session';
+import { claimHostedSession, HostedAdmissionError, serveHostedSession } from '../lib/hosted-session';
 import { createSessionService } from '../lib/session-server';
 import { createSessionTransport } from '../lib/session-transport';
 
@@ -74,15 +74,15 @@ test('shared admission allows one call across instances and preserves the start 
   const first = await claimHostedSession(repo, installationId, 1000);
   assert.ok(first);
   assert.equal(await repo.hasHostedSession(installationId, 1001), true);
-  assert.equal(await claimHostedSession(repo, randomUUID(), 1001), null);
+  await assert.rejects(claimHostedSession(repo, randomUUID(), 1001), (error: unknown) => error instanceof HostedAdmissionError && error.code === 'session_active' && error.retryAfterSeconds === 315);
   await first();
   assert.equal(await repo.hasHostedSession(installationId, 1002), false);
-  assert.equal(await claimHostedSession(repo, installationId, 1002), null);
+  await assert.rejects(claimHostedSession(repo, installationId, 1002), (error: unknown) => error instanceof HostedAdmissionError && error.code === 'start_cooldown' && error.retryAfterSeconds === 20);
   const next = await claimHostedSession(repo, installationId, 21_001);
   assert.ok(next); await next();
 });
 
-async function harness(t: TestContext, options: { durationMs?: number; lifetimeMs?: number; denied?: boolean; cleanupFails?: boolean; create?: () => Promise<Response> } = {}) {
+async function harness(t: TestContext, options: { durationMs?: number; lifetimeMs?: number; denied?: boolean; admissionError?: HostedAdmissionError; cleanupFails?: boolean; create?: () => Promise<Response> } = {}) {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await once(server, 'listening');
   const address = server.address();
@@ -110,7 +110,7 @@ async function harness(t: TestContext, options: { durationMs?: number; lifetimeM
     });
     completions.push(serveHostedSession(socket, {
       origin, service, lifetimeMs: options.lifetimeMs ?? 60_000,
-      claim: async () => { claims++; return options.denied ? null : async () => { releases++; }; },
+      claim: async () => { claims++; if (options.admissionError) throw options.admissionError; return options.denied ? null : async () => { releases++; }; },
     }));
   });
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -141,14 +141,46 @@ test('hosted transport carries SDP, event stream, actions and hangup through the
   assert.equal((await h.transport.fetch('/api/session', { method: 'POST', body: offer })).status, 409);
   await reader.cancel();
   assert.equal((await h.transport.fetch('/api/session', { method: 'DELETE' })).status, 204);
+  assert.equal(h.releases(), 1, 'the hangup response confirms that the admission lock is already released');
   h.transport.close(); await h.done();
   assert.equal(h.calls.length, 2); assert.equal(h.claims(), 1); assert.equal(h.releases(), 1); assert.equal(h.disconnects(), 0);
 });
 
 test('denied hosted admission never calls the provider', async t => {
   const h = await harness(t, { denied: true });
-  assert.equal((await h.transport.fetch('/api/session', { method: 'POST', body: offer })).status, 429);
+  const response = await h.transport.fetch('/api/session', { method: 'POST', body: offer });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /on this site/);
   assert.deepEqual(h.calls, []);
+});
+
+test('hosted cooldown reports its exact remaining wait without starting the provider', async t => {
+  const h = await harness(t, { admissionError: new HostedAdmissionError('start_cooldown', 7) });
+  const response = await h.transport.fetch('/api/session', { method: 'POST', body: offer });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('retry-after'), '7');
+  assert.deepEqual(await response.json(), { error: 'Please wait 7 seconds between voice starts, then tap the wave again.', code: 'start_cooldown', retryAfterSeconds: 7 });
+  assert.deepEqual(h.calls, []);
+});
+
+test('hangup waits for a canceled handshake and releases its lock before a restart can proceed', async t => {
+  let finish!: (response: Response) => void;
+  let created!: () => void;
+  const started = new Promise<void>(resolve => { created = resolve; });
+  const pending = new Promise<Response>(resolve => { finish = resolve; });
+  const h = await harness(t, { create: () => { created(); return pending; } });
+  const abort = new AbortController();
+  const opening = h.transport.fetch('/api/session', { method: 'POST', body: offer, signal: abort.signal });
+  const rejection = assert.rejects(opening, { name: 'AbortError' });
+  await started; abort.abort(); await rejection;
+  let acknowledged = false;
+  const ended = h.transport.fetch('/api/session', { method: 'DELETE' }).then(response => { acknowledged = true; return response; });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(acknowledged, false); assert.equal(h.releases(), 0);
+  finish(answer());
+  assert.equal((await ended).status, 204);
+  assert.equal(h.calls.filter(url => url.endsWith('/hangup')).length, 1);
+  assert.equal(h.releases(), 1);
 });
 
 test('connection loss hangs up the provider and notifies the browser', async t => {
@@ -178,6 +210,8 @@ test('canceling a handshake waits for its provider call ID and closes that call'
 test('failed provider cleanup retains the shared admission lease', async t => {
   const h = await harness(t, { cleanupFails: true });
   await h.transport.fetch('/api/session', { method: 'POST', body: offer });
+  assert.equal((await h.transport.fetch('/api/session', { method: 'DELETE' })).status, 502);
+  assert.equal(h.releases(), 0, 'an unsuccessful hangup must never release admission');
   h.transport.close(); await h.done();
   assert.equal(h.releases(), 0);
 });

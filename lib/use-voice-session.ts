@@ -71,6 +71,7 @@ export function useVoiceSession() {
   const [researchBusy, setResearchBusy] = useState(false);
   const offline = useRef<AbortController | null>(null);
   const current = useRef<LiveSession | null>(null);
+  const cleanup = useRef(Promise.resolve(true));
   const mounted = useRef(true);
   const revision = useRef(0);
 
@@ -115,7 +116,8 @@ export function useVoiceSession() {
     current.current = null;
     const stoppedRevision = ++revision.current;
     if (session) {
-      void dispose(session).then((closed) => {
+      cleanup.current = dispose(session);
+      void cleanup.current.then((closed) => {
         if (!closed && mounted.current && !current.current && revision.current === stoppedRevision) {
           setPhase('error');
           setMessage('Your microphone is off, but disconnection could not be confirmed. Wait for the session limit before reconnecting.');
@@ -403,6 +405,9 @@ export function useVoiceSession() {
       session.context = new AudioContext();
       await session.context.resume();
       if (!alive()) return;
+      const cleaned = await cleanup.current;
+      if (!alive()) return;
+      if (!cleaned) throw new Error('Your previous voice connection could not be closed. Wait for the session limit before reconnecting.');
       session.setupTimer = setTimeout(() => fail(session, 'The connection took too long. Tap the wave to try again.'), 30_000);
       const readiness = await session.transport.fetch('/api/session', { signal: session.controller.signal, cache: 'no-store' });
       if (!readiness.ok) throw new Error(await responseError(readiness));

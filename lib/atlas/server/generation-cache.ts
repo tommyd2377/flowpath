@@ -514,6 +514,15 @@ export class GenerationCacheRepository {
     return result.rows.length > 0;
   }
 
+  async leaseExpiresAt(key: string) {
+    await this.ready();
+    const result = await this.client.execute({
+      sql: 'SELECT lease_expires_at FROM generation_leases WHERE cache_key = ?',
+      args: [key],
+    });
+    return result.rows.length ? Number(result.rows[0].lease_expires_at) : null;
+  }
+
   async reserveInstallationGeneration(input: {
     installationKey: string;
     reservationToken: string;
