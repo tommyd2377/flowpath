@@ -39,12 +39,12 @@ export const EventSnapshotSchema = z
     capturedAt: IsoDateSchema,
     // Historical values remain readable; new snapshots describe reporting, not a verdict.
     verificationStatus: z.enum(["reported", "corroborated", "partial"]),
-    summary: z.string().min(1).max(900),
+    summary: z.string().min(1),
     facts: z
       .array(
         z
           .object({
-            text: z.string().min(1).max(500),
+            text: z.string().min(1),
             // Empty for the explicitly attributed headline when search adds no cited facts.
             sourceIds: z.array(z.string().min(2).max(32)).max(6),
           })
@@ -52,7 +52,7 @@ export const EventSnapshotSchema = z
       )
       .min(1)
       .max(8),
-    uncertainties: z.array(z.string().min(1).max(320)).max(6),
+    uncertainties: z.array(z.string().min(1)).max(6),
     sources: z.array(SourceSchema).max(16),
   })
   .strict();

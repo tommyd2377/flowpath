@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { HeadlineItemSchema, MAX_ATLAS_CALLS, MAX_ATLAS_NODES, type HeadlineItem, type PossibilityNode } from "./atlas/contracts";
+import { EventSnapshotSchema, HeadlineItemSchema, MAX_ATLAS_CALLS, MAX_ATLAS_NODES, type EventSnapshot, type HeadlineItem, type PossibilityNode } from "./atlas/contracts";
 import type { HeadlinesResponse } from "./atlas/server/feed";
 import { getGenerationCacheRepository, GenerationCacheRepository } from "./atlas/server/generation-cache";
 import { createGenerationService, type GenerationService } from "./atlas/server/generation-service";
@@ -10,7 +10,7 @@ import { AtlasApiError } from "./atlas/server/http";
 import { atlasSafetyIdentifier } from "./atlas/server/request-guard";
 import { createFollowupResearchService, type FollowupResearchService } from "./followup-research";
 import { getVoiceStories, getVoiceStoryById } from "./story-catalog";
-import { FIXTURE_HEADLINES, toStoryHeadline } from "./story-contracts";
+import { FIXTURE_HEADLINES, toStoryHeadline, type StoryCatalogResponse } from "./story-contracts";
 import { emptyDisplay, displayResult, type ExplorationDisplay } from "./visual-contracts";
 
 const IdSchema = z.string().uuid();
@@ -46,7 +46,7 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 
 type Story = { headline: HeadlineItem; graphId: string; focusedNodeId: string | null; visitedNodeIds: string[] };
 type Graph = NonNullable<Awaited<ReturnType<typeof readRegisteredGraph>>>;
-type WorkState = { epoch: number; tail: Promise<unknown>; controller: AbortController | null; selectionKey: string | null; selectionSignal: AbortSignal | null; selection: Promise<object> | null };
+type WorkState = { epoch: number; tail: Promise<unknown>; controller: AbortController | null; selectionKey: string | null; selectionSignal: AbortSignal | null; selection: Promise<object> | null; selectionResearch: EventSnapshot | null; selectionObservers: Set<(snapshot: EventSnapshot) => void> };
 
 export function createExplorationService(options: {
   repository: GenerationCacheRepository;
@@ -69,7 +69,7 @@ export function createExplorationService(options: {
     parse(IdSchema, id);
     let state = work.get(id);
     if (!state) {
-      state = { epoch: 0, tail: Promise.resolve(), controller: null, selectionKey: null, selectionSignal: null, selection: null };
+      state = { epoch: 0, tail: Promise.resolve(), controller: null, selectionKey: null, selectionSignal: null, selection: null, selectionResearch: null, selectionObservers: new Set() };
       work.set(id, state);
     }
     return state;
@@ -129,7 +129,7 @@ export function createExplorationService(options: {
   }
 
   return {
-    listStories: () => getVoiceStories(),
+    listStories: (signal?: AbortSignal, onUpdate?: (catalog: StoryCatalogResponse) => void) => getVoiceStories(signal, onUpdate),
     getStoryPreview: (headlineId: string, signal?: AbortSignal) => getVoiceStoryById(headlineId, signal),
 
     async getDisplay(installationId: string): Promise<ExplorationDisplay> {
@@ -182,12 +182,28 @@ export function createExplorationService(options: {
       });
     },
 
-    selectStory(installationId: string, headlineId: string, signal?: AbortSignal): Promise<object> {
+    selectStory(installationId: string, headlineId: string, signal?: AbortSignal, onResearch?: (snapshot: EventSnapshot) => void): Promise<object> {
       const state = stateFor(installationId);
       parse(z.string().min(8).max(64), headlineId);
       signal?.throwIfAborted();
-      if (state.selectionKey === headlineId && state.selection && !state.selectionSignal?.aborted) return state.selection;
+      const subscribe = (result: Promise<object>) => {
+        if (!onResearch) return result;
+        const observers = state.selectionObservers;
+        const notify = (snapshot: EventSnapshot) => {
+          if (signal?.aborted) return;
+          try { onResearch(snapshot); } catch { /* A disconnected subscriber must not cancel shared research. */ }
+        };
+        observers.add(notify);
+        if (state.selectionResearch) notify(state.selectionResearch);
+        const remove = () => { observers.delete(notify); signal?.removeEventListener('abort', remove); };
+        signal?.addEventListener('abort', remove, { once: true });
+        void result.finally(remove).catch(() => undefined);
+        return result;
+      };
+      if (state.selectionKey === headlineId && state.selection && !state.selectionSignal?.aborted) return subscribe(state.selection);
       state.controller?.abort();
+      state.selectionResearch = null;
+      state.selectionObservers = new Set();
       const epoch = ++state.epoch;
       const controller = new AbortController();
       state.controller = controller;
@@ -214,7 +230,18 @@ export function createExplorationService(options: {
           // A graph may have aged out under the inherited retention policy.
           story.focusedNodeId = null;
           story.visitedNodeIds = [];
-          const start = await generation.start({ installationId, graphId: story.graphId, headline: story.headline }, combined);
+          const context = options.headlines ? undefined : await getVoiceStoryById(headlineId, combined) ?? undefined;
+          current();
+          const start = await generation.start({ installationId, graphId: story.graphId, headline: story.headline }, combined, {
+            context,
+            onResearch(snapshot) {
+              if (combined.aborted || state.epoch !== epoch) return;
+              const checked = EventSnapshotSchema.safeParse(snapshot);
+              if (!checked.success || checked.data.headline.id !== headlineId) return;
+              state.selectionResearch = checked.data;
+              for (const notify of state.selectionObservers) notify(checked.data);
+            },
+          });
           current();
           if (start.kind !== "atlas") throw fail("analysis_unavailable", "The analysis service did not return a possibility map.", 502);
           graph = await graphFor(installationId, story);
@@ -229,9 +256,9 @@ export function createExplorationService(options: {
       state.selectionSignal = combined;
       state.selection = result;
       void result.finally(() => {
-        if (state.selection === result) { state.selection = null; state.selectionKey = null; state.selectionSignal = null; }
+        if (state.selection === result) { state.selection = null; state.selectionKey = null; state.selectionSignal = null; state.selectionResearch = null; state.selectionObservers.clear(); }
       }).catch(() => undefined);
-      return result;
+      return subscribe(result);
     },
 
     execute(installationId: string, name: string, args: Record<string, unknown>, signal?: AbortSignal, expectedHeadlineId?: string): Promise<object> {
@@ -313,11 +340,11 @@ function service() {
 }
 
 export const explorationService = {
-  listStories: () => service().listStories(),
+  listStories: (signal?: AbortSignal, onUpdate?: (catalog: StoryCatalogResponse) => void) => service().listStories(signal, onUpdate),
   getStoryPreview: (headlineId: string, signal?: AbortSignal) => service().getStoryPreview(headlineId, signal),
   getDisplay: (installationId: string) => service().getDisplay(installationId),
   restore: (installationId: string) => service().restore(installationId),
-  selectStory: (installationId: string, headlineId: string, signal?: AbortSignal) => service().selectStory(installationId, headlineId, signal),
+  selectStory: (installationId: string, headlineId: string, signal?: AbortSignal, onResearch?: (snapshot: EventSnapshot) => void) => service().selectStory(installationId, headlineId, signal, onResearch),
   search: (installationId: string, question: string, signal?: AbortSignal, expectedHeadlineId?: string) => service().search(installationId, question, signal, expectedHeadlineId),
   execute: (installationId: string, name: string, args: Record<string, unknown>, signal?: AbortSignal, expectedHeadlineId?: string) => service().execute(installationId, name, args, signal, expectedHeadlineId),
 };

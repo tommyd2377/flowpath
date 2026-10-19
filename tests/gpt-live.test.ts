@@ -108,7 +108,12 @@ test('backend executes one validated tool then a tool-free bounded continuation 
       ? [{ type: 'function_call', name: 'show', call_id: 'call_show', arguments: '{}' }]
       : [{ type: 'message', content: [{ type: 'output_text', text: 'Confirmed.' }] }] }); },
   });
-  assert.deepEqual(executed, ['show']); assert.equal(result.text, 'Confirmed.'); assert.equal(requests[0].model, 'gpt-5.6-luna');
+  assert.deepEqual(executed, ['show']); assert.equal(result.text, 'Confirmed.');
+  for (const request of requests) {
+    assert.equal(request.model, 'gpt-6-luna');
+    assert.equal(request.service_tier, 'priority');
+    assert.deepEqual(request.reasoning, { effort: 'low' });
+  }
   assert.deepEqual(requests[0].include, ['reasoning.encrypted_content']);
   assert.deepEqual(requests[1].tools, []); assert.equal(requests[1].max_output_tokens, 500);
   let attempts = 0;

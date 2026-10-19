@@ -15,7 +15,7 @@ import {
 } from "../contracts";
 import { AtlasApiError } from "./http";
 
-export const START_PROMPT_VERSION = "start-v5-research-context";
+export const START_PROMPT_VERSION = "start-v8-source-interpretation";
 export const EXPANSION_PROMPT_VERSION = "expand-v5-research-context";
 
 const IsoDateSchema = z.string().datetime({ offset: true });
@@ -152,9 +152,10 @@ function createServerIds(
   count: number,
   factory: () => string,
   callConsumed: boolean,
+  reserved: string[] = [],
 ) {
   const ids: string[] = [];
-  const seen = new Set<string>();
+  const seen = new Set(reserved);
   for (let index = 0; index < count; index += 1) {
     const id = factory();
     if (!z.string().uuid().safeParse(id).success || seen.has(id)) {
@@ -208,6 +209,7 @@ export function materializeStartTemplate(
   options: MaterializationMeta & {
     capturedAt: string;
     createId?: () => string;
+    snapshotId?: string;
   },
 ): StartAtlasResponse {
   const template = StartGenerationTemplateSchema.parse(rawTemplate);
@@ -228,11 +230,12 @@ export function materializeStartTemplate(
   const capturedAt = IsoDateSchema.parse(options.capturedAt);
   const createId = options.createId ?? randomUUID;
   const ids = createServerIds(
-    template.branches.length + 1,
+    template.branches.length + (options.snapshotId ? 0 : 1),
     createId,
     options.callConsumed,
+    options.snapshotId ? [options.snapshotId] : [],
   );
-  const snapshotId = ids.at(-1);
+  const snapshotId = options.snapshotId ?? ids.at(-1);
   const nodes = template.branches.map((branch, index) =>
     PossibilityNodeSchema.parse({
       id: ids[index],

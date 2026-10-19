@@ -56,7 +56,9 @@ test("follow-up research uses one bounded search and returns cited data without 
   const answer = await h.research.search({ installationId: h.installationId, question: QUESTION, context: CONTEXT });
   assert.equal(h.adapter.calls.length, 1);
   const call = h.adapter.calls[0];
-  assert.equal(call.request.model, "gpt-5.6-luna");
+  assert.equal(call.request.model, "gpt-6-luna");
+  assert.equal(call.request.service_tier, "priority");
+  assert.deepEqual(call.request.reasoning, { effort: "low" });
   assert.equal(call.request.store, false);
   assert.equal(call.request.max_output_tokens, 2200);
   assert.deepEqual(call.request.tools, [{ type: "web_search", search_context_size: "medium" }]);
@@ -73,6 +75,41 @@ test("follow-up research uses one bounded search and returns cited data without 
   assert.equal("script" in answer, false);
   assert.match(call.request.input[0].content, /untrusted data/);
   assert.match(call.request.input[0].content, /conditional/);
+});
+
+test("legacy model settings cannot override Luna Fast research", async t => {
+  const h = harness(t);
+  const research = createFollowupResearchService({
+    repository: h.repository,
+    adapter: h.adapter,
+    mode: () => "live",
+    environment: { NODE_ENV: "test", VOICE_ANALYSIS_MODEL: "gpt-5.6-luna" },
+  });
+  await research.search({ installationId: h.installationId, question: QUESTION, context: CONTEXT });
+  assert.equal(h.adapter.calls[0].request.model, "gpt-6-luna");
+  assert.equal(h.adapter.calls[0].request.service_tier, "priority");
+});
+
+test("follow-up research keeps complete findings and qualifications through cached replay", async t => {
+  const h = harness(t);
+  const original = response().output_parsed as { status: string; findings: unknown[]; implications: string[]; uncertainties: string[]; sources: unknown[] };
+  const finding = `The report describes ${"relevant context ".repeat(60)}but the final decision has not been made.`;
+  const implication = `If the proposal proceeds, ${"its effect depends on implementation. ".repeat(20)}This remains a conditional scenario.`;
+  const uncertainty = `The unresolved question includes ${"important procedural detail ".repeat(25)}and the outcome is still unknown.`;
+  h.adapter.operation = async () => response({ output_parsed: { ...original,
+    findings: [{ text: finding, sourceUrls: [SOURCE] }], implications: [implication], uncertainties: [uncertainty] } });
+  const input = { installationId: h.installationId, question: QUESTION, context: CONTEXT };
+  const first = await h.research.search(input);
+  const cached = await h.research.search(input);
+  assert.equal(first.status, 'supported');
+  assert.equal(first.findings[0].text, finding);
+  assert.deepEqual(first.findings[0].sourceIds, [first.sources[0].id]);
+  assert.equal(first.implications[0], implication);
+  assert.equal(first.uncertainties[0], uncertainty);
+  assert.deepEqual(cached.findings, first.findings);
+  assert.deepEqual(cached.implications, first.implications);
+  assert.deepEqual(cached.uncertainties, first.uncertainties);
+  assert.equal(h.adapter.calls.length, 1);
 });
 
 test("missing search citations retain conditional implications without asserting unsupported facts", async t => {

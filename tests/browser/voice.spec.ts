@@ -63,6 +63,7 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
       playedAudio: 0,
       createdAudio: 0,
       pausedAudio: 0,
+      audioMuted: false,
       createdPeers: 0,
       sentEvents: [] as string[],
       eventConnections: 0,
@@ -157,6 +158,8 @@ async function fakeAudio(page: Page, microphone: 'allowed' | 'denied' | 'pending
       constructor() { tracker.createdAudio++; }
       autoplay = false;
       srcObject: unknown = null;
+      get muted() { return tracker.audioMuted; }
+      set muted(value: boolean) { tracker.audioMuted = value; }
       setAttribute() {}
       play() { tracker.playedAudio++; return Promise.resolve(); }
       pause() { tracker.pausedAudio++; }
@@ -300,6 +303,7 @@ test('idle is quiet; missing setup never asks for the microphone or creates a ca
   const calls = await mockSessions(page, false);
   await page.goto('/');
   await expect(page).toHaveTitle('The Voice');
+  await expect(page.locator('.wordmark-news')).toHaveText('News');
   await expect(page.getByRole('button', { name: 'Start conversation' })).toHaveCount(1);
   await expect(page.locator('.headline-card')).toHaveCount(3);
   await expect(page.getByText('Presented by Thomas DeVito')).toBeVisible();
@@ -384,6 +388,7 @@ test('silence closes the conversation and releases the microphone', async ({ pag
   await page.clock.runFor(1300);
   await page.clock.fastForward(45_100);
   await expect(page.locator('main')).toHaveClass(/phase-idle/);
+  await expect(page.locator('.exploration-loading')).toHaveCount(0);
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
@@ -405,6 +410,8 @@ test('assistant playback suspends the silence cutoff until the audio actually fi
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await emit(page, { type: 'media.output.quiet', response_id: 'long-answer' });
+  await page.clock.runFor(1_300);
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
   await page.clock.fastForward(45_100);
   await expect(page.locator('main')).toHaveClass(/phase-idle/);
   expect((await metrics(page)).stoppedTracks).toBe(1);
@@ -431,6 +438,16 @@ test('mobile layout, footer links, and reduced motion stay usable', async ({ pag
   await fakeAudio(page);
   const calls = await mockSessions(page);
   await page.goto('/');
+  const logo = page.locator('.wordmark-logo');
+  const news = page.locator('.wordmark-news');
+  await expect(logo).toHaveCSS('width', '145px');
+  await expect(news).toHaveText('News');
+  await expect(news).toHaveCSS('font-size', '10.875px');
+  await expect(news).toHaveCSS('font-family', 'Manrope, system-ui, sans-serif');
+  const logoBounds = (await logo.boundingBox())!;
+  const newsBounds = (await news.boundingBox())!;
+  expect(Math.abs(newsBounds.x + newsBounds.width / 2 - (logoBounds.x + logoBounds.width / 2))).toBeLessThan(1);
+  expect(Math.abs(newsBounds.y - (logoBounds.y + 145 * .54 + 5))).toBeLessThan(1);
   await expect(page.getByRole('button', { name: 'Start conversation' })).toBeVisible();
   await expect(page.getByRole('navigation')).toBeVisible();
   await expect(page.getByRole('link')).toHaveCount(5);
@@ -446,6 +463,8 @@ test('desktop preview contains a rendered waveform', async ({ page }) => {
   await fakeAudio(page);
   await mockSessions(page);
   await page.goto('/');
+  await expect(page.locator('.wordmark-logo')).toHaveCSS('width', '160px');
+  await expect(page.locator('.wordmark-news')).toHaveCSS('font-size', '12px');
   await expect.poll(() => page.locator('canvas').evaluate((canvas) => (canvas as HTMLCanvasElement).width)).toBeGreaterThan(500);
   await page.screenshot({ path: 'test-results/the-voice-desktop.png', fullPage: true });
 });
@@ -608,7 +627,11 @@ test('restoration opens the grid on fresh visits and after returning home, prese
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
   expect(selections).toHaveLength(0);
   await expect(page.locator('.voice-page')).toHaveAttribute('data-view', 'stories');
-  await page.keyboard.press('Escape');
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/api/session') && response.request().method() === 'DELETE'),
+    page.keyboard.press('Escape'),
+  ]);
+  await page.unrouteAll({ behavior: 'wait' });
 });
 
 test('pending research survives silence beyond 45 seconds and inactivity resumes after research completes', async ({ page }) => {
@@ -621,7 +644,7 @@ test('pending research survives silence beyond 45 seconds and inactivity resumes
   await clickStory(page, 0);
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
   await emitServer(page, { type: 'research', busy: true, message: 'Checking the story’s sources…', revision: 1 });
-  await expect(page.getByRole('status')).toHaveText('Checking the story’s sources…');
+  await expect(page.locator('#voice-status')).toHaveText('Checking the story’s sources…');
   await page.clock.fastForward(60_000);
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
   expect((await metrics(page)).stoppedTracks).toBe(0);
@@ -646,11 +669,11 @@ test('switching an active story keeps one voice session and rejects outdated res
   await expect.poll(() => selections.length).toBe(2);
   await emitServer(page, { type: 'story', headlineId: headlines[1].id, revision: 2 });
   await emitServer(page, { type: 'research', busy: true, message: 'Checking the water story…', revision: 2 });
-  await expect(page.getByRole('status')).toHaveText('Checking the water story…');
+  await expect(page.locator('#voice-status')).toHaveText('Checking the water story…');
   await emitServer(page, { type: 'research', busy: false, message: 'Old transit research finished.', revision: 1 });
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
   await emitServer(page, { type: 'display', display: explorationDisplay(0, 1), revision: 1 });
-  await expect(page.getByRole('status')).toHaveText('Checking the water story…');
+  await expect(page.locator('#voice-status')).toHaveText('Checking the water story…');
   await expect(page.getByRole('heading', { name: headlines[1].title, exact: true })).toBeVisible();
   expect(calls.filter((method) => method === 'POST')).toHaveLength(1);
   expect((await metrics(page)).microphoneCalls).toBe(1);
@@ -677,13 +700,13 @@ test('initial stream snapshot cannot dismiss research before story selection is 
   await clickStory(page, 0);
   await expect.poll(() => requested).toBe(true);
   await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
-  await expect(page.getByRole('status')).toHaveText('Looking into this story…');
+  await expect(page.locator('#voice-status')).toHaveText('Looking into this story…');
   await page.clock.fastForward(60_000);
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await emitServer(page, { type: 'research', busy: true, message: 'Verifying the selected story…', revision: 1 });
-  await expect(page.getByRole('status')).toHaveText('Looking into this story…');
+  await expect(page.locator('#voice-status')).toHaveText('Looking into this story…');
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
-  await expect(page.getByRole('status')).toHaveText('Verifying the selected story…');
+  await expect(page.locator('#voice-status')).toHaveText('Verifying the selected story…');
   release();
   await page.keyboard.press('Escape');
 });
@@ -706,15 +729,15 @@ test('a previous story cannot replace status while the next selection acknowledg
   await clickStory(page, 0);
   await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
   await emitServer(page, { type: 'research', busy: true, message: 'Checking transit…', revision: 1 });
-  await expect(page.getByRole('status')).toHaveText('Checking transit…');
+  await expect(page.locator('#voice-status')).toHaveText('Checking transit…');
   await clickStory(page, 1);
   await expect.poll(() => requested).toBe(true);
   await emitServer(page, { type: 'research', busy: false, message: 'Transit analysis complete.', revision: 1 });
-  await expect(page.getByRole('status')).toHaveText('Looking into this story…');
+  await expect(page.locator('#voice-status')).toHaveText('Looking into this story…');
   await emitServer(page, { type: 'research', busy: true, message: 'Checking water…', revision: 2 });
-  await expect(page.getByRole('status')).toHaveText('Looking into this story…');
+  await expect(page.locator('#voice-status')).toHaveText('Looking into this story…');
   release();
-  await expect(page.getByRole('status')).toHaveText('Checking water…');
+  await expect(page.locator('#voice-status')).toHaveText('Checking water…');
   await page.keyboard.press('Escape');
 });
 
@@ -728,8 +751,8 @@ test('provider events cannot control the browser; an application terminal event 
   await emit(page, { type: 'error', error: { code: 'conversation_already_has_active_response' } });
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
   expect((await metrics(page)).stoppedTracks).toBe(0);
-  await emitServer(page, { type: 'ended', message: 'The voice service reported a problem.' });
-  await expect(page.getByRole('status')).toContainText('voice service reported a problem');
+  await emitServer(page, { type: 'ended', error: true, message: 'The voice service reported a problem.' });
+  await expect(page.locator('#voice-status')).toContainText('voice service reported a problem');
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
 
@@ -742,9 +765,9 @@ test('fixture warning is visible and fixture readiness never opens the microphon
   await page.route('**/api/session', (route) => route.request().method() === 'GET'
     ? route.fulfill({ json: { ready: false, reason: 'fixture' } }) : route.fallback());
   await page.goto('/');
-  await expect(page.getByRole('status')).toContainText('headlines and analyses are simulated');
+  await expect(page.locator('#voice-status')).toContainText('headlines and analyses are simulated');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toContainText('Fixture preview: voice is disabled');
+  await expect(page.locator('#voice-status')).toContainText('Fixture preview: voice is disabled');
   expect((await metrics(page)).microphoneCalls).toBe(0);
   expect(calls).toEqual([]);
 });
@@ -759,7 +782,8 @@ test('lost research stream releases the microphone and permits a clean reconnect
   await emitServer(page, { type: 'research', busy: true, message: 'Checking sources…', revision: 1 });
   await page.evaluate(() => (window as unknown as { voiceTest: { closeServer: () => void } }).voiceTest.closeServer());
   await expect(page.getByRole('button', { name: 'Start conversation' })).toBeVisible();
-  await expect(page.getByRole('status')).toContainText(/connection|reconnect|interrupted/i);
+  await expect(page.locator('#voice-status')).toContainText(/connection|reconnect|interrupted/i);
+  await expect(page.locator('.exploration-loading')).toHaveCount(0);
   await expect.poll(() => calls.filter((method) => method === 'DELETE').length).toBe(1);
   expect(await metrics(page)).toEqual({ microphoneCalls: 1, stoppedTracks: 1, closedPeers: 1, closedContexts: 1 });
   await page.getByRole('button', { name: 'Start conversation' }).click();
@@ -814,6 +838,8 @@ test('stories and dynamic exploration stay responsive without showing conversati
   await expect(page.getByText('PRIVATE_USER_TRANSCRIPT_SENTINEL')).toHaveCount(0);
   await expect(page.getByRole('tree')).toHaveCount(0);
   await expect(page.getByRole('textbox')).toHaveCount(0);
+  await expect(page.locator('.evidence-panel')).not.toHaveAttribute('open', '');
+  await page.locator('.evidence-panel summary').click();
   await expect(page.getByRole('link', { name: /source-a.example/ }).first()).toHaveAttribute('href', /https:\/\/source-a.example/);
   await expect(page.locator('[data-openui-devtools-auto-mount]')).not.toBeVisible();
   await expect(page.locator('[data-openui-devtools-root]')).toHaveCount(0);
@@ -1023,7 +1049,7 @@ test('motion continuity: spoken selection and slow research never replace or pau
   } });
   await emitServer(page, { type: 'research', busy: true, message: 'Gathering fuller context…', revision: 1 });
   await expect(page.getByRole('heading', { name: headlines[0].title, exact: true })).toBeVisible();
-  await expect(page.getByText(stories[0].summary, { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Story exploration' }).getByText(stories[0].summary, { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeFocused();
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
   expect(await canvas!.evaluate(node => node === document.querySelector('canvas'))).toBe(true);
@@ -1107,6 +1133,9 @@ test('motion desktop: story expansion, comparison and backtracking preserve layo
 
   const evidence = page.locator('.evidence-panel');
   const disclosure = evidence.locator('summary');
+  await expect(evidence).not.toHaveAttribute('open', '');
+  await disclosure.click();
+  await expect(evidence).toHaveAttribute('open', '');
   await disclosure.click();
   await disclosure.focus();
   await expect(evidence).not.toHaveAttribute('open', '');
@@ -1426,7 +1455,11 @@ for (const viewport of [
       await expect.poll(async () => {
         const box = (await card.boundingBox())!;
         const stage = (await page.locator('.voice-stage').boundingBox())!;
-        return box.y >= stage.y + stage.height && box.y + box.height <= viewport.height - 8;
+        const dockBottom = stage.y + stage.height;
+        // Rich context can exceed a short landscape viewport. Keep its start
+        // below the dock and allow normal page scrolling instead of clipping it.
+        return box.y >= dockBottom && (box.height > viewport.height - dockBottom - 8
+          ? box.y <= dockBottom + 40 : box.y + box.height <= viewport.height - 8);
       }).toBe(true);
       await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
       const box = (await card.boundingBox())!;
@@ -1886,4 +1919,208 @@ test('a voice catalog completes a stalled page load and active refresh waits for
   await page.keyboard.press('Escape');
   await expect(page.locator('.voice-page')).toHaveAttribute('data-working', 'false');
   await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+});
+
+async function streamedCatalog(page: Page) {
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    const encoder = new TextEncoder();
+    const tracker = { ready: false, push: (value: object) => { void value; }, close: () => {} };
+    Object.assign(window, { storyStream: tracker });
+    window.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+      if (url.pathname !== '/api/stories') return nativeFetch(input, init);
+      let open = true;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          tracker.ready = true;
+          tracker.push = value => { if (open) controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`)); };
+          tracker.close = () => { if (open) { open = false; controller.close(); } };
+          init?.signal?.addEventListener('abort', () => { if (open) { open = false; controller.error(new DOMException('Aborted', 'AbortError')); } });
+        },
+        cancel() { open = false; },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } });
+    };
+  });
+}
+
+async function pushCatalog(page: Page, value: object) {
+  await expect.poll(() => page.evaluate(() => (window as unknown as { storyStream: { ready: boolean } }).storyStream.ready)).toBe(true);
+  await page.evaluate(value => (window as unknown as { storyStream: { push(value: object): void } }).storyStream.push(value), value);
+}
+
+test('stories stay loading until the complete catalog arrives together', async ({ page }, testInfo) => {
+  await streamedCatalog(page);
+  await page.goto('/');
+  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await pushCatalog(page, { ...catalog, complete: false, items: stories.slice(0, 1) });
+  await expect(page.locator('[data-story-id]')).toHaveCount(0);
+  await expect(page.locator('.headline-skeleton')).toHaveCount(6);
+  await expect(page.locator('.voice-page')).toHaveAttribute('data-working', 'true');
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeDisabled();
+  await pushCatalog(page, { ...catalog, complete: true });
+  await expect(page.locator('[data-story-id]')).toHaveCount(3);
+  await expect(page.locator('[data-story-id]').first()).toHaveAttribute('data-story-id', stories[0].id);
+  await expect(page.locator('.headline-skeleton')).toHaveCount(0);
+  await expect(page.locator('.stories-update')).not.toContainText('More stories arriving');
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath('complete-catalog.png') });
+});
+
+test('an interrupted incomplete catalog exposes no lead-only list and permits refresh', async ({ page }) => {
+  await streamedCatalog(page);
+  await page.goto('/');
+  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await pushCatalog(page, { ...catalog, complete: false, items: stories.slice(0, 1) });
+  await expect(page.locator('[data-story-id]')).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { storyStream: { close(): void } }).storyStream.close());
+  await expect(page.locator('.stories-notice')).toContainText('Stories couldn’t be loaded');
+  await expect(page.locator('[data-story-id]')).toHaveCount(0);
+  await expect(page.locator('.headline-skeleton')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+});
+
+test('voice publishes the full catalog together before playback focus', async ({ page }) => {
+  await fakeAudio(page);
+  await mockSessions(page);
+  const reports: ScreenReport[] = [];
+  await page.route('**/api/session/screen', async route => {
+    const body = route.request().postDataJSON();
+    if (body.type !== 'observation') reports.push(body);
+    await route.fulfill({ status: 204 });
+  });
+  await page.route('**/api/stories', () => {});
+  await page.route('**/api/session/action', route => route.fulfill({ status: 202, json: { ok: true } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  const metadata = { fetchedAt: catalog.fetchedAt, stale: catalog.stale, curated: catalog.curated, warning: catalog.warning };
+  const display = { ...emptyDisplay(), stories: stories.slice(0, 1), storyCatalog: { ...metadata, complete: false },
+    storyCatalogId: '00000000-0000-4000-8000-000000000088', spotlightStoryId: null };
+  await emitServer(page, { type: 'display', display, revision: 0 });
+  await emitServer(page, { type: 'research', busy: true, catalogPending: true, message: 'Getting the news briefing…', revision: 0 });
+  await expect(page.locator('[data-story-id]')).toHaveCount(0);
+  const requestId = randomUUID();
+  await emitServer(page, { type: 'screen_request', requestId, revision: 0, contextKey: screenContextKey(display),
+    catalog: { id: display.storyCatalogId, storyIds: stories.map(story => story.id) } });
+  await page.waitForTimeout(120);
+  expect(reports).toHaveLength(0);
+  await emitServer(page, { type: 'display', display: { ...display, stories, storyCatalog: { ...metadata, complete: true }, spotlightStoryId: stories[0].id }, revision: 0 });
+  await expect(page.locator('[data-story-id]')).toHaveCount(3);
+  await expect.poll(() => reports.some(report => report.requestId === requestId)).toBe(true);
+  const ready = reports.find(report => report.requestId === requestId)!;
+  expect(ready.outcome).toBe('ok');
+  expect(ready.screen.storyCatalogId).toBe(display.storyCatalogId);
+  expect(ready.screen.renderedStoryIds).toEqual(stories.map(story => story.id));
+  expect(ready.screen.visibleStoryIds).toContain(stories[0].id);
+  await emitServer(page, { type: 'research', busy: false, catalogPending: false, message: '', revision: 0 });
+  await emit(page, { type: 'media.output.active', response_id: 'first-story' });
+  await expect(page.locator(`[data-story-id="${stories[0].id}"]`)).toHaveAttribute('data-spotlight', 'true');
+  await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
+  await page.getByRole('button', { name: 'End conversation' }).click();
+});
+
+test('catalog pending protects quiet voice startup and cancellation restores the normal idle cutoff', async ({ page }) => {
+  await page.clock.install();
+  await fakeAudio(page);
+  await mockSessions(page);
+  await page.route('**/api/session/action', route => route.fulfill({ status: 202, json: { ok: true } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await emitServer(page, { type: 'research', busy: false, catalogPending: true, message: '', revision: 0 });
+  await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  await page.clock.fastForward(46_000);
+  await expect(page.getByRole('button', { name: 'End conversation' })).toBeVisible();
+  await emitServer(page, { type: 'research', busy: false, catalogPending: false, message: '', revision: 0 });
+  await page.clock.fastForward(45_100);
+  await expect(page.locator('main')).toHaveClass(/phase-idle/);
+  expect((await metrics(page)).stoppedTracks).toBe(1);
+});
+
+for (const width of [390, 1440]) {
+  test(`voice-only possibility walkthrough ${width} shows a hint and confirms the highlighted card`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await fakeAudio(page); const sessions = await mockSessions(page);
+    const actions: string[] = [], reports: ScreenReport[] = [];
+    await page.route('**/api/session/action', async route => {
+      actions.push(route.request().postDataJSON().action.type);
+      await route.fulfill({ status: 202, json: { ok: true } });
+    });
+    await page.route('**/api/session/screen', async route => {
+      const body = route.request().postDataJSON();
+      if (body.requestId) reports.push(body);
+      await route.fulfill({ status: 204 });
+    });
+    await page.goto('/');
+    await clickStory(page, 0);
+    await expect(page.getByRole('button', { name: /walkthrough|walk me through/i })).toHaveCount(0);
+    const hint = page.getByText('Tap the wave, then say “talk me through these options.”', { exact: true });
+    await expect(hint).toBeVisible();
+    const firstCard = page.locator('[data-path-id]').first();
+    expect((await hint.boundingBox())!.y).toBeLessThan((await firstCard.boundingBox())!.y);
+    await page.getByRole('button', { name: 'Start conversation' }).click();
+    await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
+    const display = explorationDisplay();
+    await emitServer(page, { type: 'display', display, revision: 1 });
+    await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
+    await expect(page.getByText('Try saying “talk me through these options.” You can interrupt at any time.', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Ask about an option to discuss it/)).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('voice-hint.png'), fullPage: true });
+    // A spoken request starts the server queue; the client renders its streamed state.
+    const nodeId = display.exploration!.choices![0].id;
+    const requestId = randomUUID();
+    display.spotlightPathId = nodeId;
+    display.walkthrough = { nodeId, index: 0, total: 3, phase: 'waiting' };
+    await emitServer(page, { type: 'display', display, revision: 1 });
+    await emitServer(page, { type: 'screen_request', requestId, pathId: nodeId, contextKey: screenContextKey(display), revision: 1 });
+    await expect.poll(() => reports.some(report => report.requestId === requestId)).toBe(true);
+    const confirmation = reports.find(report => report.requestId === requestId)!;
+    expect(confirmation.outcome).toBe('ok');
+    expect(confirmation.screen.visiblePathIds).toContain(nodeId);
+    expect(confirmation.screen.expandedPathIds).toContain(nodeId);
+    const card = page.locator(`[data-path-id="${nodeId}"]`);
+    await expect(card).toHaveAttribute('data-spotlight', 'true');
+    await expect(card).toHaveAttribute('data-expanded', 'true');
+    await expect(page.getByText(/Option 1 of 3/)).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('walkthrough-voice-hint.png') });
+    await emit(page, { type: 'media.output.active' });
+    await expect(page.locator('main')).toHaveClass(/phase-speaking/);
+    await expect(page.getByRole('button', { name: /walkthrough|walk me through/i })).toHaveCount(0);
+    await emit(page, { type: 'media.input.active' });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { voiceTest: { audioMuted: boolean } }).voiceTest.audioMuted)).toBe(true);
+    display.walkthrough = undefined;
+    await emitServer(page, { type: 'display', display, revision: 1 });
+    await emit(page, { type: 'media.input.quiet' });
+    await emit(page, { type: 'media.output.quiet' });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { voiceTest: { audioMuted: boolean } }).voiceTest.audioMuted)).toBe(false);
+    await expect(page.getByText('Try saying “talk me through these options.” You can interrupt at any time.', { exact: true })).toBeVisible();
+    expect(actions.filter(action => action === 'choose_path')).toHaveLength(0);
+    expect(sessions).toEqual(['GET', 'POST']);
+    await page.getByRole('button', { name: 'End conversation' }).click();
+  });
+}
+
+test('speaking during a possibility walkthrough mutes stale guide audio while keeping voice and analysis available', async ({ page }) => {
+  await fakeAudio(page); const sessions = await mockSessions(page);
+  await page.goto('/'); await page.getByRole('button', { name: 'Start conversation' }).click();
+  await emitServer(page, { type: 'story', headlineId: headlines[0].id, revision: 1 });
+  const display = explorationDisplay(); const nodeId = display.exploration!.choices![0].id;
+  display.spotlightPathId = nodeId; display.walkthrough = { nodeId, index: 0, total: 3, phase: 'speaking' };
+  await emitServer(page, { type: 'display', display, revision: 1 });
+  await emitServer(page, { type: 'research', busy: false, message: '', revision: 1 });
+  await emit(page, { type: 'media.output.active' });
+  await expect(page.locator('main')).toHaveClass(/phase-speaking/);
+  await emit(page, { type: 'media.input.active' });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { voiceTest: { audioMuted: boolean } }).voiceTest.audioMuted)).toBe(true);
+  display.walkthrough = undefined;
+  display.insight = { title: 'A different question', summary: 'We can explore another possibility.', points: [], assumptions: [], signals: [] };
+  await emitServer(page, { type: 'display', display, revision: 1 });
+  await expect(page.getByRole('heading', { name: 'A different question' })).toBeVisible();
+  await emit(page, { type: 'media.input.quiet' }); await emit(page, { type: 'media.output.quiet' });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { voiceTest: { audioMuted: boolean } }).voiceTest.audioMuted)).toBe(false);
+  expect(sessions).toEqual(['GET', 'POST']);
+  expect((await metrics(page)).stoppedTracks).toBe(0);
+  await page.getByRole('button', { name: 'End conversation' }).click();
 });

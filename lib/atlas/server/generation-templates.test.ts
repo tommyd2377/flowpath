@@ -195,7 +195,7 @@ test("cache keys invalidate on model, prompt, or semantic source changes", () =>
       source: { ...headlineFixture, title: "Updated headline" },
     }),
   );
-  assert.equal(START_PROMPT_VERSION, "start-v5-research-context");
+  assert.equal(START_PROMPT_VERSION, "start-v8-source-interpretation");
   assert.equal(EXPANSION_PROMPT_VERSION, "expand-v5-research-context");
   assert.notEqual(
     generationCacheKey({ ...base, kind: "expand", promptVersion: EXPANSION_PROMPT_VERSION }),

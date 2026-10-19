@@ -3,14 +3,15 @@ import type { ResponseCreateParamsNonStreaming } from "openai/resources/response
 
 import { AtlasApiError } from "./http";
 
-export const DEFAULT_ATLAS_MODEL = "gpt-5.6-luna";
+export const DEFAULT_ATLAS_MODEL = "gpt-6-luna";
 
 export type AtlasServerMode = "live" | "fixture";
 
 export type AtlasResponsesRequest = {
   model: string;
+  service_tier: "priority";
   store: false;
-  reasoning: { effort: "low" | "none" };
+  reasoning: { effort: "low" };
   max_output_tokens: number;
   input: Array<{
     role: "system" | "developer" | "user";
@@ -46,10 +47,20 @@ export type AtlasParsedResponse<T> = {
   _request_id?: string | null;
 };
 
+export type AtlasResponseProgress = {
+  outputText: string;
+  completedOutput: unknown[];
+};
+
 export interface AtlasResponsesAdapter {
   parse<T>(
     request: AtlasResponsesRequest,
     options: AtlasRequestOptions,
+  ): Promise<AtlasParsedResponse<T>>;
+  stream?<T>(
+    request: AtlasResponsesRequest,
+    options: AtlasRequestOptions,
+    onProgress: (progress: AtlasResponseProgress) => void,
   ): Promise<AtlasParsedResponse<T>>;
 }
 
@@ -84,19 +95,8 @@ export function resolveAtlasServerMode(
   return "live";
 }
 
-export function getAtlasModel(environment: NodeJS.ProcessEnv = process.env) {
-  const model =
-    environment.VOICE_ANALYSIS_MODEL?.trim() || DEFAULT_ATLAS_MODEL;
-  if (!/^[A-Za-z0-9._-]{1,100}$/.test(model)) {
-    throw new AtlasApiError({
-      code: "analysis_misconfigured",
-      message: "The analysis model configuration is invalid.",
-      status: 503,
-      retryable: false,
-      callConsumed: false,
-    });
-  }
-  return model;
+export function getAtlasModel() {
+  return DEFAULT_ATLAS_MODEL;
 }
 
 async function getOpenAIClient(environment: NodeJS.ProcessEnv = process.env) {
@@ -120,16 +120,67 @@ async function getOpenAIClient(environment: NodeJS.ProcessEnv = process.env) {
   return clientPromise;
 }
 
-const liveAdapter: AtlasResponsesAdapter = {
-  async parse<T>(request: AtlasResponsesRequest, options: AtlasRequestOptions) {
-    const client = await getOpenAIClient();
-    const apiRequest = request as ResponseCreateParamsNonStreaming & {
-      max_tool_calls?: number;
-    };
-    const response = await client.responses.parse(apiRequest, options);
-    return response as unknown as AtlasParsedResponse<T>;
-  },
-};
+export function createAtlasResponsesAdapter(getClient: () => Promise<OpenAI>): AtlasResponsesAdapter {
+  return {
+    async parse<T>(request: AtlasResponsesRequest, options: AtlasRequestOptions) {
+      const client = await getClient();
+      const apiRequest = {
+        ...request,
+      } as ResponseCreateParamsNonStreaming & {
+        max_tool_calls?: number;
+      };
+      const response = await client.responses.parse(apiRequest, options);
+      return response as unknown as AtlasParsedResponse<T>;
+    },
+    async stream<T>(
+      request: AtlasResponsesRequest,
+      options: AtlasRequestOptions,
+      onProgress: (progress: AtlasResponseProgress) => void,
+    ) {
+      const client = await getClient();
+      const apiRequest = {
+        ...request,
+      } as Omit<ResponseCreateParamsNonStreaming, "stream"> & { max_tool_calls?: number };
+      // The SDK request timeout ends once SSE headers arrive. Keep the same bound
+      // active through the final streamed chunk so a stalled stream cannot outlive
+      // its generation lease or keep an installation busy indefinitely.
+      const lifetime = new AbortController();
+      const signal = options.signal ? AbortSignal.any([options.signal, lifetime.signal]) : lifetime.signal;
+      const timeout = setTimeout(() => lifetime.abort(), options.timeout);
+      try {
+        const stream = client.responses.stream(apiRequest, { ...options, signal });
+        const completedOutput: unknown[] = [];
+        let outputText = "";
+        let incompleteResponse: AtlasParsedResponse<T> | undefined;
+        stream.on("response.incomplete", (event) => {
+          // The SDK parses output_text before returning finalResponse(), including
+          // truncated JSON. Preserve the terminal metadata before that parse can
+          // obscure the provider's explicit incompletion reason.
+          incompleteResponse = { ...event.response, output_parsed: null };
+        });
+        stream.on("response.output_text.delta", (event) => {
+          outputText = event.snapshot;
+          onProgress({ outputText, completedOutput: [...completedOutput] });
+        });
+        stream.on("response.output_item.done", (event) => {
+          completedOutput.push(event.item);
+          onProgress({ outputText, completedOutput: [...completedOutput] });
+        });
+        try {
+          const response = await stream.finalResponse();
+          return response as unknown as AtlasParsedResponse<T>;
+        } catch (error) {
+          if (incompleteResponse && !signal.aborted) return incompleteResponse;
+          throw error;
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  };
+}
+
+const liveAdapter = createAtlasResponsesAdapter(getOpenAIClient);
 
 export function getAtlasResponsesAdapter(): AtlasResponsesAdapter {
   return liveAdapter;

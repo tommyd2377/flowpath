@@ -1,4 +1,4 @@
-import { SCREEN_SECTIONS, screenContextKey, type ScreenReport, type ScreenRequest } from './screen-contracts';
+import { SCREEN_SECTIONS, catalogScreenReady, pathScreenReady, screenContextKey, type ScreenReport, type ScreenRequest } from './screen-contracts';
 import type { ExplorationDisplay } from './visual-contracts';
 
 type Section = typeof SCREEN_SECTIONS[number];
@@ -43,11 +43,13 @@ export function readScreen(display: ExplorationDisplay | null): ScreenReport['sc
     };
     return overlap(b.element) - overlap(a.element);
   })[0];
+  const storyCatalogId = sections.find(item => item.name === 'stories')?.element.dataset.storyCatalogId;
   return {
     contextKey: screenContextKey(display), view: display?.view ?? 'stories', width: area.width, height: area.height,
     scrollY: Math.max(0, Math.round(window.scrollY)), atTop: window.scrollY <= 2,
     atBottom: window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2,
     hidden: document.visibilityState === 'hidden',
+    ...(storyCatalogId ? { storyCatalogId, renderedStoryIds: cards.map(card => card.dataset.storyId!).slice(0, 20) } : {}),
     visibleStoryIds: cards.filter(card => visible(card)).map(card => card.dataset.storyId!).slice(0, 20),
     fullyVisibleStoryIds: cards.filter(card => visible(card, true)).map(card => card.dataset.storyId!).slice(0, 20),
     visiblePathIds: paths.filter(path => visible(path)).map(path => path.dataset.pathId!).slice(0, 6),
@@ -69,6 +71,36 @@ export async function handleScreenRequest(request: ScreenRequest, getDisplay: ()
   const report = (outcome: ScreenReport['outcome']): ScreenReport => ({ requestId: request.requestId, outcome, screen: readScreen(getDisplay()) });
   if (screenContextKey(getDisplay()) !== request.contextKey) return report('view_changed');
   if (document.visibilityState === 'hidden') return report('hidden');
+  if (request.catalog || request.pathId) {
+    // A current display reference is not proof that React has committed it.
+    // Confirm the DOM's catalog marker, every card, and the first readable card.
+    const catalog = request.catalog;
+    let interrupted = false;
+    const cancel = () => { interrupted = true; };
+    const inputs = ['touchstart', 'wheel', 'pointerdown', 'keydown'] as const;
+    inputs.forEach(event => window.addEventListener(event, cancel, { passive: true }));
+    const deadline = performance.now() + 3_000;
+    try {
+      while (performance.now() < deadline) {
+        if (signal.aborted) return null;
+        if (interrupted) return report('interrupted');
+        if (document.hidden) return report('hidden');
+        if (screenContextKey(getDisplay()) !== request.contextKey || catalog && getDisplay()?.storyCatalogId !== catalog.id
+          || request.pathId && getDisplay()?.spotlightPathId !== request.pathId) return report('view_changed');
+        const screen = readScreen(getDisplay());
+        const target = catalog ? contentElements().cards.find(card => card.dataset.storyId === catalog.storyIds[0])
+          : contentElements().paths.find(path => path.dataset.pathId === request.pathId && path.dataset.spotlight === 'true');
+        if ((catalog ? catalogScreenReady(screen, catalog) : pathScreenReady(screen, request.pathId!))
+          && target && Number(getComputedStyle(target).opacity) >= 0.95) {
+          return { requestId: request.requestId, outcome: 'ok', screen };
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 40));
+      }
+      return report('section_unavailable');
+    } finally {
+      inputs.forEach(event => window.removeEventListener(event, cancel));
+    }
+  }
   if (!request.scroll) return report('ok');
   // Cancel a delayed automatic spotlight scroll before honoring manual navigation.
   window.dispatchEvent(new Event('voice-scroll'));

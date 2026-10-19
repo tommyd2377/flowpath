@@ -18,12 +18,13 @@ export const StoryCatalogResponseSchema = z.object({
   stale: z.boolean(),
   warning: z.string().nullable(),
   curated: z.boolean(),
+  complete: z.boolean().optional(),
 }).strict();
 export type StoryCatalogResponse = z.infer<typeof StoryCatalogResponseSchema>;
 
 export const StoryCatalogMetadataSchema = StoryCatalogResponseSchema.omit({ ok: true, items: true });
-export function storyCatalogMetadata({ fetchedAt, stale, warning, curated }: StoryCatalogResponse) {
-  return { fetchedAt, stale, warning, curated };
+export function storyCatalogMetadata({ fetchedAt, stale, warning, curated, complete }: StoryCatalogResponse) {
+  return { fetchedAt, stale, warning, curated, ...(complete === undefined ? {} : { complete }) };
 }
 
 export function formatStoriesUpdatedAt(value: string) {

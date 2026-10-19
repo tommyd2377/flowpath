@@ -17,11 +17,11 @@ const QuestionSchema = z.string().trim().min(1).max(1200);
 const ModelResearchSchema = z.object({
   status: z.enum(["supported", "partial"]),
   findings: z.array(z.object({
-    text: z.string().min(1).max(500),
+    text: z.string().min(1),
     sourceUrls: z.array(z.string().min(1).max(2048)).min(1).max(3),
   }).strict()).max(6),
-  implications: z.array(z.string().min(1).max(420)).max(4),
-  uncertainties: z.array(z.string().min(1).max(320)).max(5),
+  implications: z.array(z.string().min(1)).max(4),
+  uncertainties: z.array(z.string().min(1)).max(5),
   sources: z.array(z.object({ title: z.string().min(1).max(240), url: z.string().min(1).max(2048) }).strict()).max(8),
 }).strict();
 type ModelResearch = z.infer<typeof ModelResearchSchema>;
@@ -111,7 +111,7 @@ export function createFollowupResearchService(options: {
       input.visitSignal?.throwIfAborted();
       const mode = options.mode?.() ?? resolveAtlasServerMode(environment);
       if (mode === "fixture" && environment.NODE_ENV === "production") throw requestError("fixture_mode_forbidden", "Fixture mode is unavailable in production.", 503);
-      const model = options.model ?? getAtlasModel(environment);
+      const model = options.model ?? getAtlasModel();
       const scope = `${input.installationId}:${input.visitKey ?? "visit"}`;
       const key = generationFingerprint({ scope, question: question.toLocaleLowerCase("en-US"), context: input.context, mode, model });
       for (const [cachedKey, entry] of cached) if (entry.expiresAt <= now()) cached.delete(cachedKey);
@@ -155,7 +155,7 @@ export function createFollowupResearchService(options: {
             try {
               const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(FOLLOWUP_TIMEOUT_MS)]) : AbortSignal.timeout(FOLLOWUP_TIMEOUT_MS);
               const response = await (options.adapter ?? getAtlasResponsesAdapter()).parse<ModelResearch>({
-                model, store: false, reasoning: { effort: "low" }, max_output_tokens: 2200,
+                model, service_tier: "priority", store: false, reasoning: { effort: "low" }, max_output_tokens: 2200,
                 input: [
                   { role: "system", content: RESEARCH_INSTRUCTIONS },
                   { role: "user", content: JSON.stringify({ question, context: input.context }) },

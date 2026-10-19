@@ -175,6 +175,7 @@ export async function expandAtlasWithOpenAI(
   const modelSchema = createExpansionModelOutputSchema(maxBranches);
   const request: AtlasResponsesRequest = {
     model: options.model,
+    service_tier: "priority",
     store: false,
     reasoning: { effort: "low" },
     max_output_tokens: EXPANSION_MAX_OUTPUT_TOKENS,

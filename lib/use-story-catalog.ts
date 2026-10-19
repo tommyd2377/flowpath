@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { formatStoriesUpdatedAt, StoryCatalogResponseSchema, type StoryCatalogResponse } from './story-contracts';
+import { formatStoriesUpdatedAt, type StoryCatalogResponse } from './story-contracts';
+import { readStoryCatalogResponse } from './story-stream';
 import type { ExplorationDisplay } from './visual-contracts';
 
 export const STORY_LOAD_TIMEOUT_MS = 100_000;
@@ -52,9 +53,10 @@ export function useStoryCatalog(display: ExplorationDisplay | null, voiceActive:
   }, [announce, finish]);
 
   const accept = useCallback((next: StoryCatalogResponse) => {
+    // A story list becomes usable as one complete set, including legacy streams.
+    if (next.complete === false) return;
     const previous = current.current;
     if (previous && Date.parse(next.fetchedAt) < Date.parse(previous.fetchedAt)) {
-      if (pending.current) finish();
       return;
     }
     if (!pending.current && JSON.stringify(previous) === JSON.stringify(next)) return;
@@ -81,15 +83,12 @@ export function useStoryCatalog(display: ExplorationDisplay | null, voiceActive:
     deadline.current = setTimeout(fail, STORY_LOAD_TIMEOUT_MS);
     try {
       if (viaVoice) { await viaVoice(); return; }
-      const response = await fetch('/api/stories', { cache: 'no-store', signal: controller.signal });
-      const body = StoryCatalogResponseSchema.safeParse(await response.json());
-      if (controller.signal.aborted) return;
-      if (!response.ok || !body.success) throw new Error('Stories unavailable');
-      // A voice result may have superseded the original page request.
-      if (request.current === controller) {
-        if (current.current && Date.parse(body.data.fetchedAt) < Date.parse(current.current.fetchedAt)) finish();
-        else accept(body.data);
-      }
+      const response = await fetch('/api/stories', { headers: { Accept: 'application/x-ndjson' }, cache: 'no-store', signal: controller.signal });
+      await readStoryCatalogResponse(response, next => {
+        // A voice result may have superseded the original page request.
+        if (!controller.signal.aborted && request.current === controller) accept(next);
+      });
+      if (request.current === controller) finish();
     } catch {
       if (!controller.signal.aborted && request.current === controller) fail();
     }
@@ -122,7 +121,7 @@ export function useStoryCatalog(display: ExplorationDisplay | null, voiceActive:
   const catalogError = display?.storyCatalogError;
   useEffect(() => {
     if ((!stories || !metadata) && !catalogError) return;
-    const update = catalogId ?? JSON.stringify({ stories, metadata });
+    const update = JSON.stringify({ catalogId, stories, metadata, catalogError });
     if (voiceUpdate.current === update) return;
     let disposed = false;
     queueMicrotask(() => {

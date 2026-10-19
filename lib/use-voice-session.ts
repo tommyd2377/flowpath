@@ -6,13 +6,14 @@ import { IDLE_SECONDS, SESSION_SECONDS, HOSTED_SESSION_SECONDS } from './session
 import { getInstallationId, loadSelectedHeadline } from './news-storage';
 import { emptyDisplay, ExplorationDisplaySchema, type ExplorationAction, type ExplorationDisplay } from './visual-contracts';
 import { toStoryHeadline } from './story-contracts';
+import { readExplorationResponse } from './exploration-stream';
 import { ScreenRequestSchema } from './screen-contracts';
 import { handleScreenRequest, observeScreen } from './screen-client';
 import { createSessionTransport, type SessionTransport } from './session-transport';
 import { createStartupAudioGuard, needsStartupAudioGuard, monitorLiveAudio, waitForIce } from './gpt-live/browser';
 import { createLiveIdleTimer, liveIdleMessage } from './gpt-live/idle';
 
-type ResearchStatus = { busy: boolean; message: string; revision: number };
+type ResearchStatus = { busy: boolean; message: string; revision: number; catalogPending?: boolean };
 
 type LiveSession = {
   id: string;
@@ -30,12 +31,14 @@ type LiveSession = {
   idle?: ReturnType<typeof createLiveIdleTimer>;
   requested: boolean;
   speaking: boolean;
+  suppressWalkthroughAudio?: boolean;
   userSpeaking: boolean;
   responseId?: string;
   playingId?: string;
   sdpReady: boolean;
   channelReady: boolean;
   researchBusy: boolean;
+  catalogPending?: boolean;
   researchRevision: number;
   acceptedStoryRevision?: number;
   selectionFloorRevision: number;
@@ -120,6 +123,11 @@ export function useVoiceSession() {
       });
     }
     if (mounted.current) {
+      const display = displayRef.current;
+      if (display?.walkthrough) showDisplay({ ...display, walkthrough: undefined });
+      if (display?.storyResearch && display.storyResearch.phase !== 'failed') {
+        showDisplay({ ...display, pendingPathId: null, storyResearch: { ...display.storyResearch, phase: 'failed', error: 'Research stopped when the conversation ended.' } });
+      }
       setSessionActive(false);
       setResearchBusy(false);
       setPhase('idle');
@@ -127,7 +135,7 @@ export function useVoiceSession() {
       setInputAnalyser(null);
       setOutputAnalyser(null);
     }
-  }, [dispose]);
+  }, [dispose, showDisplay]);
 
   const fail = useCallback((session: LiveSession, notice: string) => {
     if (current.current !== session) return;
@@ -145,7 +153,8 @@ export function useVoiceSession() {
         if (session.desiredHeadlineId !== headlineId) {
           const saved = loadSelectedHeadline();
           const chosen = displayRef.current?.stories?.find(story => story.id === headlineId);
-          showDisplay({ ...emptyDisplay(), headline: chosen ? toStoryHeadline(chosen) : saved?.id === headlineId ? saved : null, view: 'exploration', stories: displayRef.current?.stories });
+          showDisplay({ ...emptyDisplay(), headline: chosen ? toStoryHeadline(chosen) : saved?.id === headlineId ? saved : null, view: 'exploration', stories: displayRef.current?.stories,
+            storyPreview: chosen, storyResearch: { phase: 'gathering' } });
           session.desiredHeadlineId = headlineId;
           session.acceptedStoryRevision = undefined;
           session.selectionFloorRevision = Math.max(1, session.researchRevision + 1);
@@ -202,7 +211,7 @@ export function useVoiceSession() {
     setMessage('');
 
     const idle = () => {
-      session.idle?.observeBusy(session.researchBusy || session.selectionPending);
+      session.idle?.observeBusy(session.researchBusy || session.selectionPending || session.catalogPending === true);
       session.idle?.observeAudio({ inputActive: session.userSpeaking, outputActive: session.speaking });
       if (session.sdpReady && session.channelReady) session.idle?.start();
     };
@@ -220,6 +229,7 @@ export function useVoiceSession() {
     const showResearch = (status: ResearchStatus) => {
       session.researchRevision = status.revision;
       session.researchBusy = status.busy;
+      session.catalogPending = status.catalogPending === true;
       setResearchBusy(status.busy);
       setMessage(status.message);
       restingPhase();
@@ -329,11 +339,13 @@ export function useVoiceSession() {
             buffer = buffer.slice(end + 2);
             const data = frame.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
             if (!data) continue;
-            let event: { type?: string; busy?: boolean; message?: string; revision?: number; headlineId?: string; display?: unknown };
+            let event: { type?: string; busy?: boolean; catalogPending?: boolean; error?: boolean; message?: string; revision?: number; headlineId?: string; display?: unknown };
             try { event = JSON.parse(data); } catch { continue; }
             if (!event || typeof event !== 'object' || !alive()) continue;
             if (event.type === 'ended') {
-              stop(typeof event.message === 'string' ? event.message : 'Conversation ended. Tap the wave when you’re ready.');
+              const notice = typeof event.message === 'string' ? event.message : 'Conversation ended. Tap the wave when you’re ready.';
+              if (event.error) fail(session, notice);
+              else stop(notice);
               return;
             }
             if (typeof event.revision !== 'number' || !Number.isSafeInteger(event.revision) || event.revision < session.researchRevision) continue;
@@ -369,7 +381,7 @@ export function useVoiceSession() {
               continue;
             }
             if (event.type !== 'research' || typeof event.busy !== 'boolean') continue;
-            const status = { busy: event.busy, message: typeof event.message === 'string' ? event.message : '', revision: event.revision };
+            const status = { busy: event.busy, catalogPending: event.catalogPending === true, message: typeof event.message === 'string' ? event.message : '', revision: event.revision };
             if (session.desiredHeadlineId && event.revision !== session.acceptedStoryRevision) {
               // The initial snapshot and a preceding story must not overwrite a
               // new click while its selection acknowledgement is still in flight.
@@ -446,6 +458,14 @@ export function useVoiceSession() {
           if (!alive()) return;
           if (state.outputActive && !session.speaking) session.startupAudio?.playbackStarted();
           const inputActive = state.inputActive && Boolean(session.startupAudio?.tracks.some(track => track.enabled));
+          if (inputActive && displayRef.current?.walkthrough && session.audio) {
+            session.suppressWalkthroughAudio = true; session.audio.muted = true;
+          }
+          // Keep stale guide audio muted until its actual media is quiet, rather
+          // than treating a server instruction acknowledgment as playback end.
+          if (session.suppressWalkthroughAudio && !state.outputActive && !inputActive && session.audio) {
+            session.suppressWalkthroughAudio = false; session.audio.muted = false;
+          }
           session.speaking = state.outputActive; session.userSpeaking = inputActive;
           restingPhase(); idle();
           if (session.sdpReady) void session.transport.fetch('/api/session/screen', {
@@ -518,6 +538,13 @@ export function useVoiceSession() {
 
   const act = useCallback(async (action: ExplorationAction) => {
     const session = current.current;
+    if (session && displayRef.current?.walkthrough && session.audio) {
+      session.suppressWalkthroughAudio = true; session.audio.muted = true;
+      if (!session.speaking && !session.userSpeaking) { session.suppressWalkthroughAudio = false; session.audio.muted = false; }
+    }
+    if (action.type === 'start_walkthrough' || action.type === 'stop_walkthrough') {
+      if (!session) { setMessage('Start the voice above to hear a walkthrough.'); return; }
+    }
     const actionMessage = action.type === 'choose_path' ? 'Exploring this possibility…'
       : action.type === 'navigate_path' ? 'Returning to this path…'
         : action.type === 'compare_paths' ? 'Comparing possibilities…' : action.type === 'refresh_stories' ? 'Refreshing stories…' : 'Looking into this story…';
@@ -555,7 +582,7 @@ export function useVoiceSession() {
       } catch (error) {
         if (current.current === session) {
           session.researchBusy = false;
-          session.idle?.observeBusy(session.selectionPending);
+          session.idle?.observeBusy(session.selectionPending || session.catalogPending === true);
           setResearchBusy(false);
           setPhase(action.type === 'refresh_stories' ? session.speaking ? 'speaking' : 'listening' : 'error');
           setMessage(error instanceof Error ? error.message : 'That action could not be completed.');
@@ -565,7 +592,7 @@ export function useVoiceSession() {
       }
       return;
     }
-    if (action.type === 'start_briefing') return;
+    if (action.type === 'start_briefing' || action.type === 'start_walkthrough' || action.type === 'stop_walkthrough') return;
     offline.current?.abort();
     const controller = new AbortController();
     offline.current = controller;
@@ -573,28 +600,33 @@ export function useVoiceSession() {
     if (action.type === 'select_story') {
       const story = displayRef.current?.stories?.find((story) => story.id === action.storyId);
       const headline = story ? toStoryHeadline(story) : (loadSelectedHeadline()?.id === action.storyId ? loadSelectedHeadline() : null);
-      showDisplay({ ...emptyDisplay(), headline, view: 'exploration', stories: displayRef.current?.stories });
+      showDisplay({ ...emptyDisplay(), headline, view: 'exploration', stories: displayRef.current?.stories,
+        storyPreview: story, storyResearch: { phase: 'gathering' } });
     }
     setResearchBusy(true);
     setPhase('thinking');
     setMessage(actionMessage);
     try {
       const response = await fetch('/api/exploration', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Installation': getInstallationId() },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Installation': getInstallationId(), Accept: 'application/x-ndjson' },
         body: JSON.stringify({ action, headlineId: displayRef.current?.headline?.id }), signal: controller.signal,
       });
       if (!response.ok) throw new Error(await responseError(response));
-      const parsed = ExplorationDisplaySchema.safeParse((await response.json()).display);
-      if (!parsed.success) throw new Error('The story returned an incomplete display. Try again.');
+      await readExplorationResponse(response, (display) => {
+        if (controller.signal.aborted || current.current || revision.current !== actionRevision) return;
+        showDisplay({ ...display, view: action.type === 'refresh_stories' ? 'stories' : displayRef.current?.view ?? display.view,
+          stories: display.stories ?? displayRef.current?.stories, storyCatalog: display.storyCatalog ?? displayRef.current?.storyCatalog });
+      });
       if (controller.signal.aborted || current.current || revision.current !== actionRevision) return;
-      showDisplay({ ...parsed.data, view: action.type === 'refresh_stories' ? 'stories' : displayRef.current?.view ?? parsed.data.view, stories: parsed.data.stories ?? displayRef.current?.stories, storyCatalog: parsed.data.storyCatalog ?? displayRef.current?.storyCatalog });
       setMessage('');
       setPhase('idle');
     } catch (error) {
       if (controller.signal.aborted || current.current || revision.current !== actionRevision) return;
       setPhase('error');
       setMessage(error instanceof Error ? error.message : 'This story could not be opened. Try again.');
-      if (displayRef.current) showDisplay({ ...displayRef.current, pendingPathId: null });
+      if (displayRef.current) showDisplay({ ...displayRef.current, pendingPathId: null,
+        ...(action.type === 'select_story' ? { storyResearch: { ...displayRef.current.storyResearch, phase: 'failed' as const,
+          error: (error instanceof Error ? error.message : 'The possibility map could not be completed.').slice(0, 300) } } : {}) });
     } finally {
       if (offline.current === controller) {
         offline.current = null;

@@ -48,7 +48,7 @@ export default function Waveform({
     let amplitude = 0;
     let sampleAnalyser: AnalyserNode | null = null;
     let samples = new Float32Array(0);
-    let stroke: CanvasPattern | string = "#f6eddb";
+    let stroke: CanvasPattern | string = "#8ba8ff";
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
@@ -64,18 +64,18 @@ export default function Waveform({
       palette.width = canvas.width;
       palette.height = 1;
       const gradient = paletteContext.createLinearGradient(0, 0, width * dpr, 0);
-      gradient.addColorStop(0, "rgba(221, 191, 146, 0)");
-      gradient.addColorStop(0.13, "rgba(221, 191, 146, 0.32)");
-      gradient.addColorStop(0.36, "#d9b98c");
-      gradient.addColorStop(0.5, "#fff7e7");
-      gradient.addColorStop(0.64, "#e9d6b6");
-      gradient.addColorStop(0.87, "rgba(221, 191, 146, 0.32)");
-      gradient.addColorStop(1, "rgba(221, 191, 146, 0)");
+      gradient.addColorStop(0, "rgba(57, 102, 255, 0)");
+      gradient.addColorStop(0.13, "rgba(57, 102, 255, 0.32)");
+      gradient.addColorStop(0.36, "#3966ff");
+      gradient.addColorStop(0.5, "#dbe5ff");
+      gradient.addColorStop(0.64, "#7d9bff");
+      gradient.addColorStop(0.87, "rgba(57, 102, 255, 0.32)");
+      gradient.addColorStop(1, "rgba(57, 102, 255, 0)");
       paletteContext.fillStyle = gradient;
       paletteContext.fillRect(0, 0, palette.width, 1);
       const pattern = context.createPattern(palette, "repeat-y");
       pattern?.setTransform(new DOMMatrix().scale(1 / dpr, 1));
-      stroke = pattern ?? "#f6eddb";
+      stroke = pattern ?? "#8ba8ff";
       previousDraw = 0;
       // Resizing clears the bitmap after animation frames have run. Paint before
       // this frame reaches the screen, without creating a second animation loop.
@@ -151,7 +151,7 @@ export default function Waveform({
         context.beginPath();
         context.globalAlpha = isError ? (isMain ? 0.4 : 0.04) : isMain ? 0.95 : 0.12;
         context.lineWidth = isMain ? 1.45 : 0.85;
-        context.shadowColor = "rgba(239, 201, 143, 0.3)";
+        context.shadowColor = "rgba(57, 102, 255, 0.3)";
         context.shadowBlur = isMain ? 7 : 0;
 
         for (let i = 0; i <= pointCount; i += 1) {

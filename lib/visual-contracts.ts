@@ -10,6 +10,8 @@ export const ExplorationActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('show_stories') }).strict(),
   z.object({ type: z.literal('refresh_stories') }).strict(),
   z.object({ type: z.literal('start_briefing') }).strict(),
+  z.object({ type: z.literal('start_walkthrough') }).strict(),
+  z.object({ type: z.literal('stop_walkthrough') }).strict(),
 ]);
 export type ExplorationAction = z.infer<typeof ExplorationActionSchema>;
 
@@ -53,12 +55,19 @@ export const ExplorationDisplaySchema = z.object({
   view: z.enum(['stories', 'exploration']),
   revision: z.number().int().nonnegative(),
   stories: z.array(CuratedStorySchema).max(20).optional(),
+  storyPreview: CuratedStorySchema.optional(),
+  storyResearch: z.object({
+    phase: z.enum(['gathering', 'mapping', 'failed']),
+    snapshot: EventSnapshotSchema.optional(),
+    error: z.string().max(300).optional(),
+  }).strict().optional(),
   storyCatalog: StoryCatalogMetadataSchema.optional(),
   storyCatalogId: z.string().uuid().optional(),
   storyCatalogError: z.string().max(240).optional(),
   spotlightStoryId: z.string().min(8).max(64).nullable().optional(),
   spotlightPathId: z.string().uuid().nullable().optional(),
   pendingPathId: z.string().uuid().nullable().optional(),
+  walkthrough: z.object({ nodeId: z.string().uuid(), index: z.number().int().min(0).max(4), total: z.number().int().min(1).max(5), phase: z.enum(['waiting', 'speaking', 'paused']) }).strict().optional(),
 });
 export type ExplorationDisplay = z.infer<typeof ExplorationDisplaySchema>;
 
@@ -71,7 +80,7 @@ export function displayResult(previous: ExplorationDisplay, result: object): Exp
   if (exploration.success) {
     const visiblePaths = [exploration.data.currentNode, ...(exploration.data.choices ?? []), ...(exploration.data.comparison ?? []).map(item => item.node)];
     const spotlightPathId = visiblePaths.some(node => node?.id === previous.spotlightPathId) ? previous.spotlightPathId : null;
-    return { ...previous, headline: exploration.data.headline, exploration: exploration.data, insight: null, spotlightPathId, pendingPathId: null };
+    return { ...previous, headline: exploration.data.headline, exploration: exploration.data, storyResearch: undefined, insight: null, spotlightPathId, pendingPathId: null };
   }
   const research = ResearchDisplaySchema.safeParse(result);
   if (research.success) return { ...previous, research: research.data, insight: null };

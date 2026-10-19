@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 
-import { MAX_ATLAS_CALLS, StartAtlasRequestSchema, type StartAtlasResponse, type ExpandAtlasResponse } from "../contracts";
+import { MAX_ATLAS_CALLS, StartAtlasRequestSchema, type StartAtlasResponse, type ExpandAtlasResponse, type EventSnapshot } from "../contracts";
+import { CuratedStorySchema, type CuratedStory } from "../../story-contracts";
 import { expandAtlasWithOpenAI, validateExpansionContext, type ExpandAtlasRequest } from "./branch";
 import { createFixtureExpansionResponse, createFixtureStartResponse } from "./fixtures";
 import { GenerationCacheRepository, REGISTERED_GRAPH_RETENTION_MS, waitForGenerationTemplate } from "./generation-cache";
@@ -18,8 +19,12 @@ import { atlasIdempotencyKey, atlasSafetyIdentifier, runWithAtlasRequestGuard } 
 import { startAtlasWithOpenAI } from "./verify";
 
 export type StartInput = z.infer<typeof StartAtlasRequestSchema>;
+export type StartGenerationProgress = {
+  context?: CuratedStory;
+  onResearch?: (snapshot: EventSnapshot) => void;
+};
 export type GenerationService = {
-  start(input: StartInput, signal?: AbortSignal): Promise<StartAtlasResponse>;
+  start(input: StartInput, signal?: AbortSignal, progress?: StartGenerationProgress): Promise<StartAtlasResponse>;
   expand(input: ExpandAtlasRequest, signal?: AbortSignal): Promise<ExpandAtlasResponse>;
 };
 
@@ -126,8 +131,12 @@ export function createGenerationService(options: {
   }
 
   return {
-    async start(input, signal) {
+    async start(input, signal, progress) {
       StartAtlasRequestSchema.parse(input);
+      const context = progress?.context ? CuratedStorySchema.parse(progress.context) : undefined;
+      if (context && context.id !== input.headline.id) {
+        throw unavailable("story_context_mismatch", "The story context does not match the selected headline.", 400);
+      }
       signal?.throwIfAborted();
       if ((options.mode?.() ?? resolveAtlasServerMode()) === "fixture" && process.env.NODE_ENV === "production") {
         throw unavailable("fixture_mode_forbidden", "Fixture mode is unavailable in production.", 503);
@@ -136,18 +145,28 @@ export function createGenerationService(options: {
       const replay = await getRegisteredStartResponse(input, { repository });
       if (replay) return replay;
       await requestReservation(input.installationId);
+      let publishedResearch: EventSnapshot | undefined;
+      const onResearch = progress?.onResearch ? (snapshot: EventSnapshot) => {
+        signal?.throwIfAborted();
+        publishedResearch = snapshot;
+        progress.onResearch?.(snapshot);
+      } : undefined;
       const result = await template({
-        ...input, kind: "start", source: input.headline, promptVersion: START_PROMPT_VERSION,
+        ...input, kind: "start", source: context ? { headline: input.headline, initialCatalogContext: context } : input.headline,
+        promptVersion: START_PROMPT_VERSION,
         schema: StartGenerationTemplateSchema.options[0], signal,
         async generate(mode) {
           const response = mode === "fixture" ? createFixtureStartResponse(input)
-            : await startAtlasWithOpenAI(input, { adapter: options.adapter ?? getAtlasResponsesAdapter(), model: options.model ?? getAtlasModel(), signal });
+            : await startAtlasWithOpenAI(input, { adapter: options.adapter ?? getAtlasResponsesAdapter(), model: options.model ?? getAtlasModel(), signal, context, onResearch });
           if (response.kind !== "atlas") throw unavailable("model_output_invalid", "The analysis service did not return a possibility map.", 502);
+          if (mode === "fixture") onResearch?.(response.snapshot);
           return { payload: StartGenerationTemplateSchema.options[0].parse(startResponseToTemplate(response)),
             createdAt: response.snapshot.capturedAt };
         },
       });
-      const response = materializeStartTemplate(result.payload, input, { ...result, capturedAt: result.createdAt });
+      const response = materializeStartTemplate(result.payload, input, {
+        ...result, capturedAt: result.createdAt, snapshotId: publishedResearch?.id,
+      });
       return registerStartedGraph(input, response, { repository });
     },
     async expand(input, signal) {

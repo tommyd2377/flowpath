@@ -50,13 +50,14 @@ test("expansion is no-tool, stateless, bounded, and derives server depth and IDs
   const adapter = new MockResponsesAdapter(branchResponse());
   const result = await expandAtlasWithOpenAI(expansionInput(), {
     adapter,
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
     createId: testIdFactory(),
   });
 
   assert.equal(adapter.calls.length, 1);
   const call = adapter.calls[0];
-  assert.equal(call.request.model, "gpt-5.6-luna");
+  assert.equal(call.request.model, "gpt-6-luna");
+  assert.equal(call.request.service_tier, "priority");
   assert.equal(call.request.store, false);
   assert.deepEqual(call.request.reasoning, { effort: "low" });
   assert.equal(Object.hasOwn(call.request, "tools"), false);

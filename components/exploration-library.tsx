@@ -1,16 +1,19 @@
 'use client';
 
-import { createContext, useContext, useRef, useState } from 'react';
+import { createContext, useContext, useId, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ElementNode } from '@openuidev/react-lang';
 import { MotionSection, layoutTransition, revealTransition, useSpotlightScroll, useCardHover } from './motion-primitives';
 import { createLibrary, defineComponent, useTriggerAction } from './openui-runtime';
 import { ArrowLeft, ArrowUpRight, ChevronRight, Clock3, GitBranch, Globe2 } from 'lucide-react';
 import { z } from 'zod/v4';
+import { compactResearchText } from '@/lib/research-presentation';
+import type { ExplorationDisplay } from '@/lib/visual-contracts';
 
 export const ExplorationBusyContext = createContext(false);
 export const ExplorationDirectionContext = createContext(1);
 export const ExplorationSpotlightContext = createContext<string | null>(null);
+export const ExplorationVoiceContext = createContext<{ active: boolean; walkthrough?: ExplorationDisplay['walkthrough'] }>({ active: false });
 
 const Source = z.object({ id: z.string(), title: z.string(), url: z.string(), domain: z.string() });
 const Fact = z.object({ text: z.string(), sourceIds: z.array(z.string()) });
@@ -28,28 +31,44 @@ function SourceLinks({ sources }: { sources: z.infer<typeof Source>[] }) {
   ))}</ul> : null;
 }
 
+function ResearchText({ text, limit = 500, expandLabel = 'Show full fact', as = 'p', inactive = false }: {
+  text: string; limit?: number; expandLabel?: string; as?: 'p' | 'span'; inactive?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+  const preview = compactResearchText(text, limit);
+  const Content = as;
+  return <>
+    <Content className="fact-text" id={contentId}>{expanded ? text : preview.text}</Content>
+    {preview.shortened && <button className="quiet-button fact-text-toggle" type="button" aria-expanded={expanded} aria-controls={contentId} tabIndex={inactive ? -1 : undefined} onClick={() => setExpanded(value => !value)}>
+      {expanded ? 'Show less' : expandLabel}
+    </button>}
+  </>;
+}
+
 function FactList({ facts, sources }: { facts: z.infer<typeof Fact>[]; sources: z.infer<typeof Source>[] }) {
   return <ul className="evidence-list">{facts.map((fact, index) => (
-    <li key={index}><p>{fact.text}</p><span className="fact-attribution">{fact.sourceIds.map(id => {
+    <li key={index}><ResearchText key={fact.text} text={fact.text} /><span className="fact-attribution">{fact.sourceIds.map(id => {
       const source = sources.find(item => item.id === id);
       return source ? <a key={id} href={source.url} target="_blank" rel="noopener noreferrer">{source.domain}<ArrowUpRight aria-hidden="true" size={10} /></a> : null;
     })}</span></li>
   ))}</ul>;
 }
 
-function TextList({ items }: { items: string[] }) {
-  return <ul className="detail-list">{items.map((item, index) => <li key={index}>{item}</li>)}</ul>;
+function TextList({ items, compact = false }: { items: string[]; compact?: boolean }) {
+  return <ul className="detail-list">{items.map((item, index) => <li key={index}>{compact
+    ? <ResearchText key={item} text={item} as="span" expandLabel="Show full detail" /> : item}</li>)}</ul>;
 }
 
 const StoryOverview = defineComponent({
   name: 'StoryOverview',
   description: 'The selected story and its researched context, with source timing.',
-  props: z.object({ title: z.string(), summary: z.string(), publisher: z.string(), capturedAt: z.string(), evidenceLabel: z.string(), storyId: z.string(), compact: z.boolean() }),
+  props: z.object({ title: z.string(), summary: z.string(), publisher: z.string(), capturedAt: z.string(), evidenceLabel: z.string(), storyId: z.string(), compact: z.boolean(), publishedAt: z.string().optional() }),
   component: ({ props }) => <motion.header layout layoutId={`story-${props.storyId}`} className={`story-overview${props.compact ? ' story-overview-compact' : ''}`} style={{ borderRadius: 13 }}>
     <div className="section-eyebrow"><Globe2 size={13} aria-hidden="true" /> THE STORY</div>
     <motion.h2 layout="position" layoutId={`story-title-${props.storyId}`} tabIndex={-1}>{props.title}</motion.h2>
-    {props.summary && <motion.p layout="position" className="story-summary" initial={false} animate={{ height: props.compact ? 0 : 'auto', opacity: props.compact ? 0 : 1 }} aria-hidden={props.compact || undefined} style={{ overflow: 'hidden' }}>{props.summary}</motion.p>}
-    <motion.p layout="position" className="story-meta"><span>{props.evidenceLabel}</span>{props.capturedAt && <><span aria-hidden="true">·</span><span>Context from {dateLabel(props.capturedAt)}</span></>}{!props.capturedAt && props.publisher && <><span aria-hidden="true">·</span><span>{props.publisher}</span></>}</motion.p>
+    {props.summary && <motion.p layout="position" className="story-summary" initial={false} animate={{ height: props.compact ? 0 : 'auto', opacity: props.compact ? 0 : 1 }} aria-hidden={props.compact || undefined} style={{ overflow: 'hidden' }}><ResearchText key={props.summary} text={props.summary} as="span" limit={900} expandLabel="Show full context" inactive={props.compact} /></motion.p>}
+    <motion.p layout="position" className="story-meta"><span>{props.evidenceLabel}</span>{props.capturedAt && <><span aria-hidden="true">·</span><span>Context from {dateLabel(props.capturedAt)}</span></>}{!props.capturedAt && props.publisher && <><span aria-hidden="true">·</span><span>{props.publisher}</span></>}{!props.capturedAt && props.publishedAt && <><span aria-hidden="true">·</span><span>Published {dateLabel(props.publishedAt)}</span></>}</motion.p>
   </motion.header>,
 });
 
@@ -97,6 +116,8 @@ const ChoiceCards = defineComponent({
     const triggerAction = useTriggerAction();
     const busy = useContext(ExplorationBusyContext);
     const spotlight = useContext(ExplorationSpotlightContext);
+    const voice = useContext(ExplorationVoiceContext);
+    const walking = voice.active && voice.walkthrough && voice.walkthrough.phase !== 'paused';
     const [hovered, setHovered] = useCardHover();
     const [focused, setFocused] = useState<string | null>(null);
     const grid = useRef<HTMLDivElement>(null);
@@ -105,6 +126,10 @@ const ChoiceCards = defineComponent({
       <div className="section-heading"><div><div className="section-eyebrow">WHERE COULD THIS GO?</div><h3>Possible next steps</h3></div>
         {props.choices.length >= 2 && <button className="quiet-button" type="button" disabled={busy} onClick={() => triggerAction('Compare these possibilities', undefined, { type: 'compare_paths', params: { nodeIds: props.choices.map(choice => choice.id) } })}>Compare paths <ArrowUpRight size={13} aria-hidden="true" /></button>}
       </div>
+      <p className="interaction-note possibility-voice-hint" role={walking || voice.walkthrough?.phase === 'paused' ? 'status' : undefined}>{walking ? `Option ${voice.walkthrough!.index + 1} of ${voice.walkthrough!.total}. Speak to interrupt or say “stop.”`
+        : voice.walkthrough?.phase === 'paused' ? 'Walkthrough paused. Say “talk me through these options” to restart, or ask about this option.'
+          : voice.active ? 'Try saying “talk me through these options.” You can interrupt at any time.'
+            : 'Tap the wave, then say “talk me through these options.”'}</p>
       <motion.div ref={grid} layout={!reduced} className="possibility-grid" data-spotlighting={Boolean(spotlight)}><AnimatePresence initial={false} mode="popLayout">{props.choices.map((choice, index) => {
         const expanded = spotlight ? spotlight === choice.id : hovered === choice.id || focused === choice.id;
         return <motion.button layout={!reduced} layoutId={reduced ? undefined : `path-${choice.id}`} data-path-id={choice.id} data-spotlight={spotlight === choice.id}
@@ -119,7 +144,7 @@ const ChoiceCards = defineComponent({
         </motion.span>
         <span className="possibility-horizon"><Clock3 size={11} aria-hidden="true" />{choice.horizon}</span>
       </motion.button>; })}</AnimatePresence></motion.div>
-      <p className="interaction-note">Say a name or number to explore it, or choose a card. These are possibilities, not forecasts.</p>
+      <p className="interaction-note">Ask about an option to discuss it; choose a card to explore further. These are possibilities, not forecasts.</p>
     </section>;
   },
 });
@@ -153,8 +178,8 @@ const ResearchUpdate = defineComponent({
   props: z.object({ question: z.string(), researchedAt: z.string(), findings: z.array(Fact), implications: z.array(z.string()), uncertainties: z.array(z.string()), sources: z.array(Source) }),
   component: ({ props }) => <section className="research-update" aria-label="Latest web research"><div className="section-eyebrow"><Globe2 size={13} aria-hidden="true" /> FRESH CONTEXT{props.researchedAt && <span>{dateLabel(props.researchedAt)}</span>}</div><h3>{props.question || 'What the latest reporting adds'}</h3>
     <FactList facts={props.findings} sources={props.sources} />
-    {props.implications.length > 0 && <div className="research-implications"><h4>What this could mean</h4><TextList items={props.implications} /></div>}
-    {props.uncertainties.length > 0 && <div className="uncertainty-note"><h4>Still open</h4><TextList items={props.uncertainties} /></div>}
+    {props.implications.length > 0 && <div className="research-implications"><h4>What this could mean</h4><TextList items={props.implications} compact /></div>}
+    {props.uncertainties.length > 0 && <div className="uncertainty-note"><h4>Still open</h4><TextList items={props.uncertainties} compact /></div>}
     <SourceLinks sources={props.sources} />
   </section>,
 });
@@ -162,9 +187,9 @@ const ResearchUpdate = defineComponent({
 const EvidencePanel = defineComponent({
   name: 'EvidencePanel', description: 'The established reporting behind the exploration, with clickable source attribution.',
   props: z.object({ facts: z.array(Fact), uncertainties: z.array(z.string()), sources: z.array(Source) }),
-  component: ({ props }) => <details className="evidence-panel" open><summary><span>Reporting &amp; sources</span><span>{props.sources.length} {props.sources.length === 1 ? 'source' : 'sources'}<ChevronRight size={14} aria-hidden="true" /></span></summary>
+  component: ({ props }) => <details className="evidence-panel"><summary><span>Reporting &amp; sources</span><span>{props.sources.length} {props.sources.length === 1 ? 'source' : 'sources'}<ChevronRight size={14} aria-hidden="true" /></span></summary>
     <div className="evidence-content"><FactList facts={props.facts} sources={props.sources} />
-      {props.uncertainties.length > 0 && <div className="uncertainty-note"><h4>What remains uncertain</h4><TextList items={props.uncertainties} /></div>}
+      {props.uncertainties.length > 0 && <div className="uncertainty-note"><h4>What remains uncertain</h4><TextList items={props.uncertainties} compact /></div>}
       <SourceLinks sources={props.sources} />
     </div>
   </details>,
@@ -172,8 +197,8 @@ const EvidencePanel = defineComponent({
 
 const ContextNote = defineComponent({
   name: 'ContextNote', description: 'An explanation of incomplete evidence or the boundary of a saved path.',
-  props: z.object({ title: z.string(), message: z.string() }),
-  component: ({ props }) => <aside className="context-note"><h3>{props.title}</h3><p>{props.message}</p><p className="interaction-note">We can keep talking about the wider implications.</p></aside>,
+  props: z.object({ title: z.string(), message: z.string(), continuation: z.boolean().optional() }),
+  component: ({ props }) => <aside className="context-note"><h3>{props.title}</h3><p>{props.message}</p>{props.continuation !== false && <p className="interaction-note">We can keep talking about the wider implications.</p>}</aside>,
 });
 
 const ExplorationCanvas = defineComponent({

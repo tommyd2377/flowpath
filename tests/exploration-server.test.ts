@@ -7,11 +7,11 @@ import test, { type TestContext } from "node:test";
 import { createClient } from "@libsql/client";
 
 import { createExplorationService, FIXTURE_HEADLINES } from "../lib/exploration-server";
-import type { HeadlineItem, PossibilityNode } from "../lib/atlas/contracts";
+import type { EventSnapshot, HeadlineItem, PossibilityNode } from "../lib/atlas/contracts";
 import { GenerationCacheRepository, resolveGenerationDatabaseConfig } from "../lib/atlas/server/generation-cache";
 import { createGenerationService, type GenerationService } from "../lib/atlas/server/generation-service";
 import { AtlasApiError } from "../lib/atlas/server/http";
-import { createFixtureExpansionResponse } from "../lib/atlas/server/fixtures";
+import { createFixtureExpansionResponse, createFixtureStartResponse } from "../lib/atlas/server/fixtures";
 import { commitRegisteredExpansion } from "../lib/atlas/server/graph-registry";
 import { atlasSafetyIdentifier } from "../lib/atlas/server/request-guard";
 import { initialParsedOutput, MockResponsesAdapter } from "../lib/atlas/server/openai-test-fixtures";
@@ -94,6 +94,43 @@ test("concurrent and repeated selections and choices consume one analysis each",
   assert.equal(result(selected[0]).currentNode?.id, result(selected[1]).currentNode?.id);
   assert.equal(result(selected[1]).limits.callsUsed, 2);
   assert.deepEqual(result(selected[0]).choices, result(selected[1]).choices);
+});
+
+test("checked research reaches joined selections before a map is saved without another generation", async t => {
+  const h = harness(t);
+  let release!: () => void, began!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { began = resolve; });
+  let starts = 0;
+  let expected!: EventSnapshot;
+  const service = h.make({
+    async start(input, signal, progress) {
+      starts++;
+      const response = createFixtureStartResponse(input);
+      assert.equal(response.kind, 'atlas');
+      if (response.kind !== 'atlas') throw new Error('Expected fixture map');
+      expected = response.snapshot;
+      progress?.onResearch?.({ ...expected, headline: FIXTURE_HEADLINES[1] });
+      progress?.onResearch?.({ ...expected, facts: [] });
+      progress?.onResearch?.(expected);
+      began();
+      await barrier;
+      return h.generation.start(input, signal);
+    }, expand: h.generation.expand,
+  });
+  const first: EventSnapshot[] = [], joined: EventSnapshot[] = [];
+  const pending = service.selectStory(h.installationId, FIXTURE_HEADLINES[0].id, undefined, snapshot => first.push(snapshot));
+  await started;
+  assert.deepEqual(first, [expected]);
+  assert.equal((await service.getDisplay(h.installationId)).exploration, null);
+  const second = service.selectStory(h.installationId, FIXTURE_HEADLINES[0].id, undefined, snapshot => joined.push(snapshot));
+  assert.deepEqual(joined, [expected]);
+  release();
+  const [one, two] = await Promise.all([pending, second]);
+  assert.equal(result(one).graphId, result(two).graphId);
+  assert.equal(starts, 1);
+  assert.equal(result(one).limits.callsUsed, 1);
+  assert.equal((await service.getDisplay(h.installationId)).exploration?.choices?.length, 3);
 });
 
 test("sparse research creates a reusable map without an evidence retry or extra model call", async t => {

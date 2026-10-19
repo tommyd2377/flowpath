@@ -21,7 +21,7 @@ export const STORY_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 export const STORY_RESEARCH_TIMEOUT_MS = 75_000;
 export const STORY_HISTORY_LIMIT = 96;
 const MAX_STALE_MS = 24 * 60 * 60 * 1000;
-const CATALOG_VERSION = "voice-stories-v1";
+const CATALOG_VERSION = "voice-stories-v3-complete";
 export const STORY_FEED_URLS = [
   GOOGLE_NEWS_RSS_URL,
   "https://news.google.com/rss/topics/CAAqKggKIiRDQkFTRlFvSUwyMHZNRGx1YlY4U0JXVnVMVlZUR2dKVlV5Z0FQAQ?hl=en-US&gl=US&ceid=US:en",
@@ -29,19 +29,22 @@ export const STORY_FEED_URLS = [
 ];
 const FALLBACK_WARNING = "Showing uncurated Google News headlines. AI grouping and ranking are temporarily unavailable.";
 const STALE_WARNING = "Showing the last curated stories while a fresh selection is unavailable.";
+function catalogTtl(catalog?: StoryCatalogResponse) {
+  return catalog?.curated ? STORY_CACHE_TTL_MS : STORY_REFRESH_COOLDOWN_MS;
+}
 
+const ModelStorySchema = z.object({
+  title: z.string().min(1).max(240),
+  summary: z.string().min(1).max(500),
+  whyItMatters: z.string().min(1).max(420),
+  scope: z.enum(["us", "global", "both"]),
+  memberIds: z.array(z.string().min(8).max(64)).min(1).max(90),
+  sourceUrls: z.array(z.string().min(1).max(2048)).max(4),
+}).strict();
 const ModelCatalogSchema = z.object({
-  stories: z.array(z.object({
-    title: z.string().min(1).max(240),
-    summary: z.string().min(1).max(500),
-    whyItMatters: z.string().min(1).max(420),
-    scope: z.enum(["us", "global", "both"]),
-    memberIds: z.array(z.string().min(8).max(64)).min(1).max(90),
-    sourceUrls: z.array(z.string().min(1).max(2048)).max(4),
-  }).strict()).min(1).max(MAX_CURATED_STORIES),
+  stories: z.array(ModelStorySchema).min(1).max(MAX_CURATED_STORIES),
   sources: z.array(z.object({ title: z.string().min(1).max(240), url: z.string().min(1).max(2048) }).strict()).max(16),
 }).strict();
-
 const INSTRUCTIONS = [
   "Select and rank up to 20 distinct, consequential current US and global STORIES from the supplied Google News RSS candidates. Group multiple reports about the same event or continuing development into one story. Fewer than 20 is preferable to repetition or weak filler. A story is a real development, not a broad topic containing unrelated events.",
   "The supplied RSS reporting is enough to group and assess stories. Search the web only if additional context is necessary, at most twice. Prefer primary sources and credible reporting. Rank material consequences: people affected, severity, economic or institutional impact, geopolitical implications, durable policy changes, and meaningful near-term decisions. Do not rank by clicks, celebrity, outrage, partisan preference, ideological agreement, or how many duplicate headlines a story has. Include both US and global developments when supported; do not invent balance or a quota.",
@@ -50,14 +53,13 @@ const INSTRUCTIONS = [
   "Source URLs for broader context must be actual HTTPS URLs returned by or consulted during these searches. List those URLs in sources and in each relevant story's sourceUrls. Do not substitute publisher homepages as evidence or invent URLs. Without a consulted source for a story, keep its summary strictly to the supplied headline facts and frame whyItMatters as conditional significance, not additional factual claims. Even with sources, distinguish current reporting from inference and uncertain consequences.",
   "Use empty sources and sourceUrls arrays when no additional sources were consulted. Keep each summary and whyItMatters to one short sentence, at most 35 words each. The summaries and whyItMatters are short research context, not scripts, prediction trees, probabilities, or directions for a voice agent. scope is us for mainly US domestic effects, global for mainly international effects, both when substantive effects span both.",
 ].join("\n");
-
 export function stableStoryId(memberIds: string[]) {
   return createHash("sha256").update(JSON.stringify([...new Set(memberIds)].sort())).digest("hex");
 }
 
 function fixtureCatalog(now: number): StoryCatalogResponse {
   return {
-    ok: true, fetchedAt: new Date(now).toISOString(), stale: false, curated: true,
+    ok: true, fetchedAt: new Date(now).toISOString(), stale: false, curated: true, complete: true,
     warning: "Fixture stories: no live feed or AI curation was used.",
     items: FIXTURE_HEADLINES.map((headline, index) => ({
       ...headline, summary: headline.title.replace("Fixture: ", ""),
@@ -69,7 +71,7 @@ function fixtureCatalog(now: number): StoryCatalogResponse {
 
 function fallbackCatalog(items: HeadlineItem[], now: number, stale = false): StoryCatalogResponse {
   return {
-    ok: true, fetchedAt: new Date(now).toISOString(), stale, curated: false, warning: items.length ? FALLBACK_WARNING : "Google News headlines are temporarily unavailable and no saved headlines are available.",
+    ok: true, fetchedAt: new Date(now).toISOString(), stale, curated: false, complete: true, warning: items.length ? FALLBACK_WARNING : "Google News headlines are temporarily unavailable and no saved headlines are available.",
     items: items.slice(0, MAX_CURATED_STORIES).map(headline => ({
       ...headline, id: stableStoryId([headline.id]), summary: headline.title,
       whyItMatters: "",
@@ -103,6 +105,20 @@ export class StoryCatalogRepository {
     await this.initialize();
     const result = await this.client.execute({ sql: "SELECT payload_json FROM voice_story_catalogs WHERE version = ? ORDER BY created_at DESC, rowid DESC LIMIT 1", args: [version] });
     return this.parse(result.rows[0]?.payload_json);
+  }
+
+  async refreshState(version: string, owner?: string) {
+    await this.initialize();
+    // Pin subsequent reads to the original owner's completed catalog.
+    const result = await this.client.execute({
+      sql: `SELECT owner_token, lease_expires_at,
+        (SELECT payload_json FROM voice_story_catalogs WHERE id = 'catalog:' || COALESCE(?, owner_token) AND version = ? LIMIT 1) AS final_payload
+        FROM voice_story_refresh_guard WHERE singleton = 1`,
+      args: [owner ?? null, version],
+    });
+    const row = result.rows[0];
+    if (!row) return null;
+    return { owner: String(row.owner_token), leaseExpiresAt: Number(row.lease_expires_at), final: this.parse(row.final_payload) };
   }
 
   private parse(value: unknown): StoryCatalogResponse | null {
@@ -151,11 +167,11 @@ export class StoryCatalogRepository {
     const statements = [];
     if (catalog) statements.push({
       sql: "INSERT INTO voice_story_catalogs(id, version, created_at, payload_json) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM voice_story_refresh_guard WHERE singleton = 1 AND owner_token = ?)",
-      args: [randomUUID(), version, now, JSON.stringify(catalog), owner],
+      args: [`catalog:${owner}`, version, now, JSON.stringify(catalog), owner],
     });
     statements.push({
       sql: "UPDATE voice_story_refresh_guard SET owner_token = '', lease_expires_at = 0, next_allowed_at = MAX(next_allowed_at, ?) WHERE singleton = 1 AND owner_token = ?",
-      args: [now + (catalog?.curated ? STORY_CACHE_TTL_MS : STORY_REFRESH_COOLDOWN_MS), owner],
+      args: [now + catalogTtl(catalog), owner],
     });
     statements.push({ sql: "DELETE FROM voice_story_catalogs WHERE id NOT IN (SELECT id FROM voice_story_catalogs ORDER BY created_at DESC, rowid DESC LIMIT ?)", args: [STORY_HISTORY_LIMIT] });
     await this.client.batch(statements, "write");
@@ -170,12 +186,39 @@ export function createStoryCatalogService(options: {
   mode?: () => AtlasServerMode;
   model?: string;
   now?: () => number;
+  wait?: (milliseconds: number) => Promise<void>;
 }) {
   const now = options.now ?? Date.now;
+  const wait = options.wait ?? (milliseconds => new Promise<void>(resolve => setTimeout(resolve, milliseconds)));
   const feeds = options.feeds ?? STORY_FEED_URLS.map(url => createHeadlineFeedService({ url, now }));
   const repository = () => typeof options.repository === "function" ? options.repository() : options.repository;
-  let inFlight: Promise<StoryCatalogResponse> | null = null;
+  type Refresh = { promise: Promise<StoryCatalogResponse>; latest: StoryCatalogResponse | null; observers: Set<(catalog: StoryCatalogResponse) => void> };
+  let inFlight: Refresh | null = null;
   let candidates: { items: HeadlineItem[]; stale: boolean; fetchedAt: number } | null = null;
+
+  async function joinRefresh(store: StoryCatalogRepository, version: string) {
+    let state = await store.refreshState(version);
+    if (!state?.owner || state.leaseExpiresAt <= now()) {
+      // The owner may have finished between our failed claim and this read.
+      const completed = await store.latest(version);
+      return completed && now() - Date.parse(completed.fetchedAt) < catalogTtl(completed) ? completed : null;
+    }
+    const owner = state.owner;
+    // Include the owner's feed loading before its shared research deadline.
+    let budget = Math.min(STORY_RESEARCH_TIMEOUT_MS + 15_000, state.leaseExpiresAt - now());
+    const deadline = Date.now() + budget;
+    for (;;) {
+      if (state.final) return state.final;
+      if (state.owner !== owner || state.leaseExpiresAt <= now() || budget <= 0 || Date.now() >= deadline) break;
+      const delay = Math.min(1000, budget, state.leaseExpiresAt - now(), deadline - Date.now());
+      await wait(delay);
+      budget -= delay;
+      const next = await store.refreshState(version, owner);
+      if (!next) break;
+      state = next;
+    }
+    return null;
+  }
 
   async function readCandidates() {
     const results = await Promise.allSettled(feeds.slice(0, 3).map(feed => feed.getHeadlines()));
@@ -197,18 +240,19 @@ export function createStoryCatalogService(options: {
     return candidates = { items, stale, fetchedAt };
   }
 
-  async function curate(items: HeadlineItem[], model: string): Promise<CuratedStory[]> {
+  async function curate(items: HeadlineItem[], model: string, deadline: number, signal: AbortSignal): Promise<CuratedStory[]> {
     // Keep long RSS IDs and redirect URLs out of the model's output budget.
     // Resolve these request-local references back to trusted feed records below.
     const lookup = new Map(items.map((item, index) => [`item-${String(index + 1).padStart(3, "0")}`, item]));
     const input = [...lookup].map(([id, item]) => ({ id, title: item.title, publisher: item.publisher, publishedAt: item.publishedAt }));
+    signal.throwIfAborted();
+    const timeout = Math.max(1, deadline - Date.now());
     const response = await (options.adapter ?? getAtlasResponsesAdapter()).parse({
-      model, store: false, reasoning: { effort: "low" }, max_output_tokens: 6000,
+      model, service_tier: "priority", store: false, reasoning: { effort: "low" }, max_output_tokens: 6000,
       input: [{ role: "system", content: INSTRUCTIONS }, { role: "user", content: JSON.stringify({ asOf: new Date(now()).toISOString(), candidates: input }) }],
       text: { format: zodTextFormat(ModelCatalogSchema, "voice_story_catalog"), verbosity: "low" },
-      tools: [{ type: "web_search", search_context_size: "medium" }], max_tool_calls: 2,
-      parallel_tool_calls: false, include: ["web_search_call.action.sources"],
-    }, { timeout: STORY_RESEARCH_TIMEOUT_MS, maxRetries: 0, signal: AbortSignal.timeout(STORY_RESEARCH_TIMEOUT_MS) });
+      tools: [{ type: "web_search", search_context_size: "medium" }], max_tool_calls: 2, parallel_tool_calls: false, include: ["web_search_call.action.sources"],
+    }, { timeout, maxRetries: 0, signal });
     const evidence = extractResponseEvidence(response.output);
     if (response.status !== "completed" || response.error || response.incomplete_details || evidence.refusal || evidence.webSearchCalls > 2) throw new Error("Story research was incomplete.");
     const parsed = ModelCatalogSchema.parse(response.output_parsed);
@@ -250,11 +294,15 @@ export function createStoryCatalogService(options: {
     try {
       store = repository();
       cached = await store.latest(version);
-      if (cached && now() - Date.parse(cached.fetchedAt) < (cached.curated ? STORY_CACHE_TTL_MS : STORY_REFRESH_COOLDOWN_MS)) return cached;
+      if (cached && now() - Date.parse(cached.fetchedAt) < catalogTtl(cached)) return cached;
       claimed = await store.claim(owner, now());
     } catch { store = null; /* Without a durable guard, do not dispatch a paid request. */ }
     let currentFeed: typeof candidates = null;
     try {
+      if (!claimed && store && mode) {
+        const joined = await joinRefresh(store, version);
+        if (joined) return joined;
+      }
       const feed = currentFeed = await readCandidates();
       if (!claimed || !store || !mode) {
         // Paid curation cooldowns do not prevent browsing current public RSS headlines.
@@ -263,8 +311,10 @@ export function createStoryCatalogService(options: {
         else if (store) await store.rememberFallback(fallback, now());
         return fallback;
       }
-      const items = await curate(feed.items, model);
-      const catalog = StoryCatalogResponseSchema.parse({ ok: true, items, fetchedAt: new Date(feed.fetchedAt).toISOString(), stale: feed.stale, curated: true, warning: feed.stale ? "Some Google News feeds could not be refreshed; this selection uses the available reporting." : null });
+      const deadline = Date.now() + STORY_RESEARCH_TIMEOUT_MS;
+      const signal = AbortSignal.timeout(STORY_RESEARCH_TIMEOUT_MS);
+      const items = await curate(feed.items, model, deadline, signal);
+      const catalog = StoryCatalogResponseSchema.parse({ ok: true, items, fetchedAt: new Date(feed.fetchedAt).toISOString(), stale: feed.stale, curated: true, complete: true, warning: feed.stale ? "Some Google News feeds could not be refreshed; this selection uses the available reporting." : null });
       await store.finish(owner, now(), version, catalog);
       return catalog;
     } catch (error) {
@@ -283,20 +333,39 @@ export function createStoryCatalogService(options: {
     }
   }
 
-  async function getStories(signal?: AbortSignal) {
+  async function getStories(signal?: AbortSignal, onUpdate?: (catalog: StoryCatalogResponse) => void) {
     signal?.throwIfAborted();
-    inFlight ??= refresh().finally(() => { inFlight = null; });
+    if (!inFlight) {
+      const refreshState: Refresh = { promise: null as unknown as Promise<StoryCatalogResponse>, latest: null, observers: new Set() };
+      const publish = (catalog: StoryCatalogResponse) => {
+        refreshState.latest = catalog;
+        for (const observer of refreshState.observers) {
+          try { observer(catalog); } catch { /* An observer cannot interrupt shared catalog work. */ }
+        }
+      };
+      refreshState.promise = refresh().then(catalog => { publish(catalog); return catalog; }).finally(() => { if (inFlight === refreshState) inFlight = null; });
+      inFlight = refreshState;
+    }
     // A disconnected page must not cancel a catalog refresh shared with other visitors.
     const shared = inFlight;
-    if (!signal) return shared;
+    if (onUpdate) {
+      shared.observers.add(onUpdate);
+      if (shared.latest) {
+        try { onUpdate(shared.latest); } catch { /* Observer errors belong to the subscriber. */ }
+      }
+    }
     let onAbort: (() => void) | undefined;
     try {
-      return await Promise.race([shared, new Promise<never>((_, reject) => {
+      if (!signal) return await shared.promise;
+      return await Promise.race([shared.promise, new Promise<never>((_, reject) => {
         onAbort = () => reject(signal.reason);
         signal.addEventListener("abort", onAbort, { once: true });
         if (signal.aborted) onAbort();
       })]);
-    } finally { if (onAbort) signal.removeEventListener("abort", onAbort); }
+    } finally {
+      if (onUpdate) shared.observers.delete(onUpdate);
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   async function getStoryById(id: string, signal?: AbortSignal) {
@@ -327,6 +396,9 @@ function getRepository() {
   }
   return catalogRepository;
 }
-const storyCatalog = createStoryCatalogService({ repository: getRepository });
-export const getVoiceStories = (signal?: AbortSignal) => storyCatalog.getStories(signal);
+// Next can load this module separately for the browser stream and realtime
+// routes. Share their completed catalog refresh within this server process.
+const catalogGlobal = globalThis as typeof globalThis & { flowpathStoryCatalogV3?: ReturnType<typeof createStoryCatalogService> };
+const storyCatalog = catalogGlobal.flowpathStoryCatalogV3 ??= createStoryCatalogService({ repository: getRepository });
+export const getVoiceStories = (signal?: AbortSignal, onUpdate?: (catalog: StoryCatalogResponse) => void) => storyCatalog.getStories(signal, onUpdate);
 export const getVoiceStoryById = (id: string, signal?: AbortSignal) => storyCatalog.getStoryById(id, signal);

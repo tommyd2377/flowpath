@@ -7,6 +7,11 @@ const ModelSourceSchema = z
   })
   .strict();
 
+const ModelFactSchema = z.object({
+  text: z.string().min(1),
+  sourceUrls: z.array(z.string().min(1).max(2_048)).min(1).max(6),
+}).strict();
+
 export const ModelPossibilitySchema = z
   .object({
     title: z.string().min(1).max(100),
@@ -19,25 +24,22 @@ export const ModelPossibilitySchema = z
   })
   .strict();
 
-export const InitialModelOutputSchema = z
+// Keep research before branches: a complete validated prefix can be published
+// while the same response is still producing its possibility map.
+export const InitialResearchOutputSchema = z
   .object({
-    summary: z.string().min(1).max(900),
-    facts: z
-      .array(
-        z
-          .object({
-            text: z.string().min(1).max(500),
-            sourceUrls: z.array(z.string().min(1).max(2_048)).min(1).max(6),
-          })
-          .strict(),
-      )
-      .max(8),
-    uncertainties: z.array(z.string().min(1).max(320)).max(6),
+    summary: z.string().min(1),
+    facts: z.array(ModelFactSchema).max(8),
+    uncertainties: z.array(z.string().min(1)).max(6),
     sources: z.array(ModelSourceSchema).max(16),
-    branches: z.array(ModelPossibilitySchema).min(3).max(5),
   })
   .strict();
 
+export const InitialModelOutputSchema = InitialResearchOutputSchema.extend({
+  branches: z.array(ModelPossibilitySchema).min(3).max(5),
+}).strict();
+
+export type InitialResearchOutput = z.infer<typeof InitialResearchOutputSchema>;
 export type InitialModelOutput = z.infer<typeof InitialModelOutputSchema>;
 export type ModelPossibility = z.infer<typeof ModelPossibilitySchema>;
 

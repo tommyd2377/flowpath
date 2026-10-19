@@ -7,7 +7,7 @@ import test, { type TestContext } from "node:test";
 import { createClient } from "@libsql/client";
 
 import { createStoryCatalogService, stableStoryId, StoryCatalogRepository, STORY_CACHE_TTL_MS, STORY_REFRESH_COOLDOWN_MS, STORY_RESEARCH_TIMEOUT_MS, STORY_HISTORY_LIMIT } from "../lib/story-catalog";
-import { FIXTURE_HEADLINES, toStoryHeadline } from "../lib/story-contracts";
+import { FIXTURE_HEADLINES, toStoryHeadline, type StoryCatalogResponse } from "../lib/story-contracts";
 import { HeadlineItemSchema, type HeadlineItem } from "../lib/atlas/contracts";
 import type { HeadlinesResponse } from "../lib/atlas/server/feed";
 import type { AtlasParsedResponse, AtlasRequestOptions, AtlasResponsesAdapter, AtlasResponsesRequest } from "../lib/atlas/server/openai-client";
@@ -24,19 +24,24 @@ function response(): AtlasParsedResponse<unknown> {
     output: [{ type: "web_search_call", status: "completed", action: { type: "search", sources: [{ url: SOURCE }] } }],
     output_parsed: {
       stories: [
-        { title: "Transit policy debate", summary: "A city is considering a transit plan.", whyItMatters: "If adopted, the plan could change how people travel.", scope: "us", memberIds: ["item-001"], sourceUrls: [SOURCE] },
-        { title: "New energy research", summary: "Researchers announced a pilot.", whyItMatters: "A successful pilot could inform future research.", scope: "both", memberIds: ["item-002"], sourceUrls: [] },
+        { title: "Transit policy debate", summary: "A city is considering a transit plan.", whyItMatters: "If adopted, the plan could change how people travel.", scope: "us", memberIds: ["item-001"], sourceUrls: [] },
+        { title: "New energy research", summary: "Researchers announced a pilot.", whyItMatters: "A successful pilot could inform future research.", scope: "both", memberIds: ["item-002"], sourceUrls: [SOURCE] },
       ],
       sources: [{ title: "Official report", url: SOURCE }],
     },
   };
 }
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
 class Adapter implements AtlasResponsesAdapter {
   calls: Array<{ request: AtlasResponsesRequest; options: AtlasRequestOptions }> = [];
-  constructor(public operation: () => Promise<AtlasParsedResponse<unknown>> = async () => response()) {}
+  constructor(public operation: (request: AtlasResponsesRequest) => Promise<AtlasParsedResponse<unknown>> = async () => response()) {}
   async parse<T>(request: AtlasResponsesRequest, options: AtlasRequestOptions): Promise<AtlasParsedResponse<T>> {
     this.calls.push({ request, options });
-    return await this.operation() as AtlasParsedResponse<T>;
+    return await this.operation(request) as AtlasParsedResponse<T>;
   }
 }
 function harness(t: TestContext, adapter = new Adapter()) {
@@ -45,7 +50,7 @@ function harness(t: TestContext, adapter = new Adapter()) {
   const repository = new StoryCatalogRepository(createClient({ url }));
   let clock = NOW;
   const feeds = [{ getHeadlines: async () => feed() }];
-  const createService = (store = repository) => createStoryCatalogService({ repository: store, adapter, feeds, mode: () => "live", model: "gpt-5.6-luna", now: () => clock });
+  const createService = (store = repository, wait: (milliseconds: number) => Promise<void> = async milliseconds => { clock += milliseconds; }) => createStoryCatalogService({ repository: store, adapter, feeds, mode: () => "live", now: () => clock, wait });
   const service = createService();
   t.after(() => { repository.close(); rmSync(directory, { recursive: true, force: true }); });
   return { repository, adapter, feeds, service, createService, url, setNow: (value: number) => { clock = value; } };
@@ -59,19 +64,28 @@ test("curates bounded, neutral stories with server-owned IDs and validated repor
   assert.equal(result.items[0].id, stableStoryId([FIXTURE_HEADLINES[0].id]));
   assert.equal(result.items[0].googleNewsUrl, FIXTURE_HEADLINES[0].googleNewsUrl);
   assert.deepEqual(result.items[0].headlines, [FIXTURE_HEADLINES[0]]);
-  assert.deepEqual(result.items[0].contextSources, [{ title: "Official report", url: SOURCE }]);
+  assert.deepEqual(result.items[0].contextSources, []);
+  assert.deepEqual(result.items[1].contextSources, [{ title: "Official report", url: SOURCE }]);
+  assert.equal(result.complete, true);
   assert.equal(HeadlineItemSchema.safeParse(toStoryHeadline(result.items[0])).success, true);
   const call = h.adapter.calls[0];
-  assert.equal(call.request.model, "gpt-5.6-luna");
+  assert.equal(call.request.model, "gpt-6-luna");
+  assert.equal(call.request.service_tier, "priority");
   assert.equal(call.request.store, false);
+  assert.equal(h.adapter.calls.length, 1);
   assert.equal(call.request.max_output_tokens, 6000);
   assert.equal(call.request.max_tool_calls, 2);
   assert.equal(call.request.tool_choice, undefined, 'additional search is optional');
   assert.deepEqual(call.request.tools, [{ type: "web_search", search_context_size: "medium" }]);
-  assert.equal(call.options.timeout, STORY_RESEARCH_TIMEOUT_MS);
+  assert.ok(call.options.timeout <= STORY_RESEARCH_TIMEOUT_MS);
   assert.equal(call.options.maxRetries, 0);
   assert.match(call.request.input[0].content, /untrusted data/);
   assert.match(call.request.input[0].content, /Do not rank by clicks/);
+  assert.match(call.request.input[0].content, /up to 20/);
+  const input = JSON.parse(call.request.input[1].content);
+  assert.equal(input.candidates.length, FIXTURE_HEADLINES.length);
+  assert.equal(input.excludedLead, undefined);
+
 });
 
 test("member order changes do not change the story identity", () => {
@@ -91,24 +105,30 @@ test("fresh catalogs survive a new service instance and retain saved story looku
   assert.deepEqual(await h.createService(replacement).getStoryById(first.items[0].id), first.items[0]);
 });
 
-test("invalid members, repeated members and invented source URLs discard curation without retries", async t => {
-  for (const invalid of ["unknown-member", "duplicate-member", "duplicate-across-stories", "invented-source", "invented-context", "missing-search", "incomplete"]) {
+test("invalid or incomplete catalog output falls back safely with no additional paid pass", async t => {
+  for (const invalid of ["unknown-member", "duplicate-member", "duplicate-across-stories", "empty", "invented-source", "invented-context", "missing-search", "too-many-searches", "incomplete", "refusal"]) {
     const h = harness(t, new Adapter(async () => {
       const value = response();
       const payload = value.output_parsed as { stories: Array<{ memberIds: string[]; sourceUrls: string[] }>; sources: Array<{ title: string; url: string }> };
       if (invalid === "unknown-member") payload.stories[0].memberIds = ["invented-headline"];
       if (invalid === "duplicate-member") payload.stories[0].memberIds.push(payload.stories[0].memberIds[0]);
-      if (invalid === "duplicate-across-stories") payload.stories[1].memberIds = payload.stories[0].memberIds;
-      if (invalid === "invented-source") payload.sources[0].url = "https://invented.example/news";
+      if (invalid === "duplicate-across-stories") payload.stories.push(payload.stories[0]);
+      if (invalid === "empty") payload.stories = [];
+      if (invalid === "invented-source") payload.sources.push({ title: "Invented source", url: "https://invented.example/news" });
       if (invalid === "invented-context") payload.stories[0].sourceUrls = ["https://invented.example/news"];
       if (invalid === "missing-search") value.output = [];
+      if (invalid === "too-many-searches") value.output = [...value.output, ...value.output, ...value.output];
       if (invalid === "incomplete") value.status = "incomplete";
+      if (invalid === "refusal") value.output = [{ type: 'message', content: [{ type: 'refusal', refusal: 'Declined' }] }];
       return value;
     }));
-    const result = await h.service.getStories();
+    const updates: StoryCatalogResponse[] = [];
+    const result = await h.service.getStories(undefined, catalog => { updates.push(catalog); });
     assert.equal(result.curated, false, invalid);
+    assert.equal(result.complete, true, invalid);
     assert.match(result.warning!, /uncurated/);
     assert.deepEqual(result.items.flatMap(item => item.headlines), FIXTURE_HEADLINES);
+    assert.deepEqual(updates, [result], invalid);
     await h.service.getStories();
     assert.equal(h.adapter.calls.length, 1, invalid);
   }
@@ -119,7 +139,7 @@ test("collects at most 90 deduplicated candidates across top, world and US feeds
   const news = (prefix: string): HeadlineItem[] => Array.from({ length: 40 }, (_, index) => ({
     ...FIXTURE_HEADLINES[0], id: `${prefix}-headline-${index}`, googleNewsUrl: `https://news.google.com/rss/articles/${prefix}-${index}`, title: `${prefix} headline ${index}`,
   }));
-  const service = createStoryCatalogService({ repository: h.repository, adapter: h.adapter, mode: () => "live", model: "gpt-5.6-luna", now: () => NOW,
+  const service = createStoryCatalogService({ repository: h.repository, adapter: h.adapter, mode: () => "live", now: () => NOW,
     feeds: ["top", "world", "us"].map(prefix => ({ getHeadlines: async () => feed(news(prefix)) })),
   });
   await service.getStories();
@@ -133,21 +153,203 @@ test("collects at most 90 deduplicated candidates across top, world and US feeds
   assert.equal(input.candidates[0].googleNewsUrl, undefined);
 });
 
+test("publishes 20 distinct stories once and rejects an oversized catalog without another call", async t => {
+  for (const count of [20, 21]) {
+    const h = harness(t, new Adapter(async () => ({ status: 'completed', output: [], output_parsed: {
+      stories: Array.from({ length: count }, (_, index) => ({ title: `Story ${index + 1}`, summary: 'A reported development.', whyItMatters: 'It could affect people.', scope: 'both', memberIds: [`item-${String(index + 1).padStart(3, '0')}`], sourceUrls: [] })),
+      sources: [],
+    } })));
+    h.feeds[0].getHeadlines = async () => feed(Array.from({ length: 21 }, (_, index) => ({ ...FIXTURE_HEADLINES[0], id: `headline-${index}`, title: `Headline ${index}`, googleNewsUrl: `https://news.google.com/rss/articles/${index}` })));
+    const updates: StoryCatalogResponse[] = [];
+    const catalog = await h.service.getStories(undefined, value => { updates.push(value); });
+    assert.equal(catalog.curated, count === 20);
+    assert.equal(catalog.complete, true);
+    assert.equal(catalog.items.length, 20);
+    assert.deepEqual(updates, [catalog]);
+    assert.equal(h.adapter.calls.length, 1);
+  }
+});
+
 test("concurrent callers share one request and one aborted page does not cancel the catalog", async t => {
-  let release: ((value: AtlasParsedResponse<unknown>) => void) | undefined;
-  const h = harness(t, new Adapter(() => new Promise(resolve => { release = resolve; })));
+  const gate = deferred<AtlasParsedResponse<unknown>>();
+  const h = harness(t, new Adapter(async () => gate.promise));
   const controller = new AbortController();
   const first = h.service.getStories(controller.signal);
   const second = h.service.getStories();
-  await new Promise<void>(resolve => {
-    const timer = setInterval(() => { if (release) { clearInterval(timer); resolve(); } }, 2);
-  });
+  while (!h.adapter.calls.length) await new Promise(resolve => setTimeout(resolve, 1));
   controller.abort();
   await assert.rejects(first, { name: "AbortError" });
   assert.equal(h.adapter.calls[0].options.signal?.aborted, false);
-  assert.ok(release);
-  release(response());
+  gate.resolve(response());
   assert.equal((await second).curated, true);
+  assert.equal(h.adapter.calls.length, 1);
+});
+
+test("publishes the complete persisted catalog once with no early single-story update", async t => {
+  const gate = deferred<AtlasParsedResponse<unknown>>();
+  const h = harness(t, new Adapter(async () => gate.promise));
+  const updates: StoryCatalogResponse[] = [];
+  const joined: StoryCatalogResponse[] = [];
+  let finished = false;
+  const first = h.service.getStories(undefined, catalog => { updates.push(catalog); }).then(catalog => { finished = true; return catalog; });
+  while (!h.adapter.calls.length) await new Promise(resolve => setTimeout(resolve, 1));
+  const second = h.service.getStories(undefined, catalog => { joined.push(catalog); });
+  assert.deepEqual(updates, []);
+  assert.deepEqual(joined, []);
+  assert.equal(finished, false);
+  const otherStore = new StoryCatalogRepository(createClient({ url: h.url }));
+  t.after(() => otherStore.close());
+  assert.equal(await otherStore.claim('competing-worker', NOW), false);
+  assert.equal(await otherStore.latest('voice-stories-v3-complete:gpt-6-luna'), null);
+  gate.resolve(response());
+  const final = await first;
+  assert.equal(final.complete, true);
+  assert.equal(final.items.length, 2);
+  assert.deepEqual(updates, [final]);
+  assert.deepEqual(joined, [final]);
+  assert.deepEqual(await second, final);
+  assert.equal(h.adapter.calls.length, 1);
+  assert.deepEqual(await otherStore.latest('voice-stories-v3-complete:gpt-6-luna'), final);
+  for (const item of final.items) assert.deepEqual(await h.createService(otherStore).getStoryById(item.id), item);
+});
+
+test("aborting an observer removes its subscription without cancelling complete curation", async t => {
+  const gate = deferred<AtlasParsedResponse<unknown>>();
+  const h = harness(t, new Adapter(async () => gate.promise));
+  const controller = new AbortController();
+  const updates: StoryCatalogResponse[] = [];
+  const first = h.service.getStories(controller.signal, catalog => { updates.push(catalog); });
+  while (!h.adapter.calls.length) await new Promise(resolve => setTimeout(resolve, 1));
+  const survivor = h.service.getStories();
+  controller.abort();
+  await assert.rejects(first, { name: 'AbortError' });
+  gate.resolve(response());
+  assert.equal((await survivor).items.length, 2);
+  assert.deepEqual(updates, []);
+  assert.equal(h.adapter.calls[0].options.signal?.aborted, false);
+});
+
+test("another worker joins the complete durable refresh without paid or RSS work", async t => {
+  const gate = deferred<AtlasParsedResponse<unknown>>();
+  const polling = deferred<void>();
+  const poll = deferred<void>();
+  const h = harness(t, new Adapter(async () => gate.promise));
+  let feedCalls = 0;
+  h.feeds[0].getHeadlines = async () => { feedCalls++; return feed(); };
+  const producerUpdates: StoryCatalogResponse[] = [];
+  const producer = h.service.getStories(undefined, catalog => { producerUpdates.push(catalog); });
+  while (!h.adapter.calls.length) await new Promise(resolve => setTimeout(resolve, 1));
+  const otherStore = new StoryCatalogRepository(createClient({ url: h.url }));
+  t.after(() => otherStore.close());
+  const followerUpdates: StoryCatalogResponse[] = [];
+  const follower = h.createService(otherStore, async milliseconds => {
+    assert.ok(milliseconds <= 1000);
+    polling.resolve();
+    await poll.promise;
+  }).getStories(undefined, catalog => { followerUpdates.push(catalog); });
+  await polling.promise;
+  assert.deepEqual(producerUpdates, []);
+  assert.deepEqual(followerUpdates, []);
+  gate.resolve(response());
+  const final = await producer;
+  poll.resolve();
+  assert.deepEqual(await follower, final);
+  assert.deepEqual(producerUpdates, [final]);
+  assert.deepEqual(followerUpdates, [final]);
+  assert.equal(h.adapter.calls.length, 1, 'only the original worker performs curation');
+  assert.equal(feedCalls, 1, 'the follower reuses the shared refresh instead of refetching RSS');
+});
+
+test("a disconnected durable follower detaches while another subscriber receives the complete catalog", async t => {
+  const gate = deferred<AtlasParsedResponse<unknown>>();
+  const polling = deferred<void>();
+  const poll = deferred<void>();
+  const h = harness(t, new Adapter(async () => gate.promise));
+  const producer = h.service.getStories();
+  while (!h.adapter.calls.length) await new Promise(resolve => setTimeout(resolve, 1));
+  const otherStore = new StoryCatalogRepository(createClient({ url: h.url }));
+  t.after(() => otherStore.close());
+  const followerService = h.createService(otherStore, async () => { polling.resolve(); await poll.promise; });
+  const controller = new AbortController();
+  const updates: StoryCatalogResponse[] = [];
+  const disconnected = followerService.getStories(controller.signal, catalog => { updates.push(catalog); });
+  await polling.promise;
+  const survivor = followerService.getStories();
+  controller.abort();
+  await assert.rejects(disconnected, { name: 'AbortError' });
+  gate.resolve(response());
+  const final = await producer;
+  poll.resolve();
+  assert.deepEqual(await survivor, final);
+  assert.deepEqual(updates, []);
+  assert.equal(h.adapter.calls.length, 1);
+});
+
+test("old lead-first caches are not reused but their story history remains selectable", async t => {
+  const h = harness(t);
+  const headline = FIXTURE_HEADLINES[2];
+  const oldStory = { ...headline, id: stableStoryId([headline.id]), summary: 'An older saved lead.', whyItMatters: '', scope: 'global' as const, headlines: [headline], contextSources: [] };
+  const oldCatalog: StoryCatalogResponse = { ok: true, curated: true, complete: false, stale: false, warning: null, fetchedAt: new Date(NOW).toISOString(), items: [oldStory] };
+  const client = createClient({ url: h.url });
+  t.after(() => client.close());
+  await h.repository.latest('voice-stories-v2:gpt-6.1-sol');
+  await client.batch([
+    { sql: 'INSERT INTO voice_story_catalogs(id, version, created_at, payload_json) VALUES(?, ?, ?, ?)', args: ['lead:old-owner', 'voice-stories-v2:gpt-6.1-sol:lead', NOW, JSON.stringify(oldCatalog)] },
+    { sql: 'INSERT INTO voice_story_catalogs(id, version, created_at, payload_json) VALUES(?, ?, ?, ?)', args: ['catalog:old-owner', 'voice-stories-v2:gpt-6.1-sol', NOW, JSON.stringify({ ...oldCatalog, complete: true, warning: 'Additional stories could not be prepared. Showing the lead story.' })] },
+  ], 'write');
+  const updates: StoryCatalogResponse[] = [];
+  const current = await h.service.getStories(undefined, catalog => { updates.push(catalog); });
+  assert.equal(current.complete, true);
+  assert.equal(current.items.length, 2);
+  assert.equal(current.warning, null);
+  assert.deepEqual(updates, [current]);
+  assert.equal(h.adapter.calls.length, 1);
+  assert.deepEqual(await h.service.getStoryById(oldStory.id), oldStory);
+});
+
+test("a failed full selection retries once after five minutes across service instances", async t => {
+  const h = harness(t, new Adapter(async () => { throw new Error('Temporary curation outage'); }));
+  const degraded = await h.service.getStories();
+  assert.equal(degraded.curated, false);
+  assert.equal(degraded.complete, true);
+  h.setNow(NOW + STORY_REFRESH_COOLDOWN_MS - 1);
+  assert.deepEqual(await h.createService().getStories(), degraded);
+  assert.equal(h.adapter.calls.length, 1);
+  h.adapter.operation = async () => response();
+  h.setNow(NOW + STORY_REFRESH_COOLDOWN_MS + 1);
+  const recovered = await h.createService().getStories();
+  assert.equal(recovered.items.length, 2);
+  assert.equal(recovered.curated, true);
+  assert.equal(recovered.warning, null);
+  assert.equal(h.adapter.calls.length, 2);
+});
+
+test("one curation groups overlapping headlines without reusing a member across stories", async t => {
+  const h = harness(t, new Adapter(async () => {
+    const value = response();
+    (value.output_parsed as { stories: Array<{ memberIds: string[] }> }).stories[0].memberIds.push('item-003');
+    return value;
+  }));
+  const catalog = await h.service.getStories();
+  assert.deepEqual(catalog.items[0].headlines, [FIXTURE_HEADLINES[0], FIXTURE_HEADLINES[2]]);
+  assert.equal(catalog.items[0].id, stableStoryId([FIXTURE_HEADLINES[0].id, FIXTURE_HEADLINES[2].id]));
+  assert.equal(new Set(catalog.items.flatMap(story => story.headlines.map(headline => headline.id))).size, 3);
+  assert.equal(h.adapter.calls.length, 1);
+});
+
+test("one available event still needs only one complete curation request", async t => {
+  const h = harness(t, new Adapter(async () => {
+    const value = response();
+    const payload = value.output_parsed as { stories: unknown[]; sources: unknown[] };
+    payload.stories = payload.stories.slice(0, 1);
+    payload.sources = [];
+    value.output = [];
+    return value;
+  }));
+  h.feeds[0].getHeadlines = async () => feed([FIXTURE_HEADLINES[0]]);
+  const catalog = await h.service.getStories();
+  assert.equal(catalog.complete, true);
+  assert.equal(catalog.items.length, 1);
   assert.equal(h.adapter.calls.length, 1);
 });
 
