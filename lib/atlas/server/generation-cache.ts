@@ -497,6 +497,15 @@ export class GenerationCacheRepository {
     return result.rowsAffected === 1;
   }
 
+  async hasLease(key: string, now: number) {
+    await this.ready();
+    const result = await this.client.execute({
+      sql: 'SELECT 1 FROM generation_leases WHERE cache_key = ? AND lease_expires_at > ? LIMIT 1',
+      args: [key, now],
+    });
+    return result.rows.length > 0;
+  }
+
   async releaseLease(key: string, ownerToken: string) {
     await this.ready();
     await this.client.execute({

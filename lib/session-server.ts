@@ -24,6 +24,7 @@ type Options = {
   controlFactory?: (options: VoiceControlOptions) => VoiceControl;
   fixtureMode?: boolean;
   hostedConnection?: boolean;
+  authorizeStart?: (request: Request) => Promise<boolean>;
 };
 
 function json(body: object, status = 200) {
@@ -126,7 +127,10 @@ export function createSessionService(options: Options) {
     },
     async GET(request: Request) {
       if (!localRequest(request)) return json({ error: 'This prototype is available on localhost only.' }, 403);
+      // Fixture readiness stays observable for the existing no-paid-test guard.
+      // Fixture starts remain disabled; live readiness and every POST require a grant.
       if (options.fixtureMode) return json({ ready: false, reason: 'fixture' });
+      if (options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Enter the demo code and tap the waveform to begin.' }, 403);
       const configured = Boolean(options.apiKey());
       return json({ ready: configured && !blocked, reason: blocked ? 'cleanup_failed' : configured ? null : 'missing_key' });
     },
@@ -134,6 +138,7 @@ export function createSessionService(options: Options) {
     async POST(request: Request) {
       const { controlFactory } = conversation;
       if (!localRequest(request, true)) return json({ error: 'Only same-origin local requests are allowed.' }, 403);
+      if (options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Enter the demo code and tap the waveform to begin.' }, 403);
       if (process.env.VERCEL === '1' && !options.hostedConnection) return json({ error: 'Use the hosted voice connection.' }, 409);
       if (options.fixtureMode) return json({ error: 'Voice is disabled in the fixture preview.' }, 503);
       const apiKey = options.apiKey();
@@ -153,6 +158,8 @@ export function createSessionService(options: Options) {
       if (blocked) return json({ error: 'The previous connection could not be closed. Check the local server before trying again.' }, 503);
       if (request.signal.aborted) return json({ error: 'The conversation was canceled.' }, 409);
       if (active) return json({ error: 'A conversation is already open.' }, 409);
+      if (options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Demo access expired. Enter the code again.' }, 403);
+      if (active || request.signal.aborted) return json({ error: 'A conversation is already open or was canceled.' }, 409);
       const session: Session = { id, ended: false, installationId: installationId ?? undefined };
       active = session;
       const onAbort = () => { session.ended = true; };
@@ -350,6 +357,7 @@ export function createLocalSessionRouter(options: Options) {
   type Operation = 'GET' | 'POST' | 'DELETE' | 'STORY' | 'ACTION' | 'SCREEN' | 'EVENTS';
   async function route(operation: Operation, request: Request) {
     if (!localRequest(request, operation !== 'GET' && operation !== 'EVENTS')) return json({ error: 'Only same-origin local requests are allowed.' }, 403);
+    if (operation === 'POST' && options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Enter the demo code and tap the waveform to begin.' }, 403);
     const id = request.headers.get('x-voice-session');
     if (operation === 'GET' && !id) return readiness.GET(request);
     if (!validId(id)) return json({ error: 'Missing or invalid session identifier.' }, 400);

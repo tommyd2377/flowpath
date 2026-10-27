@@ -1,3 +1,4 @@
+import { newsDemoAccess } from './demo-access-runtime';
 import { createLocalSessionRouter } from './session-server';
 import { createRealtimeControl } from './realtime-control';
 import { explorationService } from './exploration-server';
@@ -11,6 +12,7 @@ const localProcess = globalThis as typeof globalThis & {
 const controlFactory = (options: VoiceControlOptions) => createRealtimeControl({ ...options, exploration: explorationService });
 
 export const voiceSessions = localProcess.voiceSessions ??= createLocalSessionRouter({
+  authorizeStart: newsDemoAccess.allowed,
   fixtureMode: process.env.VOICE_FIXTURE_MODE === '1',
   // Fixture previews must never open paid Realtime sessions, even with a local key.
   apiKey: () => process.env.VOICE_FIXTURE_MODE === '1' ? undefined : process.env.OPENAI_API_KEY,

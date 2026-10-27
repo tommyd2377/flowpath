@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import DemoCodeGate from './DemoCodeGate';
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { InterfaceMotion, MotionView, revealTransition, useSpotlightScroll } from './motion-primitives';
@@ -15,6 +16,7 @@ import { useStoryCatalog } from '@/lib/use-story-catalog';
 
 export default function VoiceExperience() {
   const { phase, message, inputAnalyser, outputAnalyser, start, stop, selectStory, display, act, sessionActive, researchBusy } = useVoiceSession();
+  const [demoAllowed, setDemoAllowed] = useState<boolean | null>(null);
   const [entered, setEntered] = useState(false);
   const { catalog, loading, notice: feedMessage, error: feedError, refresh, dismissNotice } = useStoryCatalog(display, sessionActive);
   const displayStories = display?.storyCatalog?.complete === false ? undefined : display?.stories;
@@ -135,18 +137,21 @@ export default function VoiceExperience() {
       <section className="conversation" aria-label="Voice conversation">
         <button
           className="wave-control"
-          type="button"
+          type={!active && !demoAllowed ? "submit" : "button"}
+          form={!active && !demoAllowed ? "news-demo-code-form" : undefined}
+          disabled={!active && demoAllowed === null}
           aria-label={label}
           aria-pressed={active}
           aria-describedby={statusText ? 'voice-status' : !docked ? 'voice-hint' : undefined}
-          onClick={beginConversation}
+          onClick={() => { if (active || demoAllowed) beginConversation(); }}
         >
           <Waveform phase={phase} inputAnalyser={inputAnalyser} outputAnalyser={outputAnalyser} />
         </button>
+        {!active && <DemoCodeGate allowed={demoAllowed} onAccess={setDemoAllowed} onUnlocked={beginConversation} />}
         <motion.div className="conversation-copy" aria-hidden={!statusText} initial={false} animate={{ opacity: statusText ? 1 : 0, y: statusText || reducedMotion ? 0 : -4 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.45 }}>
           <div ref={statusCopy}><p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{statusText || lastStatus}</p></div>
         </motion.div>
-        <motion.p className="voice-hint" id="voice-hint" aria-hidden={docked} initial={false} animate={{ opacity: docked ? 0 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.65 }}>Tap the wave whenever you’re ready</motion.p>
+        <motion.p className="voice-hint" id="voice-hint" aria-hidden={docked} initial={false} animate={{ opacity: docked ? 0 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.65 }}>{demoAllowed ? "Tap the waveform to begin." : "Enter the code and tap the waveform to begin."}</motion.p>
       </section>
       </div>
       <motion.div ref={dashboard} className="dashboard-stage" initial={false} animate={{ opacity: !docked ? 0.55 : 1 }} transition={{ ...revealTransition, duration: reducedMotion ? 0 : 0.8 }}>

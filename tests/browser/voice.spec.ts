@@ -32,6 +32,7 @@ async function clickStory(page: Page, index: number) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/demo-access', route => route.fulfill({ json: { enabled: true, allowed: true } }));
   await page.route('**/api/session/screen', route => route.fulfill({ status: 204 }));
   await page.route('**/api/stories', (route) => route.fulfill({ json: catalog }));
   await page.route('**/api/exploration', (route) => {
@@ -41,11 +42,13 @@ test.beforeEach(async ({ page }) => {
     return route.fulfill({ json: { display: explorationDisplay(Math.max(0, index)) } });
   });
   await page.route('**/api/session/action', async (route) => {
+    // Acknowledge before asynchronous event delivery so stopping/unrouting the
+    // conversation cannot cancel a request this fixture still intends to fulfill.
+    await route.fulfill({ status: 202, json: { ok: true } });
     if (route.request().postDataJSON().action.type === 'start_briefing') {
       await emitServer(page, { type: 'display', display: { ...emptyDisplay(), stories }, revision: 0 });
       await emitServer(page, { type: 'research', busy: false, message: '', revision: 0 });
     }
-    await route.fulfill({ status: 202, json: { ok: true } });
   });
   await page.route('https://api.openai.com/**', (route) => route.abort('blockedbyclient'));
 });
@@ -335,7 +338,7 @@ test('idle is quiet; missing setup never asks for the microphone or creates a ca
   await expect(page.getByText('Presented by Thomas DeVito')).toBeVisible();
   expect(calls).toEqual([]);
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toContainText('test key locally');
+  await expect(page.locator('#voice-status')).toContainText('test key locally');
   expect(calls).toEqual(['GET']);
   expect((await metrics(page)).microphoneCalls).toBe(0);
   expect((await metrics(page)).closedContexts).toBe(1);
@@ -347,6 +350,7 @@ test('conversation follows actual playback, handles interruptions, and cleans up
   await fakeAudio(page);
   const calls = await mockSessions(page);
   await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Start conversation' })).toBeEnabled();
   await page.getByRole('button', { name: 'Start conversation' }).focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
@@ -354,7 +358,7 @@ test('conversation follows actual playback, handles interruptions, and cleans up
   await emit(page, { type: 'media.input.active' });
   await emit(page, { type: 'media.input.quiet' });
   await emitServer(page, { type: 'research', busy: true, message: 'Thinking…', revision: 0 });
-  await expect(page.getByRole('status')).toHaveText('Thinking…');
+  await expect(page.locator('#voice-status')).toHaveText('Thinking…');
   await emit(page, { type: 'backend.created', response: { id: 'r1' } });
   await emit(page, { type: 'media.output.active', response_id: 'r1' });
   await expect(page.locator('main')).toHaveClass(/phase-speaking/);
@@ -383,7 +387,7 @@ test('microphone denial leaves a useful recovery message and no API call', async
   const calls = await mockSessions(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toContainText('Microphone access is off');
+  await expect(page.locator('#voice-status')).toContainText('Microphone access is off');
   expect(calls).toEqual(['GET']);
   expect((await metrics(page)).closedContexts).toBe(1);
 });
@@ -549,7 +553,7 @@ test('invalid events are ignored and failed cleanup has an accurate message', as
     if (event.key === 'Escape') event.stopPropagation();
   }, { capture: true }));
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('status')).toContainText('disconnection could not be confirmed');
+  await expect(page.locator('#voice-status')).toContainText('disconnection could not be confirmed');
   expect((await metrics(page)).stoppedTracks).toBe(1);
   expect(errors).toEqual([]);
 });
@@ -560,7 +564,7 @@ test('blocked cleanup is not misreported as a missing API key', async ({ page })
   await page.route('**/api/session', (route) => route.fulfill({ json: { ready: false, reason: 'cleanup_failed' } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toContainText('previous connection could not be closed');
+  await expect(page.locator('#voice-status')).toContainText('previous connection could not be closed');
   expect((await metrics(page)).microphoneCalls).toBe(0);
 });
 
@@ -576,7 +580,7 @@ test('a rejected connection preserves its original error without a misleading cl
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toHaveText('Only same-origin local requests are allowed.');
+  await expect(page.locator('#voice-status')).toHaveText('Only same-origin local requests are allowed.');
   expect(calls).toEqual(['GET', 'POST']);
   expect((await metrics(page)).stoppedTracks).toBe(1);
 });
@@ -848,7 +852,7 @@ test('microphone denial keeps the selected visual exploration available', async 
   await card.click();
   await expect(page.getByRole('heading', { name: 'Possible next steps' })).toBeVisible();
   await page.getByRole('button', { name: 'Start conversation' }).click();
-  await expect(page.getByRole('status')).toContainText('Microphone access is off');
+  await expect(page.locator('#voice-status')).toContainText('Microphone access is off');
   expect(selections).toEqual([]);
   expect(calls).toEqual(['GET']);
   await expect(page.getByRole('heading', { name: headlines[0].title, exact: true })).toBeVisible();
@@ -1012,7 +1016,8 @@ test('the real local route accepts its public origin without creating a provider
     headers: { Origin: new URL(baseURL!).origin, 'Content-Type': 'application/sdp' },
     data: 'invalid-offer',
   });
-  expect([400, 503]).toContain(response.status());
+  expect(response.status()).toBe(403);
+  expect((await response.json()).error).toContain('demo code');
   const wrongOrigin = await request.post('/api/session', {
     headers: { Origin: 'https://foreign.example', 'Content-Type': 'application/sdp' },
     data: 'invalid-offer',
@@ -1431,6 +1436,7 @@ test('desktop briefing follows offscreen stories without moving keyboard focus, 
   await fakeAudio(page);
   await mockSessions(page);
   await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Start conversation' })).toBeEnabled();
   await page.getByRole('button', { name: 'Start conversation' }).focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'End conversation' })).toBeFocused();
@@ -1536,10 +1542,10 @@ test('mobile microphone denial keeps the recovery notice readable above tappable
   const calls = await mockSessions(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).tap();
-  await expect(page.getByRole('status')).toContainText('Microphone access is off');
+  await expect(page.locator('#voice-status')).toContainText('Microphone access is off');
   await expect(page.locator('.conversation-copy')).toHaveCSS('opacity', '1');
   await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
-  const notice = (await page.getByRole('status').boundingBox())!;
+  const notice = (await page.locator('#voice-status').boundingBox())!;
   const dock = (await page.locator('.voice-stage').boundingBox())!;
   expect(notice.y + notice.height).toBeLessThanOrEqual(dock.height);
   expect(calls).toEqual(['GET']);
@@ -1860,10 +1866,10 @@ test('story updates finish loading, fade below the wave, and keep a timestamp be
     await route.fulfill({ json: calls === 1 ? catalog : updated });
   });
   await page.goto('/');
-  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await expect(page.locator('#voice-status')).toHaveText('Loading stories…');
   release();
   await expect(page.locator('.headline-card:not(.headline-skeleton)')).toHaveCount(3);
-  await expect(page.getByRole('status')).toContainText('Stories updated');
+  await expect(page.locator('#voice-status')).toContainText('Stories updated');
   await expect(page.locator('.stories-update time')).toHaveAttribute('datetime', catalog.fetchedAt);
   await page.clock.runFor(5600);
   await expect(page.locator('.conversation-copy')).toHaveAttribute('aria-hidden', 'true');
@@ -1888,7 +1894,7 @@ test('a stalled story request times out and refresh recovers without reloading t
   let requested = false;
   await page.route('**/api/stories', () => { requested = true; });
   await page.goto('/');
-  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await expect(page.locator('#voice-status')).toHaveText('Loading stories…');
   await expect.poll(() => requested).toBe(true);
   await page.clock.fastForward(100_100);
   await expect(page.getByRole('button', { name: 'Refresh stories' })).toBeEnabled();
@@ -1917,7 +1923,7 @@ test('fallback notices fade beneath the waveform and are not presented as story 
   await page.route('**/api/stories', route => route.fulfill({ json: { ...catalog, curated: false, warning,
     items: stories.map(story => ({ ...story, summary: story.title, whyItMatters: 'This headline has not been grouped or assessed for significance.' })) } }));
   await page.goto('/');
-  await expect(page.getByRole('status')).toHaveText(warning);
+  await expect(page.locator('#voice-status')).toHaveText(warning);
   await page.clock.runFor(5600);
   await expect(page.locator('.conversation-copy')).toHaveAttribute('aria-hidden', 'true');
   await expect(page.locator('.stories-notice')).toHaveText(warning);
@@ -1930,6 +1936,8 @@ test('a voice catalog completes a stalled page load and active refresh waits for
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation' }).click();
   await expect(page.locator('main')).toHaveClass(/phase-listening/);
+  // Wait for the initial briefing fixture before sending its newer catalog.
+  await expect(page.getByRole('button', { name: new RegExp(headlines[0].title) })).toBeVisible();
   const metadata = { fetchedAt: catalog.fetchedAt, curated: true, stale: false, warning: null };
   const display = { ...emptyDisplay(), stories, storyCatalog: metadata, storyCatalogId: '00000000-0000-4000-8000-000000000001' };
   await emitServer(page, { type: 'display', display, revision: 0 });
@@ -2000,7 +2008,7 @@ async function pushCatalog(page: Page, value: object) {
 test('stories stay loading until the complete catalog arrives together', async ({ page }, testInfo) => {
   await streamedCatalog(page);
   await page.goto('/');
-  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await expect(page.locator('#voice-status')).toHaveText('Loading stories…');
   await pushCatalog(page, { ...catalog, complete: false, items: stories.slice(0, 1) });
   await expect(page.locator('[data-story-id]')).toHaveCount(0);
   await expect(page.locator('.headline-skeleton')).toHaveCount(6);
@@ -2018,7 +2026,7 @@ test('stories stay loading until the complete catalog arrives together', async (
 test('an interrupted incomplete catalog exposes no lead-only list and permits refresh', async ({ page }) => {
   await streamedCatalog(page);
   await page.goto('/');
-  await expect(page.getByRole('status')).toHaveText('Loading stories…');
+  await expect(page.locator('#voice-status')).toHaveText('Loading stories…');
   await pushCatalog(page, { ...catalog, complete: false, items: stories.slice(0, 1) });
   await expect(page.locator('[data-story-id]')).toHaveCount(0);
   await page.evaluate(() => (window as unknown as { storyStream: { close(): void } }).storyStream.close());
@@ -2171,3 +2179,37 @@ test('speaking during a possibility walkthrough mutes stale guide audio while ke
   expect((await metrics(page)).stoppedTracks).toBe(0);
   await page.getByRole('button', { name: 'End conversation' }).click();
 });
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`News code gate blocks microphone until correct entry, starts once and survives refresh at ${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.unroute('**/api/demo-access');
+    await fakeAudio(page);
+    const calls = await mockSessions(page);
+    await page.goto('/');
+    await expect(page.getByLabel('Demo code', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Start conversation' }).click();
+    expect(calls).toEqual([]); expect((await metrics(page)).microphoneCalls).toBe(0);
+    await page.getByLabel('Demo code', { exact: true }).fill('incorrect');
+    await page.getByRole('button', { name: 'Start conversation' }).click();
+    await expect(page.locator('#news-demo-error')).toContainText('incorrect');
+    expect(calls).toEqual([]); expect((await metrics(page)).microphoneCalls).toBe(0);
+    await page.screenshot({ path: `test-results/news-code-${viewport.width}.png` });
+    for (const code of ['NYC-1776', 'nyc-1776 ']) {
+      await page.getByLabel('Demo code', { exact: true }).fill(code);
+      await page.getByRole('button', { name: 'Start conversation' }).click();
+      await expect(page.locator('#news-demo-error')).toContainText('incorrect');
+      expect(calls).toEqual([]); expect((await metrics(page)).microphoneCalls).toBe(0);
+    }
+    await page.getByLabel('Demo code', { exact: true }).fill('nyc-1776');
+    await page.getByRole('button', { name: 'Start conversation' }).click();
+    await expect(page.locator('main')).toHaveClass(/phase-listening/);
+    expect(calls).toEqual(['GET', 'POST']); expect((await metrics(page)).microphoneCalls).toBe(1);
+    await page.getByRole('button', { name: 'End conversation' }).click();
+    await page.reload();
+    await expect(page.getByText('Demo unlocked', { exact: true })).toBeAttached();
+    await expect(page.getByLabel('Demo code', { exact: true })).toHaveCount(0);
+    expect((await metrics(page)).microphoneCalls).toBe(0);
+    expect(calls.filter(method => method === 'POST')).toHaveLength(1);
+  });
+}

@@ -401,3 +401,12 @@ a { color: inherit; }
   .possibility-card[data-expanded="true"] strong, .voice-page[data-started="true"] .headline-card[data-expanded="true"] .headline-title { font-size: 25px; }
   .possibility-card[data-expanded="true"] .card-copy { padding-top: 12px; }
 }
+
+/* The News demo gate is independent of Studio accounts and voice allowances. */
+.news-demo-gate { width: min(100%, 300px); margin: 8px auto 0; color: #9bb4ff; font-size: 12px; text-align: center; pointer-events: auto; }
+.news-demo-entry { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border: 1px solid #4968b6; border-radius: 13px; background: linear-gradient(120deg, #20365d70, #101218); }
+.news-demo-entry svg { width: 16px; flex: none; }
+.news-demo-entry input { width: 100%; min-width: 0; background: transparent; border: 0; color: #f4f0e6; font: inherit; font-size: 14px; outline: none; }
+.news-demo-entry:focus-within { outline: 2px solid #9bb4ff; outline-offset: 3px; }
+.news-demo-gate p { margin: 8px 0; }
+.news-demo-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

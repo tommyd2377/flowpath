@@ -97,6 +97,7 @@ async function openMockBriefing(page: Page) {
     }
     Object.assign(window, { AudioContext: FakeAudioContext, Audio: FakeAudio, RTCPeerConnection: FakePeer });
   });
+  await page.route('**/api/demo-access', route => route.fulfill({ json: { enabled: true, allowed: true } }));
   await page.goto('/');
   await expect(page.locator('.headline-card')).toHaveCount(3);
   await page.getByRole('button', { name: 'Start conversation' }).click();
